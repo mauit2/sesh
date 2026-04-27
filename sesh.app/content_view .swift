@@ -13,6 +13,7 @@ import SwiftUI
 import Combine
 import PhotosUI
 import UIKit
+import CoreLocation
 import Supabase
 
 // MARK: - Secrets (replace with your values)
@@ -372,6 +373,11 @@ struct SessionDrink: Codable, Identifiable, Equatable, Hashable {
     let abv: Double
     let createdAt: Date
     var shared: Bool = false
+    /// Whether this drink belongs to the Live Sesh ledger or the regular
+    /// (manual-duration) ledger. The two are intentionally separate so
+    /// numbers in one mode don't bleed into the other. Defaults to false
+    /// for backwards-compat with rows inserted before this column existed.
+    var live: Bool = false
     enum CodingKeys: String, CodingKey {
         case id
         case sessionId = "session_id"
@@ -381,8 +387,130 @@ struct SessionDrink: Codable, Identifiable, Equatable, Hashable {
         case abv
         case createdAt = "created_at"
         case shared
+        case live
     }
     var grams: Double { volumeMl * abv * 0.789 }
+}
+
+// MARK: - Venues
+//
+// Phase 1 of the location feature: a `Venue` is a real-world bar/place
+// with coordinates and (optionally) a list of "specials" — drinks that
+// only show up in the picker while the user is checked in there.
+// Phase 2 (later) will layer in featured curation, photos, and richer
+// proximity-based UI; for now the app only needs name + coordinates +
+// specials.
+
+struct Venue: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let name: String
+    let address: String?
+    let city: String?
+    let lat: Double
+    let lon: Double
+    var isFeatured: Bool = false
+    let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, address, city, lat, lon
+        case isFeatured = "is_featured"
+        case createdAt  = "created_at"
+    }
+
+    /// Human-readable single-line location: "Vasagatan 1, Göteborg".
+    var displayLocation: String {
+        [address, city].compactMap { $0 }.joined(separator: ", ")
+    }
+}
+
+/// A drink that only exists at a specific venue. Plugs into the existing
+/// BAC math by exposing the same `volumeML` / `abv` shape as DrinkOption,
+/// so the rest of the picker / order / Widmark code doesn't need to know
+/// venue specials are a different table.
+struct VenueSpecial: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let venueId: UUID
+    let name: String
+    let detail: String?
+    let volumeMl: Double
+    let abv: Double
+    let category: String
+    let emoji: String?
+    let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case venueId   = "venue_id"
+        case name, detail
+        case volumeMl  = "volume_ml"
+        case abv, category, emoji
+        case createdAt = "created_at"
+    }
+
+    /// Convert to a DrinkOption so the rest of the UI / BAC math can
+    /// treat specials identically to catalog drinks. Unknown category
+    /// strings fall back to .cocktail (the closest catch-all).
+    func asDrinkOption() -> DrinkOption {
+        let cat = DrinkCategory(rawValue: category) ?? .cocktail
+        let derivedDetail = detail
+            ?? "\(Int(volumeMl)) ml · \(Int((abv * 100).rounded()))%"
+        return DrinkOption(
+            category: cat,
+            name: name,
+            detail: derivedDetail,
+            volumeML: volumeMl,
+            abv: abv
+        )
+    }
+}
+
+/// Hardcoded fallback so the UI works in the simulator before/without the
+/// Supabase migration, or when the network is unavailable. Production
+/// reads from the DB; these values are only surfaced when that fetch
+/// fails or returns empty. Stable UUIDs prevent dupes when the real row
+/// later shows up — the DB id wins as soon as `refresh()` succeeds.
+enum HardcodedVenues {
+    static let handelspuben = Venue(
+        id: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
+        name: "Handelspuben",
+        address: "Vasagatan 1",
+        city: "Göteborg",
+        lat: 57.6991,
+        lon: 11.9712,
+        isFeatured: true,
+        createdAt: Date(timeIntervalSince1970: 0)
+    )
+
+    static let handelsSpecials: [VenueSpecial] = [
+        VenueSpecial(
+            id: UUID(uuidString: "22222222-2222-4222-8222-222222222221")!,
+            venueId: handelspuben.id,
+            name: "Fittkittlaren",
+            detail: "50 cl jug · 18 cl @ 40%",
+            volumeMl: 500,
+            abv: 0.144,
+            category: "cocktail",
+            emoji: "🍹",
+            createdAt: Date(timeIntervalSince1970: 0)
+        ),
+        VenueSpecial(
+            id: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!,
+            venueId: handelspuben.id,
+            name: "Döda mig",
+            detail: "50 cl jug · 18 cl @ 40%",
+            volumeMl: 500,
+            abv: 0.144,
+            category: "cocktail",
+            emoji: "☠️",
+            createdAt: Date(timeIntervalSince1970: 0)
+        )
+    ]
+
+    static let all: [Venue] = [handelspuben]
+
+    static func specials(for venueId: UUID) -> [VenueSpecial] {
+        handelsSpecials.filter { $0.venueId == venueId }
+    }
 }
 
 // MARK: - Auth
@@ -560,32 +688,40 @@ final class SessionService: ObservableObject {
         return s.hostId == uid
     }
 
+    // MARK: - Regular (manual-duration) ledger
+    //
+    // Everything below filters to `live == false`. The regular order card,
+    // the duration-slider BAC calculation, and the host roster all read
+    // from this slice so live-mode drinks never leak into the manual view.
+
     func myDrinks() -> [SessionDrink] {
         guard let uid = myId else { return [] }
-        return drinks.filter { $0.profileId == uid && !$0.shared }
+        return drinks.filter { $0.profileId == uid && !$0.shared && !$0.live }
     }
 
     func mySharedDrinks() -> [SessionDrink] {
         guard let uid = myId else { return [] }
-        return drinks.filter { $0.profileId == uid && $0.shared }
+        return drinks.filter { $0.profileId == uid && $0.shared && !$0.live }
     }
 
     func sharedDrinks() -> [SessionDrink] {
-        drinks.filter { $0.shared }
+        drinks.filter { $0.shared && !$0.live }
     }
 
     func drinks(for profileId: UUID) -> [SessionDrink] {
-        drinks.filter { $0.profileId == profileId && !$0.shared }
+        drinks.filter { $0.profileId == profileId && !$0.shared && !$0.live }
     }
 
-    /// Grams of ethanol attributable to a given member: their personal drinks
-    /// plus their even share of any drinks marked `shared`.
+    /// Grams of ethanol attributable to a given member in the regular
+    /// (non-live) ledger: their personal drinks plus their even share of
+    /// any drinks marked `shared`. Live-mode drinks are excluded — they
+    /// have their own per-drink Widmark calculation in `liveBAC(...)`.
     func effectiveGrams(for profileId: UUID) -> Double {
         let personal = drinks
-            .filter { $0.profileId == profileId && !$0.shared }
+            .filter { $0.profileId == profileId && !$0.shared && !$0.live }
             .reduce(0) { $0 + $1.grams }
         let shared = drinks
-            .filter { $0.shared }
+            .filter { $0.shared && !$0.live }
             .reduce(0) { $0 + $1.grams }
         let n = max(members.count, 1)
         return personal + shared / Double(n)
@@ -632,7 +768,22 @@ final class SessionService: ObservableObject {
         return members.first(where: { $0.profileId == uid })?.durationHours
     }
 
-    // MARK: - Live BAC (per-drink Widmark)
+    // MARK: - Live ledger (per-drink Widmark)
+    //
+    // Everything below filters to `live == true`. The live timeline,
+    // roster, roast card, and live BAC all read from this slice so the
+    // regular calculator's drinks never bleed into the live view.
+
+    /// All `live == true` drinks for the session. Convenience accessor so
+    /// every live-side helper agrees on the same filtered slice.
+    private var liveDrinks: [SessionDrink] {
+        drinks.filter { $0.live }
+    }
+
+    /// Has anyone in the group started a Live Sesh yet? Used by the
+    /// LiveSeshBar to decide whether to show the active "LIVE · N PEOPLE"
+    /// pill or the idle CTA.
+    var hasLiveActivity: Bool { !liveDrinks.isEmpty }
 
     /// Per-drink Widmark for live group mode: every drink metabolises from
     /// its own timestamp, no slider needed. More accurate than the
@@ -644,7 +795,7 @@ final class SessionService: ObservableObject {
         let denom = bodyGrams * profile.sex.r
         guard denom > 0 else { return 0 }
         let n = max(members.count, 1)
-        return drinks.reduce(0.0) { acc, d in
+        return liveDrinks.reduce(0.0) { acc, d in
             let isMine = d.profileId == profileId && !d.shared
             let isShared = d.shared
             guard isMine || isShared else { return acc }
@@ -661,34 +812,33 @@ final class SessionService: ObservableObject {
         max(0, (liveBAC(for: profileId, now: now) - threshold) / 0.015)
     }
 
-    /// All drinks attributable to a member, sorted newest-first. Combines
-    /// their personal drinks with all shared rounds (for use in a group
-    /// live timeline where shared drinks need to be visible to everyone).
+    /// All live drinks attributable to a member, sorted newest-first.
+    /// Combines their personal live drinks with all live shared rounds.
     func liveTimeline(for profileId: UUID) -> [SessionDrink] {
-        drinks
+        liveDrinks
             .filter { ($0.profileId == profileId && !$0.shared) || $0.shared }
             .sorted { $0.createdAt > $1.createdAt }
     }
 
-    /// Total drink count for a member: personal + shared (each shared drink
-    /// counts as one round even though it's split). Used for ordering and
-    /// the leaderboard subtitle.
+    /// Total live drink count for a member: personal + shared (each shared
+    /// drink counts as one round even though it's split).
     func totalDrinkCount(for profileId: UUID) -> Int {
         liveTimeline(for: profileId).count
     }
 
-    /// Earliest relevant drink time for a member — when their "live" night
-    /// effectively started. Returns nil if no drinks yet.
+    /// Earliest live drink time for a member — when their "live" night
+    /// effectively started. Returns nil if no live drinks yet.
     func firstDrinkTime(for profileId: UUID) -> Date? {
-        let relevant = drinks.filter {
+        let relevant = liveDrinks.filter {
             ($0.profileId == profileId && !$0.shared) || $0.shared
         }
         return relevant.map { $0.createdAt }.min()
     }
 
-    /// Earliest drink across all members — the moment "the sesh" started.
+    /// Earliest live drink across all members — the moment the live sesh
+    /// effectively started for the group.
     func sessionFirstDrink() -> Date? {
-        drinks.map { $0.createdAt }.min()
+        liveDrinks.map { $0.createdAt }.min()
     }
 
     func resumeIfAny() async {
@@ -784,7 +934,10 @@ final class SessionService: ObservableObject {
         clearLocal()
     }
 
-    func addDrink(_ option: DrinkOption, shared: Bool = false) async {
+    /// Adds a drink to the session. The `live` flag decides which ledger
+    /// it lands in (live timeline vs. regular order card). The two are
+    /// mutually exclusive — a drink belongs to exactly one mode for life.
+    func addDrink(_ option: DrinkOption, shared: Bool = false, live: Bool = false) async {
         guard let sid = session?.id, let uid = myId else { return }
         struct D: Encodable {
             let session_id: String
@@ -793,6 +946,7 @@ final class SessionService: ObservableObject {
             let volume_ml: Double
             let abv: Double
             let shared: Bool
+            let live: Bool
         }
         let payload = D(
             session_id: sid.uuidString.lowercased(),
@@ -800,7 +954,8 @@ final class SessionService: ObservableObject {
             drink_name: option.name,
             volume_ml: option.volumeML,
             abv: option.abv,
-            shared: shared
+            shared: shared,
+            live: live
         )
         do {
             let inserted: SessionDrink = try await supabase.from("session_drinks")
@@ -815,20 +970,21 @@ final class SessionService: ObservableObject {
         }
     }
 
-    /// Removes this user's most recently added drink of the given option.
-    /// When `shared` is true, removes from the shared pool (any member's shared drink of this name);
-    /// otherwise only removes a personal drink owned by the current user.
-    func removeMyLast(of option: DrinkOption, shared: Bool = false) async {
+    /// Removes this user's most recently added drink of the given option,
+    /// scoped to the requested ledger. `live` must match the ledger the
+    /// drink was added to — otherwise the regular and live undo buttons
+    /// would interfere with each other.
+    func removeMyLast(of option: DrinkOption, shared: Bool = false, live: Bool = false) async {
         guard let uid = myId else { return }
         let candidate: SessionDrink?
         if shared {
             candidate = drinks
-                .filter { $0.drinkName == option.name && $0.shared }
+                .filter { $0.drinkName == option.name && $0.shared && $0.live == live }
                 .sorted { $0.createdAt > $1.createdAt }
                 .first
         } else {
             candidate = drinks
-                .filter { $0.profileId == uid && $0.drinkName == option.name && !$0.shared }
+                .filter { $0.profileId == uid && $0.drinkName == option.name && !$0.shared && $0.live == live }
                 .sorted { $0.createdAt > $1.createdAt }
                 .first
         }
@@ -924,6 +1080,259 @@ final class SessionService: ObservableObject {
         let bodyGrams = profile.weightKg * 1000
         let raw = (grams / (bodyGrams * profile.sex.r)) * 100
         return max(0, raw - 0.015 * hoursElapsed)
+    }
+}
+
+// MARK: - Location & Venues
+//
+// Two small services backing the venue/check-in feature:
+//
+//   - LocationService — thin CLLocationManager wrapper. WhenInUse only,
+//     never background. One-shot fixes triggered by the UI (battery-friendly)
+//     instead of continuous tracking.
+//
+//   - VenueService — fetches venues + per-venue specials from Supabase,
+//     with a hardcoded fallback (Handelspuben) so the simulator works
+//     before the migration is applied. Tracks the user's chosen venue
+//     and persists it across launches via UserDefaults.
+
+@MainActor
+final class LocationService: NSObject, ObservableObject {
+    enum AuthState: Equatable {
+        case notDetermined
+        case denied
+        case restricted
+        case authorized
+    }
+
+    @Published private(set) var authState: AuthState = .notDetermined
+    @Published private(set) var location: CLLocation?
+    @Published private(set) var lastError: String?
+
+    private let manager = CLLocationManager()
+
+    override init() {
+        super.init()
+        manager.delegate = self
+        // Hundred-meter accuracy is plenty for "what bar are you at" — and
+        // it dodges the GPS-warmup latency you get with kCLLocationAccuracyBest.
+        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        sync()
+    }
+
+    /// Called from UI: prompts for permission if we haven't asked yet,
+    /// otherwise kicks off a one-shot fix when we already have access.
+    func requestAccess() {
+        switch manager.authorizationStatus {
+        case .notDetermined:
+            manager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse, .authorizedAlways:
+            refresh()
+        default:
+            break
+        }
+        sync()
+    }
+
+    /// One-shot location fix. We don't keep updating in the background —
+    /// saves battery and we don't need real-time tracking for venue picks.
+    func refresh() {
+        guard authState == .authorized else { return }
+        manager.requestLocation()
+    }
+
+    private func sync() {
+        switch manager.authorizationStatus {
+        case .notDetermined:
+            authState = .notDetermined
+        case .denied:
+            authState = .denied
+        case .restricted:
+            authState = .restricted
+        case .authorizedAlways, .authorizedWhenInUse:
+            authState = .authorized
+        @unknown default:
+            authState = .notDetermined
+        }
+    }
+}
+
+extension LocationService: CLLocationManagerDelegate {
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        Task { @MainActor in
+            self.sync()
+            if self.authState == .authorized { self.refresh() }
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let loc = locations.last else { return }
+        Task { @MainActor in
+            self.location = loc
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        Task { @MainActor in
+            self.lastError = error.localizedDescription
+        }
+    }
+}
+
+@MainActor
+final class VenueService: ObservableObject {
+    @Published private(set) var venues: [Venue] = []
+    @Published private(set) var specialsByVenue: [UUID: [VenueSpecial]] = [:]
+    @Published private(set) var loading = false
+
+    /// User-selected current venue. Persisted across launches via
+    /// UserDefaults so a "check-in" survives an app restart. The chip in
+    /// the main view reads this; the menu sheet reads `specials(for:)`
+    /// to show pinned drinks.
+    @Published var currentVenue: Venue? {
+        didSet { persistCurrent() }
+    }
+
+    private let currentKey = "sesh.currentVenue.v1"
+
+    init() {
+        loadCurrent()
+    }
+
+    // MARK: - Public reads
+
+    /// Venues sorted by distance to a given user location, closest first.
+    /// Falls back to alphabetical/server order when no location is known.
+    func sortedByDistance(from location: CLLocation?) -> [Venue] {
+        guard let loc = location else { return venues }
+        return venues.sorted { a, b in
+            let da = CLLocation(latitude: a.lat, longitude: a.lon).distance(from: loc)
+            let db = CLLocation(latitude: b.lat, longitude: b.lon).distance(from: loc)
+            return da < db
+        }
+    }
+
+    /// Distance in metres from a user location to a venue. nil if no fix.
+    func distance(from location: CLLocation?, to venue: Venue) -> CLLocationDistance? {
+        guard let loc = location else { return nil }
+        return CLLocation(latitude: venue.lat, longitude: venue.lon).distance(from: loc)
+    }
+
+    /// Specials at a venue, ready to drop into the picker.
+    func specials(for venue: Venue) -> [VenueSpecial] {
+        specialsByVenue[venue.id] ?? []
+    }
+
+    /// Specials for the currently-checked-in venue, mapped to DrinkOptions
+    /// so the picker can render them with the same row component as the
+    /// regular catalog. Empty when no venue is selected.
+    func currentSpecialsAsOptions() -> [DrinkOption] {
+        guard let v = currentVenue else { return [] }
+        return specials(for: v).map { $0.asDrinkOption() }
+    }
+
+    /// Resolves a `SessionDrink` row back into a `DrinkOption` for display.
+    /// Tries the standard catalog first, then any known venue special
+    /// (across every venue, not just the current one — so a drink logged
+    /// at a different bar earlier in the night still renders correctly),
+    /// and finally synthesises one from the row's own `volumeMl`/`abv`
+    /// fields. The synthesis path means a drink whose source has been
+    /// retired (catalog updated, special pulled) still shows up in the
+    /// timeline / order card instead of silently vanishing.
+    func resolveOption(for drink: SessionDrink) -> DrinkOption {
+        if let std = DrinkCatalog.allOptions.first(where: { $0.name == drink.drinkName }) {
+            return std
+        }
+        let allSpecials = specialsByVenue.values.flatMap { $0 }
+        if let special = allSpecials.first(where: { $0.name == drink.drinkName }) {
+            return special.asDrinkOption()
+        }
+        return DrinkOption(
+            category: .cocktail,
+            name: drink.drinkName,
+            detail: "\(Int(drink.volumeMl)) ml · \(Int((drink.abv * 100).rounded()))%",
+            volumeML: drink.volumeMl,
+            abv: drink.abv
+        )
+    }
+
+    // MARK: - Network
+
+    /// Loads every venue + special from Supabase. On any failure (or empty
+    /// result) we apply a hardcoded fallback so the user can still try out
+    /// check-in + specials before the migration has been run.
+    func refresh() async {
+        loading = true; defer { loading = false }
+        do {
+            let vs: [Venue] = try await supabase
+                .from("venues")
+                .select()
+                .order("name", ascending: true)
+                .execute()
+                .value
+            let ss: [VenueSpecial] = try await supabase
+                .from("venue_specials")
+                .select()
+                .execute()
+                .value
+            if vs.isEmpty {
+                applyFallback()
+            } else {
+                venues = vs
+                var grouped: [UUID: [VenueSpecial]] = [:]
+                for s in ss {
+                    grouped[s.venueId, default: []].append(s)
+                }
+                specialsByVenue = grouped
+                reconcileCurrent()
+            }
+        } catch {
+            // Either the migration hasn't been run yet or there's no
+            // network. Surface the hardcoded data so check-in still works.
+            applyFallback()
+        }
+    }
+
+    private func applyFallback() {
+        venues = HardcodedVenues.all
+        var grouped: [UUID: [VenueSpecial]] = [:]
+        for v in HardcodedVenues.all {
+            grouped[v.id] = HardcodedVenues.specials(for: v.id)
+        }
+        specialsByVenue = grouped
+        reconcileCurrent()
+    }
+
+    /// If the user is checked into a venue whose row no longer exists in
+    /// the fetched list (deleted, renamed), drop the check-in so the chip
+    /// doesn't show a ghost.
+    private func reconcileCurrent() {
+        guard let cur = currentVenue else { return }
+        if !venues.contains(where: { $0.id == cur.id }) {
+            currentVenue = nil
+        } else if let fresh = venues.first(where: { $0.id == cur.id }), fresh != cur {
+            // Pick up renames / featured-flag changes.
+            currentVenue = fresh
+        }
+    }
+
+    // MARK: - Persistence
+
+    private func persistCurrent() {
+        guard let v = currentVenue else {
+            UserDefaults.standard.removeObject(forKey: currentKey)
+            return
+        }
+        if let data = try? JSONEncoder().encode(v) {
+            UserDefaults.standard.set(data, forKey: currentKey)
+        }
+    }
+
+    private func loadCurrent() {
+        guard let data = UserDefaults.standard.data(forKey: currentKey),
+              let v = try? JSONDecoder().decode(Venue.self, from: data)
+        else { return }
+        currentVenue = v
     }
 }
 
@@ -1686,6 +2095,11 @@ private struct SessionView: View {
     @StateObject private var group = SessionService()
     @StateObject private var live = LiveSeshState()
     @StateObject private var recents = RecentDrinksStore()
+    /// Location + venue services. Owned here (the topmost user-facing
+    /// view) and passed into LiveSeshView so both modes share one source
+    /// of truth for "where am I tonight?" and "what specials apply?".
+    @StateObject private var location = LocationService()
+    @StateObject private var venues = VenueService()
 
     @State private var localOrder: [OrderItem] = []
     @State private var hours: Double = 1
@@ -1694,14 +2108,16 @@ private struct SessionView: View {
     @State private var groupOpen = false
     @State private var shareMode = false
     @State private var liveOpen = false
+    @State private var venueOpen = false
 
     private let eliminationRate = 0.015
 
     private var personalOrder: [OrderItem] {
         if group.isActive {
-            return group.myDrinks().compactMap { d in
-                guard let opt = DrinkCatalog.allOptions.first(where: { $0.name == d.drinkName }) else { return nil }
-                return OrderItem(id: d.id, option: opt, shared: false)
+            // Resolve via VenueService so venue specials (Fittkittlaren etc.)
+            // — which aren't in DrinkCatalog — still render in the order card.
+            return group.myDrinks().map { d in
+                OrderItem(id: d.id, option: venues.resolveOption(for: d), shared: false)
             }
         }
         return localOrder
@@ -1709,9 +2125,8 @@ private struct SessionView: View {
 
     private var sharedOrder: [OrderItem] {
         guard group.isActive else { return [] }
-        return group.sharedDrinks().compactMap { d in
-            guard let opt = DrinkCatalog.allOptions.first(where: { $0.name == d.drinkName }) else { return nil }
-            return OrderItem(id: d.id, option: opt, shared: true)
+        return group.sharedDrinks().map { d in
+            OrderItem(id: d.id, option: venues.resolveOption(for: d), shared: true)
         }
     }
 
@@ -1778,7 +2193,9 @@ private struct SessionView: View {
         recents.record(option)
         if group.isActive {
             let shared = shareMode
-            let t: Task<Void, Never> = Task { await group.addDrink(option, shared: shared) }
+            // Regular (non-live) ledger: live=false so this drink shows
+            // up only in the order card and feeds the duration-slider BAC.
+            let t: Task<Void, Never> = Task { await group.addDrink(option, shared: shared, live: false) }
             _ = t
         } else {
             localOrder.append(OrderItem(option: option))
@@ -1788,7 +2205,7 @@ private struct SessionView: View {
     private func removeOneLocal(_ option: DrinkOption) {
         if group.isActive {
             let shared = shareMode
-            let t: Task<Void, Never> = Task { await group.removeMyLast(of: option, shared: shared) }
+            let t: Task<Void, Never> = Task { await group.removeMyLast(of: option, shared: shared, live: false) }
             _ = t
         } else if let idx = localOrder.lastIndex(where: { $0.option == option }) {
             localOrder.remove(at: idx)
@@ -1807,6 +2224,12 @@ private struct SessionView: View {
                         session: group.session,
                         memberCount: group.members.count,
                         onTap: { groupOpen = true }
+                    )
+
+                    VenueChip(
+                        location: location,
+                        venues: venues,
+                        onTap: { venueOpen = true }
                     )
 
                     LiveSeshBar(
@@ -1853,7 +2276,7 @@ private struct SessionView: View {
                             onRemoveOne: { option, shared in
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
                                     if group.isActive {
-                                        let t: Task<Void, Never> = Task { await group.removeMyLast(of: option, shared: shared) }
+                                        let t: Task<Void, Never> = Task { await group.removeMyLast(of: option, shared: shared, live: false) }
                                         _ = t
                                     } else if let idx = localOrder.lastIndex(where: { $0.option == option }) {
                                         localOrder.remove(at: idx)
@@ -1864,7 +2287,7 @@ private struct SessionView: View {
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
                                     recents.record(option)
                                     if group.isActive {
-                                        let t: Task<Void, Never> = Task { await group.addDrink(option, shared: shared) }
+                                        let t: Task<Void, Never> = Task { await group.addDrink(option, shared: shared, live: false) }
                                         _ = t
                                     } else {
                                         localOrder.append(OrderItem(option: option))
@@ -1905,6 +2328,10 @@ private struct SessionView: View {
         .animation(.spring(response: 0.55, dampingFraction: 0.82), value: status)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: group.isActive)
         .task { await group.resumeIfAny() }
+        // Pull venue + specials catalog on first launch so the chip /
+        // picker have something to render. Falls back to hardcoded
+        // Handelspuben if the migration hasn't been applied yet.
+        .task { await venues.refresh() }
         // When the members list refreshes (entry or 3s poll), pull my synced
         // duration from the DB into the local slider so the slider position
         // matches what other phones see. Without this the slider could
@@ -1921,6 +2348,8 @@ private struct SessionView: View {
                 order: orderBinding(),
                 shareMode: $shareMode,
                 showShareToggle: group.isActive,
+                venueSpecials: venues.currentSpecialsAsOptions(),
+                venueName: venues.currentVenue?.name,
                 onAdd: { addLocal($0) },
                 onRemove: { removeOneLocal($0) }
             )
@@ -1940,8 +2369,21 @@ private struct SessionView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
+        .sheet(isPresented: $venueOpen) {
+            VenueSheet(location: location, venues: venues)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
         .fullScreenCover(isPresented: $liveOpen) {
-            LiveSeshView(live: live, group: group, recents: recents, profile: profile)
+            LiveSeshView(
+                live: live,
+                group: group,
+                recents: recents,
+                location: location,
+                venues: venues,
+                profile: profile
+            )
         }
     }
 }
@@ -3164,6 +3606,12 @@ private struct MenuSheet: View {
     @Binding var order: [OrderItem]
     @Binding var shareMode: Bool
     var showShareToggle: Bool = false
+    /// Drinks pinned to the top of the menu — these are the "Specials at
+    /// <Venue>" rows that only show when the user is checked into a bar.
+    /// Empty when no venue is selected.
+    var venueSpecials: [DrinkOption] = []
+    /// Display name shown in the specials section header.
+    var venueName: String? = nil
     var onAdd: (DrinkOption) -> Void
     var onRemove: (DrinkOption) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -3173,6 +3621,11 @@ private struct MenuSheet: View {
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
 
     private var groups: [OrderGroup] { aggregateOrder(order) }
+
+    private var specialsHeader: String {
+        if let n = venueName, !n.isEmpty { return "Specials at \(n)" }
+        return "Specials"
+    }
 
     private func count(for option: DrinkOption) -> Int {
         order.reduce(0) { $0 + ($1.option == option ? 1 : 0) }
@@ -3217,6 +3670,44 @@ private struct MenuSheet: View {
                 if showShareToggle {
                     ShareModePicker(shareMode: $shareMode)
                         .padding(.horizontal, 22)
+                }
+
+                if !venueSpecials.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 9, weight: .black))
+                                .foregroundStyle(Color.whiskey)
+                            Text(specialsHeader.uppercased())
+                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                .tracking(2.4)
+                                .foregroundStyle(Color.whiskey)
+                            Rectangle()
+                                .fill(Color.whiskey.opacity(0.25))
+                                .frame(height: 1)
+                        }
+                        VStack(spacing: 6) {
+                            ForEach(venueSpecials, id: \.name) { option in
+                                OptionRow(
+                                    option: option,
+                                    count: count(for: option),
+                                    onAdd: {
+                                        withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) {
+                                            onAdd(option)
+                                            addedTick &+= 1
+                                        }
+                                    },
+                                    onRemove: {
+                                        withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) {
+                                            onRemove(option)
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.top, 2)
                 }
 
                 LazyVGrid(columns: columns, spacing: 8) {
@@ -3880,6 +4371,364 @@ private struct GroupBar: View {
     }
 }
 
+// MARK: - Venue Chip / Sheet
+//
+// The chip is the user's persistent "Tonight at: Handelspuben" marker —
+// shown in the home view header. Tap → VenueSheet → pick a featured bar
+// (sorted by distance) or check out. When a venue is selected the chip
+// glows whiskey, otherwise it's a discreet "find bars near you" CTA.
+
+private struct VenueChip: View {
+    @ObservedObject var location: LocationService
+    @ObservedObject var venues: VenueService
+    var onTap: () -> Void
+
+    /// Subtitle shown when no venue is checked in. Matches whatever state
+    /// the user is in so the CTA always tells them what tapping does.
+    private var prompt: String {
+        switch location.authState {
+        case .notDetermined: return "Find bars near you"
+        case .denied:        return "Choose a bar"
+        case .restricted:    return "Choose a bar"
+        case .authorized:    return "Tap to check in"
+        }
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(Color.whiskey.opacity(venues.currentVenue == nil ? 0.14 : 0.32))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: venues.currentVenue == nil
+                          ? "mappin.and.ellipse"
+                          : "mappin.circle.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.whiskey)
+                }
+
+                if let v = venues.currentVenue {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text("TONIGHT AT")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .tracking(2.2)
+                                .foregroundStyle(Color.whiskey)
+                            if v.isFeatured {
+                                Text("★")
+                                    .font(.system(size: 10, weight: .black))
+                                    .foregroundStyle(Color.whiskey)
+                            }
+                        }
+                        HStack(spacing: 8) {
+                            Text(v.name)
+                                .font(.system(size: 15, weight: .black, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                                .lineLimit(1)
+                            if !v.displayLocation.isEmpty {
+                                Text("·")
+                                    .foregroundStyle(Color.bronze)
+                                Text(v.displayLocation)
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .tracking(0.4)
+                                    .foregroundStyle(Color.cream.opacity(0.6))
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("LOCATION")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .tracking(2.2)
+                            .foregroundStyle(Color.bronze)
+                        Text(prompt)
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.bronze)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.inkElev.opacity(0.72))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(
+                        venues.currentVenue == nil
+                            ? Color.cream.opacity(0.08)
+                            : Color.whiskey.opacity(0.45),
+                        lineWidth: 1
+                    )
+            )
+            .shadow(
+                color: (venues.currentVenue == nil ? Color.black : Color.whiskey).opacity(0.18),
+                radius: 18, y: 10
+            )
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
+private struct VenueSheet: View {
+    @ObservedObject var location: LocationService
+    @ObservedObject var venues: VenueService
+    @Environment(\.dismiss) private var dismiss
+
+    private var sortedVenues: [Venue] {
+        venues.sortedByDistance(from: location.location)
+    }
+
+    private func distanceLabel(for venue: Venue) -> String? {
+        guard let m = venues.distance(from: location.location, to: venue) else { return nil }
+        if m < 1000 { return "\(Int(m.rounded())) m away" }
+        return String(format: "%.1f km away", m / 1000)
+    }
+
+    var body: some View {
+        ZStack {
+            AtmosphereBackground(accent: .whiskey)
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("CHECK IN")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .tracking(2.4)
+                            .foregroundStyle(Color.bronze)
+                        Text("Tonight at…")
+                            .font(.system(size: 34, weight: .heavy, design: .rounded))
+                            .italic()
+                            .tracking(-1.4)
+                            .foregroundStyle(Color.cream)
+                    }
+
+                    permissionStripe
+
+                    if venues.currentVenue != nil {
+                        Button {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                venues.currentVenue = nil
+                            }
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 13, weight: .bold))
+                                Text("CHECK OUT")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .tracking(2.0)
+                            }
+                            .foregroundStyle(Color.cream.opacity(0.7))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(Capsule().fill(Color.cream.opacity(0.06)))
+                            .overlay(Capsule().strokeBorder(Color.cream.opacity(0.18), lineWidth: 1))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+
+                    VStack(spacing: 10) {
+                        ForEach(sortedVenues) { venue in
+                            VenueRow(
+                                venue: venue,
+                                distance: distanceLabel(for: venue),
+                                specialsCount: venues.specials(for: venue).count,
+                                isCurrent: venues.currentVenue?.id == venue.id
+                            ) {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    venues.currentVenue = venue
+                                }
+                                dismiss()
+                            }
+                        }
+                    }
+
+                    if sortedVenues.isEmpty {
+                        emptyState
+                    }
+
+                    Spacer(minLength: 24)
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 18)
+                .padding(.bottom, 28)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .task {
+            await venues.refresh()
+            location.requestAccess()
+        }
+    }
+
+    @ViewBuilder
+    private var permissionStripe: some View {
+        switch location.authState {
+        case .notDetermined:
+            permissionRow(
+                title: "Enable location",
+                detail: "Sesh uses location only while open, to find bars near you.",
+                cta: "ALLOW"
+            ) {
+                location.requestAccess()
+            }
+        case .denied, .restricted:
+            permissionRow(
+                title: "Location is off",
+                detail: "Open Settings to enable, or pick a bar manually below.",
+                cta: "SETTINGS"
+            ) {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+        case .authorized:
+            EmptyView()
+        }
+    }
+
+    private func permissionRow(title: String, detail: String, cta: String, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                Text(detail)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.6))
+            }
+            Spacer(minLength: 8)
+            Button(action: action) {
+                Text(cta)
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(1.6)
+                    .foregroundStyle(Color.ink)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.whiskey))
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.cream.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.whiskey.opacity(0.25), lineWidth: 1)
+        )
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "mappin.slash")
+                .font(.system(size: 28))
+                .foregroundStyle(Color.bronze)
+            Text("No featured bars yet")
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.cream)
+            Text("Featured bars will appear here as Sesh adds them.")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.6))
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 32)
+    }
+}
+
+private struct VenueRow: View {
+    let venue: Venue
+    let distance: String?
+    let specialsCount: Int
+    let isCurrent: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(isCurrent ? Color.whiskey.opacity(0.35) : Color.cream.opacity(0.06))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: venue.isFeatured ? "star.fill" : "mappin.circle.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(venue.isFeatured ? Color.whiskey : Color.cream.opacity(0.7))
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(venue.name)
+                            .font(.system(size: 16, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        if venue.isFeatured {
+                            Text("FEATURED")
+                                .font(.system(size: 8.5, weight: .black, design: .monospaced))
+                                .tracking(1.4)
+                                .foregroundStyle(Color.ink)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.whiskey))
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        if !venue.displayLocation.isEmpty {
+                            Text(venue.displayLocation)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .tracking(0.4)
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                                .lineLimit(1)
+                        }
+                        if let d = distance {
+                            Text("·")
+                                .foregroundStyle(Color.cream.opacity(0.3))
+                            Text(d)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .tracking(0.4)
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        }
+                    }
+                    if specialsCount > 0 {
+                        Text("\(specialsCount) special\(specialsCount == 1 ? "" : "s")")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .tracking(1.2)
+                            .foregroundStyle(Color.whiskey)
+                    }
+                }
+                Spacer(minLength: 0)
+                if isCurrent {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(Color.whiskey)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(isCurrent ? Color.whiskey.opacity(0.12) : Color.cream.opacity(0.035))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(
+                        isCurrent ? Color.whiskey.opacity(0.55) : Color.cream.opacity(0.08),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
 // MARK: - Group Roster
 
 private struct GroupRoster: View {
@@ -4382,11 +5231,12 @@ private struct LiveSeshBar: View {
     let profile: Profile
     let onTap: () -> Void
 
-    /// Group-live "is active" means: there's a session AND somebody (anyone)
-    /// has logged a drink. We treat the session itself as the live trigger
-    /// because in a group everyone wants the live experience the moment any
-    /// member starts pouring — no separate "go live" handshake.
-    private var groupLive: Bool { group.isActive && !group.drinks.isEmpty }
+    /// Group-live "is active" means: there's a session AND somebody has
+    /// logged a *live* drink (regular order-card drinks don't count). We
+    /// treat the first live pour as the trigger so everyone in the group
+    /// sees the live experience the moment anyone starts tracking live —
+    /// no separate "go live" handshake required.
+    private var groupLive: Bool { group.isActive && group.hasLiveActivity }
     private var inGroup: Bool { group.isActive }
 
     var body: some View {
@@ -4670,11 +5520,17 @@ private struct LiveSeshView: View {
     /// adaptive quick-add tiles — picks bubble to the top so the most
     /// likely next pour is always one tap away.
     @ObservedObject var recents: RecentDrinksStore
+    /// Shared with SessionView so both modes use the same chip + venue
+    /// selection. Live Sesh uses these to pin the current bar's specials
+    /// to the top of the picker.
+    @ObservedObject var location: LocationService
+    @ObservedObject var venues: VenueService
     let profile: Profile
     @Environment(\.dismiss) private var dismiss
 
     @State private var menuOpen = false
     @State private var confirmEnd = false
+    @State private var venueOpen = false
     /// When in a group, controls whether new drinks are added as shared
     /// rounds (split across all members) or as personal drinks. Ignored
     /// in solo mode. Persists between taps so a "round of shots" doesn't
@@ -4752,7 +5608,7 @@ private struct LiveSeshView: View {
         recents.record(option)
         if inGroup {
             let isShared = shareMode
-            let t: Task<Void, Never> = Task { await group.addDrink(option, shared: isShared) }
+            let t: Task<Void, Never> = Task { await group.addDrink(option, shared: isShared, live: true) }
             _ = t
         } else {
             live.add(option)
@@ -4766,11 +5622,13 @@ private struct LiveSeshView: View {
             // Group removal is by lookup of "my last of this option";
             // we keep it simple here — the timeline rows still work because
             // the underlying SessionService refresh will re-emit the list.
-            // For per-row removal we route through removeMyLast indirectly.
-            if let drink = group.drinks.first(where: { $0.id == id }),
-               let opt = DrinkCatalog.allOptions.first(where: { $0.name == drink.drinkName }) {
+            // resolveOption keeps this working for venue specials too —
+            // otherwise the catalog-only path silently no-op'd on a
+            // Fittkittlaren tap and the row would never disappear.
+            if let drink = group.drinks.first(where: { $0.id == id }) {
+                let opt = venues.resolveOption(for: drink)
                 let t: Task<Void, Never> = Task {
-                    await group.removeMyLast(of: opt, shared: drink.shared)
+                    await group.removeMyLast(of: opt, shared: drink.shared, live: drink.live)
                 }
                 _ = t
             }
@@ -4793,13 +5651,23 @@ private struct LiveSeshView: View {
         }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $menuOpen) {
-            LiveMenuSheet(onPick: { option in
-                logDrink(option)
-                menuOpen = false
-            })
+            LiveMenuSheet(
+                venueSpecials: venues.currentSpecialsAsOptions(),
+                venueName: venues.currentVenue?.name,
+                onPick: { option in
+                    logDrink(option)
+                    menuOpen = false
+                }
+            )
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
             .presentationBackground(Color.ink)
+        }
+        .sheet(isPresented: $venueOpen) {
+            VenueSheet(location: location, venues: venues)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
         }
         .confirmationDialog(
             "End Live Sesh?",
@@ -4822,6 +5690,11 @@ private struct LiveSeshView: View {
         let status = statusFor(bac: bac)
         VStack(alignment: .leading, spacing: 22) {
             header(bac: bac, status: status, now: now)
+            VenueChip(
+                location: location,
+                venues: venues,
+                onTap: { venueOpen = true }
+            )
             liveBACCard(bac: bac, status: status, now: now)
             timeToSoberCard(bac: bac, status: status, now: now)
             if inGroup {
@@ -5046,10 +5919,12 @@ private struct LiveSeshView: View {
 
     private func timelineEntries() -> [TimelineEntry] {
         if inGroup {
-            return group.liveTimeline(for: profile.id).compactMap { d in
-                guard let opt = DrinkCatalog.allOptions.first(where: { $0.name == d.drinkName }) else {
-                    return nil
-                }
+            // Resolve via VenueService — the standard-catalog-only lookup
+            // we used to do here silently dropped venue specials from the
+            // timeline (BAC still counted them, so the row count diverged
+            // from reality). resolveOption always returns something.
+            return group.liveTimeline(for: profile.id).map { d in
+                let opt = venues.resolveOption(for: d)
                 let mine = d.profileId == profile.id
                 return TimelineEntry(
                     id: d.id,
@@ -5736,9 +6611,19 @@ private struct DrinkTimelineRow: View {
 /// added with the current timestamp, then dismisses. No share/quantity logic
 /// because every tap is one drink at "now".
 private struct LiveMenuSheet: View {
+    /// Specials pinned to the top — only non-empty when checked into a
+    /// venue. Each tap fires `onPick` and the sheet dismisses, same as
+    /// the regular catalog rows below.
+    var venueSpecials: [DrinkOption] = []
+    var venueName: String? = nil
     let onPick: (DrinkOption) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var selectedCategory: DrinkCategory = .beer
+
+    private var specialsHeader: String {
+        if let n = venueName, !n.isEmpty { return "Specials at \(n)" }
+        return "Specials"
+    }
 
     var body: some View {
         ScrollView {
@@ -5747,6 +6632,63 @@ private struct LiveMenuSheet: View {
                     .font(.system(size: 22, weight: .black, design: .rounded))
                     .foregroundStyle(Color.cream)
                     .padding(.top, 14)
+
+                if !venueSpecials.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 9, weight: .black))
+                                .foregroundStyle(Color.whiskey)
+                            Text(specialsHeader.uppercased())
+                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                .tracking(2.4)
+                                .foregroundStyle(Color.whiskey)
+                            Rectangle()
+                                .fill(Color.whiskey.opacity(0.25))
+                                .frame(height: 1)
+                        }
+                        VStack(spacing: 8) {
+                            ForEach(venueSpecials, id: \.name) { option in
+                                Button {
+                                    onPick(option)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        DrinkGlyph(option: option, size: 24)
+                                            .frame(width: 40, height: 40)
+                                            .background(Circle().fill(Color.smoke))
+                                            .overlay(Circle().strokeBorder(Color.whiskey.opacity(0.55), lineWidth: 1))
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(option.name)
+                                                .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                                .foregroundStyle(Color.cream)
+                                            Text(option.detail)
+                                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                                .tracking(0.4)
+                                                .foregroundStyle(Color.cream.opacity(0.55))
+                                        }
+                                        Spacer()
+                                        Image(systemName: "plus")
+                                            .font(.system(size: 13, weight: .bold))
+                                            .foregroundStyle(Color.ink)
+                                            .frame(width: 30, height: 30)
+                                            .background(Circle().fill(Color.whiskey))
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 10)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                            .fill(Color.whiskey.opacity(0.10))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                            .strokeBorder(Color.whiskey.opacity(0.45), lineWidth: 1)
+                                    )
+                                }
+                                .buttonStyle(PressScaleStyle())
+                            }
+                        }
+                    }
+                }
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
