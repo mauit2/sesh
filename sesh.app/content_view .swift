@@ -2442,8 +2442,7 @@ private struct DrinkGlyph: View {
             if case .guinness = option.customGlyph {
                 GuinnessIcon(size: size)
             } else {
-                Text(option.category.emoji)
-                    .font(.system(size: size * 0.62))
+                categoryGlyph(option.category, size: size)
             }
         }
         .frame(width: size, height: size)
@@ -2486,6 +2485,143 @@ private struct GuinnessIcon: View {
                 .frame(width: glassW, height: glassH)
         }
         .frame(width: size, height: size)
+    }
+}
+
+/// Hand-drawn gin & tonic: tall clear highball with a pale tonic tint,
+/// two ice cubes, and a cucumber wheel garnish poking over the rim. Built
+/// out of SwiftUI shapes so it stays crisp at any size and reads well
+/// even at the small chip/tile sizes used in category pickers.
+private struct GinTonicIcon: View {
+    let size: CGFloat
+
+    var body: some View {
+        let glassW = size * 0.58
+        let glassH = size * 0.86
+        let glassRadius = size * 0.06
+        let liquidInset = size * 0.04
+        let liquidH = glassH * 0.66
+
+        // Cucumber slice geometry — sits on the rim, half inside the glass.
+        let cucumberSize = size * 0.30
+        let cucumberOffsetX = size * 0.16
+        let cucumberOffsetY = -glassH * 0.42
+
+        ZStack {
+            // 1) Tonic liquid inside the glass — pale icy blue gradient.
+            //    Sits in the lower portion of the glass so the rim shows
+            //    above it. Slightly inset from the glass walls so the
+            //    glass outline is visible around the liquid.
+            RoundedRectangle(cornerRadius: glassRadius * 0.7, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.74, green: 0.92, blue: 1.00).opacity(0.55),
+                            Color(red: 0.46, green: 0.78, blue: 0.98).opacity(0.62)
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+                .frame(width: glassW - liquidInset * 2, height: liquidH)
+                .offset(y: (glassH - liquidH) / 2 - liquidInset)
+
+            // 2) Ice cubes — two translucent rounded squares floating in
+            //    the liquid, rotated for a casual "just dropped in" feel.
+            iceCube(size: size * 0.20, opacity: 0.85)
+                .rotationEffect(.degrees(14))
+                .offset(x: -size * 0.09, y: size * 0.04)
+
+            iceCube(size: size * 0.16, opacity: 0.65)
+                .rotationEffect(.degrees(-22))
+                .offset(x: size * 0.07, y: size * 0.18)
+
+            // 3) Glass outline — drawn LAST so it sits on top of liquid
+            //    and ice, giving the "looking through glass" effect at
+            //    the edges. Stroke only — no fill, so it stays clear.
+            RoundedRectangle(cornerRadius: glassRadius, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.92), lineWidth: max(0.8, size * 0.035))
+                .frame(width: glassW, height: glassH)
+
+            // 4) Subtle highlight stripe down the left side of the glass
+            //    — sells the "this is glass" read at small sizes.
+            RoundedRectangle(cornerRadius: glassRadius * 0.5, style: .continuous)
+                .fill(Color.cream.opacity(0.22))
+                .frame(width: max(0.6, size * 0.025), height: glassH * 0.55)
+                .offset(x: -glassW * 0.36, y: -glassH * 0.08)
+
+            // 5) Cucumber wheel — green disc with a paler inner core
+            //    (the pith) and a hint of darker rind.
+            CucumberWheel()
+                .frame(width: cucumberSize, height: cucumberSize)
+                .offset(x: cucumberOffsetX, y: cucumberOffsetY)
+                .rotationEffect(.degrees(-12), anchor: .center)
+        }
+        .frame(width: size, height: size)
+    }
+
+    private func iceCube(size: CGFloat, opacity: Double) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.18, style: .continuous)
+                .fill(Color.cream.opacity(opacity))
+            RoundedRectangle(cornerRadius: size * 0.18, style: .continuous)
+                .strokeBorder(Color.cream.opacity(opacity * 0.6), lineWidth: 0.6)
+            // Inner reflective glint
+            RoundedRectangle(cornerRadius: size * 0.08, style: .continuous)
+                .fill(Color.white.opacity(0.5))
+                .frame(width: size * 0.32, height: size * 0.32)
+                .offset(x: -size * 0.18, y: -size * 0.18)
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+/// Stylised top-down cucumber slice for the gin garnish. Three concentric
+/// circles: dark green rind, light green flesh, pale green seed core,
+/// with a few tiny dots to suggest seeds.
+private struct CucumberWheel: View {
+    var body: some View {
+        GeometryReader { geo in
+            let s = min(geo.size.width, geo.size.height)
+            ZStack {
+                // Outer rind — darker green ring
+                Circle()
+                    .fill(Color(red: 0.30, green: 0.55, blue: 0.28))
+                // Flesh — lighter green
+                Circle()
+                    .fill(Color(red: 0.74, green: 0.88, blue: 0.62))
+                    .frame(width: s * 0.78, height: s * 0.78)
+                // Pale core
+                Circle()
+                    .fill(Color(red: 0.92, green: 0.97, blue: 0.84))
+                    .frame(width: s * 0.42, height: s * 0.42)
+                // Seeds — three small dark dots in a triangle
+                ForEach(0..<3, id: \.self) { i in
+                    Circle()
+                        .fill(Color(red: 0.45, green: 0.62, blue: 0.32).opacity(0.7))
+                        .frame(width: s * 0.07, height: s * 0.07)
+                        .offset(
+                            x: cos(Double(i) * 2.094 - .pi / 2) * Double(s) * 0.13,
+                            y: sin(Double(i) * 2.094 - .pi / 2) * Double(s) * 0.13
+                        )
+                }
+            }
+        }
+    }
+}
+
+/// Renders a category's glyph at the requested outer size. Categories
+/// with hand-drawn icons (currently: gin) get the custom view; the rest
+/// fall back to the standard emoji at 0.62× of the outer size — matching
+/// the convention `DrinkGlyph` uses for its emoji fallback.
+@ViewBuilder
+func categoryGlyph(_ category: DrinkCategory, size: CGFloat) -> some View {
+    switch category {
+    case .gin:
+        GinTonicIcon(size: size)
+    default:
+        Text(category.emoji)
+            .font(.system(size: size * 0.62))
+            .frame(width: size, height: size)
     }
 }
 
@@ -3178,8 +3314,9 @@ private struct CategoryTile: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: 5) {
-                Text(category.emoji)
-                    .font(.system(size: 24))
+                // 24pt emoji equivalence: outer size = 24 / 0.62 ≈ 38.7
+                // so the custom icon matches the emoji's optical size.
+                categoryGlyph(category, size: 38)
                 Text(category.label.uppercased())
                     .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
                     .tracking(1.1)
@@ -5620,7 +5757,10 @@ private struct LiveMenuSheet: View {
                                 }
                             } label: {
                                 HStack(spacing: 6) {
-                                    Text(cat.emoji)
+                                    // Default body font is ~17pt; size 26
+                                    // gives matching optical size for the
+                                    // custom icon (gin) inline with text.
+                                    categoryGlyph(cat, size: 26)
                                     Text(cat.label.uppercased())
                                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                                         .tracking(1.4)
