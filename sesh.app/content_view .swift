@@ -1027,6 +1027,54 @@ enum LiveRoastBook {
     }
 }
 
+// MARK: - Recent drinks store
+
+/// Tracks the user's recent drink picks so the Live Sesh quick-add tiles
+/// can adapt to what they actually drink. Stored in UserDefaults so it
+/// persists across sessions, cold launches, and group/solo mode swaps.
+/// Each call to `record` moves the option to the front of the list and
+/// dedupes, so the order reflects "most recent unique pick first".
+@MainActor
+final class RecentDrinksStore: ObservableObject {
+    /// Option names, newest-first, deduped. Capped at `cap` so the file
+    /// doesn't grow indefinitely — the dock only ever shows the first 3.
+    @Published private(set) var recents: [String] = []
+
+    private let key = "sesh.recentDrinks.v1"
+    private let cap = 6
+
+    init() { load() }
+
+    /// Records a pick. Moves the option to the front of the list, removing
+    /// any prior occurrence so the same drink doesn't take multiple slots.
+    func record(_ option: DrinkOption) {
+        var list = recents.filter { $0 != option.name }
+        list.insert(option.name, at: 0)
+        if list.count > cap { list = Array(list.prefix(cap)) }
+        recents = list
+        save()
+    }
+
+    /// Resolves the stored option names back to full `DrinkOption`s by
+    /// looking them up in the catalog. Names that no longer exist in the
+    /// catalog (e.g. catalog changed between app versions) are skipped.
+    func resolved() -> [DrinkOption] {
+        recents.compactMap { name in
+            DrinkCatalog.allOptions.first(where: { $0.name == name })
+        }
+    }
+
+    private func load() {
+        if let arr = UserDefaults.standard.stringArray(forKey: key) {
+            recents = arr
+        }
+    }
+
+    private func save() {
+        UserDefaults.standard.set(recents, forKey: key)
+    }
+}
+
 // MARK: - Live Sesh
 
 /// A drink consumed at a known moment. Distinct from `OrderItem` (untimed)
@@ -1637,6 +1685,7 @@ private struct SessionView: View {
     @ObservedObject var auth: AuthService
     @StateObject private var group = SessionService()
     @StateObject private var live = LiveSeshState()
+    @StateObject private var recents = RecentDrinksStore()
 
     @State private var localOrder: [OrderItem] = []
     @State private var hours: Double = 1
@@ -1726,6 +1775,7 @@ private struct SessionView: View {
     }
 
     private func addLocal(_ option: DrinkOption) {
+        recents.record(option)
         if group.isActive {
             let shared = shareMode
             let t: Task<Void, Never> = Task { await group.addDrink(option, shared: shared) }
@@ -1812,6 +1862,7 @@ private struct SessionView: View {
                             },
                             onAddOne: { option, shared in
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                    recents.record(option)
                                     if group.isActive {
                                         let t: Task<Void, Never> = Task { await group.addDrink(option, shared: shared) }
                                         _ = t
@@ -1890,7 +1941,7 @@ private struct SessionView: View {
                 .presentationBackground(Color.ink)
         }
         .fullScreenCover(isPresented: $liveOpen) {
-            LiveSeshView(live: live, group: group, profile: profile)
+            LiveSeshView(live: live, group: group, recents: recents, profile: profile)
         }
     }
 }
@@ -4478,21 +4529,54 @@ private struct LiveSeshView: View {
     /// drinks are written to the DB, the roster is shown, and a roast card
     /// surfaces gamified commentary on the drunkest member.
     @ObservedObject var group: SessionService
+    /// Persistent record of the user's recent drink picks. Drives the
+    /// adaptive quick-add tiles — picks bubble to the top so the most
+    /// likely next pour is always one tap away.
+    @ObservedObject var recents: RecentDrinksStore
     let profile: Profile
     @Environment(\.dismiss) private var dismiss
 
     @State private var menuOpen = false
     @State private var confirmEnd = false
+    /// When in a group, controls whether new drinks are added as shared
+    /// rounds (split across all members) or as personal drinks. Ignored
+    /// in solo mode. Persists between taps so a "round of shots" doesn't
+    /// require flipping back and forth for each one.
+    @State private var shareMode = false
 
     private var inGroup: Bool { group.isActive }
 
-    /// Quick-add tiles — the drinks people reach for most. Hand-picked to
-    /// cover the common cases without overwhelming the bottom of the screen.
+    /// Quick-add tiles — adaptive. Default lineup is small beer / large
+    /// beer / glass of wine. As the user logs drinks, the tiles shift to
+    /// reflect their three most-recent unique picks (newest leftmost).
+    /// If the user has fewer than 3 unique picks, the remaining slots are
+    /// filled from the defaults so we always show 3 tiles.
     private var quickAdd: [DrinkOption] {
-        let names = ["Small beer", "Large beer", "Glass of wine", "Shot"]
-        return names.compactMap { name in
-            DrinkCatalog.allOptions.first(where: { $0.name == name })
+        let defaultNames = ["Small beer", "Large beer", "Glass of wine"]
+        var picks: [DrinkOption] = []
+        var seen = Set<String>()
+
+        // Recent uniques first (newest leftmost), capped at 3.
+        for opt in recents.resolved() {
+            if picks.count >= 3 { break }
+            guard !seen.contains(opt.name) else { continue }
+            picks.append(opt)
+            seen.insert(opt.name)
         }
+
+        // Fill any remaining slots with defaults the user hasn't already
+        // picked — ensures we always show 3 distinct tiles even for a
+        // brand-new user with empty history.
+        for name in defaultNames {
+            if picks.count >= 3 { break }
+            guard !seen.contains(name),
+                  let opt = DrinkCatalog.allOptions.first(where: { $0.name == name })
+            else { continue }
+            picks.append(opt)
+            seen.insert(name)
+        }
+
+        return picks
     }
 
     // MARK: data accessors (solo vs. group)
@@ -4523,10 +4607,15 @@ private struct LiveSeshView: View {
     }
 
     /// Logs a drink in the right backing store. Optimistic UI is built in
-    /// to both paths (LiveSeshState + SessionService).
+    /// to both paths (LiveSeshState + SessionService). In group mode the
+    /// `shareMode` toggle decides whether the drink goes onto the user's
+    /// personal tab or into the shared round pool. Always records the
+    /// pick in `recents` so quick-add can adapt.
     private func logDrink(_ option: DrinkOption) {
+        recents.record(option)
         if inGroup {
-            let t: Task<Void, Never> = Task { await group.addDrink(option, shared: false) }
+            let isShared = shareMode
+            let t: Task<Void, Never> = Task { await group.addDrink(option, shared: isShared) }
             _ = t
         } else {
             live.add(option)
@@ -4915,6 +5004,14 @@ private struct LiveSeshView: View {
 
     private var quickAddDock: some View {
         VStack(spacing: 10) {
+            // Share-mode toggle: only visible in a group. Lets the user
+            // switch quick-add behaviour between "just me" and "shared
+            // round" without having to dive into the menu sheet.
+            if inGroup {
+                LiveShareModePicker(shareMode: $shareMode, memberCount: group.members.count)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
             HStack(spacing: 8) {
                 ForEach(quickAdd, id: \.name) { option in
                     Button {
@@ -4923,10 +5020,20 @@ private struct LiveSeshView: View {
                         }
                     } label: {
                         VStack(spacing: 6) {
-                            DrinkGlyph(option: option, size: 22)
-                                .frame(width: 36, height: 36)
-                                .background(Circle().fill(Color.whiskey.opacity(0.14)))
-                                .overlay(Circle().strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1))
+                            ZStack(alignment: .topTrailing) {
+                                DrinkGlyph(option: option, size: 22)
+                                    .frame(width: 36, height: 36)
+                                    .background(Circle().fill(Color.whiskey.opacity(shareModeActive ? 0.22 : 0.14)))
+                                    .overlay(Circle().strokeBorder(Color.whiskey.opacity(shareModeActive ? 0.7 : 0.35), lineWidth: 1))
+                                if shareModeActive {
+                                    Image(systemName: "person.2.fill")
+                                        .font(.system(size: 7.5, weight: .bold))
+                                        .foregroundStyle(Color.ink)
+                                        .frame(width: 14, height: 14)
+                                        .background(Circle().fill(Color.whiskey))
+                                        .offset(x: 4, y: -2)
+                                }
+                            }
                             Text(option.name.uppercased())
                                 .font(.system(size: 8.5, weight: .bold, design: .monospaced))
                                 .tracking(0.8)
@@ -4938,11 +5045,14 @@ private struct LiveSeshView: View {
                         .padding(.vertical, 10)
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.cream.opacity(0.04))
+                                .fill(shareModeActive ? Color.whiskey.opacity(0.10) : Color.cream.opacity(0.04))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+                                .strokeBorder(
+                                    shareModeActive ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.08),
+                                    lineWidth: 1
+                                )
                         )
                     }
                     .buttonStyle(PressScaleStyle())
@@ -4952,12 +5062,12 @@ private struct LiveSeshView: View {
                 menuOpen = true
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "plus")
+                    Image(systemName: shareModeActive ? "person.2.fill" : "plus")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(Color.ink)
                         .frame(width: 28, height: 28)
                         .background(Circle().fill(Color.whiskey))
-                    Text("MORE DRINKS")
+                    Text(shareModeActive ? "MORE SHARED DRINKS" : "MORE DRINKS")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .tracking(2.0)
                         .foregroundStyle(Color.cream)
@@ -4970,11 +5080,11 @@ private struct LiveSeshView: View {
                 .padding(.vertical, 12)
                 .background(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.whiskey.opacity(0.12))
+                        .fill(Color.whiskey.opacity(shareModeActive ? 0.18 : 0.12))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1)
+                        .strokeBorder(Color.whiskey.opacity(shareModeActive ? 0.55 : 0.4), lineWidth: 1)
                 )
             }
             .buttonStyle(PressScaleStyle())
@@ -4989,7 +5099,14 @@ private struct LiveSeshView: View {
             )
             .ignoresSafeArea(edges: .bottom)
         )
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: shareMode)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: inGroup)
     }
+
+    /// True when the share-mode treatment should apply — only meaningful
+    /// in a group session, suppressed in solo mode even if the toggle
+    /// lingered in state from a prior group sesh.
+    private var shareModeActive: Bool { inGroup && shareMode }
 
     // MARK: helpers
 
@@ -5017,6 +5134,86 @@ private struct LiveSeshView: View {
         if mins < 60 { return "\(mins) min" }
         let h = mins / 60, m = mins % 60
         return m == 0 ? "\(h)h" : "\(h)h \(m)m"
+    }
+}
+
+// MARK: - Live Share Mode Picker
+
+/// Two-segment toggle shown in the Live Sesh dock when the user is in a
+/// group. Decides whether new drinks added from the dock go onto the
+/// user's personal tab ("JUST ME") or into the shared round pool that
+/// gets split across everyone ("SHARED"). The shared segment surfaces
+/// the split arithmetic ("÷ N") so users see what shared actually means.
+private struct LiveShareModePicker: View {
+    @Binding var shareMode: Bool
+    let memberCount: Int
+
+    var body: some View {
+        HStack(spacing: 0) {
+            segment(
+                title: "JUST ME",
+                icon: "person.fill",
+                active: !shareMode,
+                trailing: nil
+            ) {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                    shareMode = false
+                }
+            }
+            segment(
+                title: "SHARED",
+                icon: "person.2.fill",
+                active: shareMode,
+                trailing: memberCount > 1 ? "÷\(memberCount)" : nil
+            ) {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                    shareMode = true
+                }
+            }
+        }
+        .padding(4)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.cream.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(
+                    shareMode ? Color.whiskey.opacity(0.5) : Color.cream.opacity(0.08),
+                    lineWidth: 1
+                )
+        )
+    }
+
+    private func segment(
+        title: String,
+        icon: String,
+        active: Bool,
+        trailing: String?,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .bold))
+                Text(title)
+                    .font(.system(size: 10.5, weight: .black, design: .monospaced))
+                    .tracking(1.6)
+                if let t = trailing {
+                    Text(t)
+                        .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                        .opacity(0.75)
+                }
+            }
+            .foregroundStyle(active ? Color.ink : Color.cream.opacity(0.6))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(active ? Color.whiskey : Color.clear)
+            )
+        }
+        .buttonStyle(PressScaleStyle())
     }
 }
 
