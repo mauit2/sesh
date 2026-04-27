@@ -212,11 +212,11 @@ enum DrinkCategory: String, CaseIterable, Identifiable, Codable {
     var emoji: String {
         switch self {
         case .beer:      return "🍺"
-        case .wine:      return "🍾"
+        case .wine:      return "🍷"
         case .sparkling: return "🥂"
         case .whisky:    return "🥃"
         case .vodka:     return "👙"
-        case .gin:       return "🫗"
+        case .gin:       return "🍹"
         case .cocktail:  return "🍸"
         case .cider:     return "🐱"
         }
