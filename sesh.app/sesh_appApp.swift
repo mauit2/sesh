@@ -11,7 +11,7 @@ import SwiftUI
 struct sesh_appApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
         }
     }
 }

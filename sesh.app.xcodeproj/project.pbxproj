@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		2FE6803B2F96B66D007D694D /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 2FE6803A2F96B66D007D694D /* Supabase */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		2FE6802A2F965BC7007D694D /* sesh.app.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = sesh.app.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2FE6803B2F96B66D007D694D /* Supabase in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -33,6 +38,7 @@
 			isa = PBXGroup;
 			children = (
 				2FE6802C2F965BC7007D694D /* sesh.app */,
+				2FE680392F96B66D007D694D /* Frameworks */,
 				2FE6802B2F965BC7007D694D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -43,6 +49,13 @@
 				2FE6802A2F965BC7007D694D /* sesh.app.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		2FE680392F96B66D007D694D /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -65,6 +78,7 @@
 			);
 			name = sesh.app;
 			packageProductDependencies = (
+				2FE6803A2F96B66D007D694D /* Supabase */,
 			);
 			productName = sesh.app;
 			productReference = 2FE6802A2F965BC7007D694D /* sesh.app.app */;
@@ -94,6 +108,9 @@
 			);
 			mainGroup = 2FE680212F965BC7007D694D;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				2FE680382F96B268007D694D /* XCRemoteSwiftPackageReference "supabase-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2FE6802B2F965BC7007D694D /* Products */;
 			projectDirPath = "";
@@ -251,8 +268,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = H7A4TB3KVA;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "sesh uses your camera to set a profile photo.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -282,8 +301,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = H7A4TB3KVA;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "sesh uses your camera to set a profile photo.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -328,6 +349,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		2FE680382F96B268007D694D /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		2FE6803A2F96B66D007D694D /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2FE680382F96B268007D694D /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 2FE680222F965BC7007D694D /* Project object */;
 }
