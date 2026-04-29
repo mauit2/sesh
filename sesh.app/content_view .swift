@@ -14,6 +14,7 @@ import Combine
 import PhotosUI
 import UIKit
 import CoreLocation
+import MapKit
 import Supabase
 
 // MARK: - Secrets (replace with your values)
@@ -338,13 +339,55 @@ struct SeshSession: Codable, Identifiable, Equatable, Hashable {
     let hostId: UUID
     let joinCode: String
     let createdAt: Date
+    /// Legacy "is this session alive at all?" flag. Per-mode end now
+    /// drives the actual lifecycle (see `activePlan`/`activeLive`); we
+    /// leave `active` permanently TRUE on every row from migration 007
+    /// onward. Reads still tolerate it being either value so this
+    /// struct keeps decoding regardless of when the host's row was
+    /// last touched.
     var active: Bool
+    /// Per-mode liveness flags introduced in migration 007. Default to
+    /// TRUE for back-compat decoding so a fetch against an environment
+    /// that hasn't run the migration yet still produces a sensible
+    /// session struct (it'll behave as if both modes are alive, which
+    /// matches the legacy single-`active` semantics).
+    var activePlan: Bool
+    var activeLive: Bool
     enum CodingKeys: String, CodingKey {
         case id
         case hostId = "host_id"
         case joinCode = "join_code"
         case createdAt = "created_at"
         case active
+        case activePlan = "active_plan"
+        case activeLive = "active_live"
+    }
+    init(
+        id: UUID,
+        hostId: UUID,
+        joinCode: String,
+        createdAt: Date,
+        active: Bool,
+        activePlan: Bool = true,
+        activeLive: Bool = true
+    ) {
+        self.id = id
+        self.hostId = hostId
+        self.joinCode = joinCode
+        self.createdAt = createdAt
+        self.active = active
+        self.activePlan = activePlan
+        self.activeLive = activeLive
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.hostId = try c.decode(UUID.self, forKey: .hostId)
+        self.joinCode = try c.decode(String.self, forKey: .joinCode)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.active = (try c.decodeIfPresent(Bool.self, forKey: .active)) ?? true
+        self.activePlan = (try c.decodeIfPresent(Bool.self, forKey: .activePlan)) ?? true
+        self.activeLive = (try c.decodeIfPresent(Bool.self, forKey: .activeLive)) ?? true
     }
 }
 
@@ -356,11 +399,94 @@ struct SessionMember: Codable, Equatable, Hashable {
     /// `nil` means the member hasn't set one yet — callers should fall back
     /// to a derived value (e.g. time since their first drink).
     var durationHours: Double?
+    /// Per-mode "is this user still in the session in <mode>?" flags.
+    /// Introduced in migration 007 so plan and live can be left/joined
+    /// independently when both modes happen to track the same session.
+    /// Default to TRUE on decode for back-compat with environments that
+    /// haven't run the migration yet — the fallback matches legacy
+    /// behaviour ("if you're a member at all, you're a member in both
+    /// modes").
+    var inPlan: Bool
+    var inLive: Bool
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case profileId = "profile_id"
         case joinedAt = "joined_at"
         case durationHours = "duration_hours"
+        case inPlan = "in_plan"
+        case inLive = "in_live"
+    }
+    init(
+        sessionId: UUID,
+        profileId: UUID,
+        joinedAt: Date,
+        durationHours: Double? = nil,
+        inPlan: Bool = true,
+        inLive: Bool = true
+    ) {
+        self.sessionId = sessionId
+        self.profileId = profileId
+        self.joinedAt = joinedAt
+        self.durationHours = durationHours
+        self.inPlan = inPlan
+        self.inLive = inLive
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.sessionId = try c.decode(UUID.self, forKey: .sessionId)
+        self.profileId = try c.decode(UUID.self, forKey: .profileId)
+        self.joinedAt = try c.decode(Date.self, forKey: .joinedAt)
+        self.durationHours = try c.decodeIfPresent(Double.self, forKey: .durationHours)
+        self.inPlan = (try c.decodeIfPresent(Bool.self, forKey: .inPlan)) ?? true
+        self.inLive = (try c.decodeIfPresent(Bool.self, forKey: .inLive)) ?? true
+    }
+}
+
+// MARK: - Invites
+//
+// In-app invite row, mirrors the `invites` table from migration 008. Status
+// is a string instead of an enum so that future server-side additions to the
+// state machine (e.g. `expired`) don't break decoding on older clients —
+// the UI only branches on `pending` and otherwise treats the row as inert.
+struct Invite: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let sessionId: UUID
+    let senderId: UUID
+    let recipientId: UUID
+    let joinCode: String
+    let createdAt: Date
+    var status: String
+    var respondedAt: Date?
+    /// Which mode the sender was in when they fired this invite. The
+    /// recipient's "Accept" handler reads this to decide whether to call
+    /// planGroup.join or liveGroup.join — without it, a live host's
+    /// invite would drop the recipient into the plan half of the session
+    /// and they'd never see the live activity. String-typed (not an
+    /// enum) for the same forward-compat reason as `status`. Defaults to
+    /// "plan" via the DB-side default, so legacy rows decode cleanly.
+    var mode: String = "plan"
+    enum CodingKeys: String, CodingKey {
+        case id
+        case sessionId = "session_id"
+        case senderId = "sender_id"
+        case recipientId = "recipient_id"
+        case joinCode = "join_code"
+        case createdAt = "created_at"
+        case status
+        case respondedAt = "responded_at"
+        case mode
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.sessionId = try c.decode(UUID.self, forKey: .sessionId)
+        self.senderId = try c.decode(UUID.self, forKey: .senderId)
+        self.recipientId = try c.decode(UUID.self, forKey: .recipientId)
+        self.joinCode = try c.decode(String.self, forKey: .joinCode)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.status = try c.decode(String.self, forKey: .status)
+        self.respondedAt = try c.decodeIfPresent(Date.self, forKey: .respondedAt)
+        self.mode = (try c.decodeIfPresent(String.self, forKey: .mode)) ?? "plan"
     }
 }
 
@@ -401,6 +527,16 @@ struct SessionDrink: Codable, Identifiable, Equatable, Hashable {
 // proximity-based UI; for now the app only needs name + coordinates +
 // specials.
 
+/// Trust tier for a venue. Mirrors `venues.source` in the DB.
+/// - curated: vetted by us. Only tier allowed to carry specials.
+/// - mapkit:  created on-the-fly from MKLocalSearch when a user checks in.
+/// - user:    reserved for a future "add a place we missed" flow.
+enum VenueSource: String, Codable, Equatable, Hashable {
+    case curated
+    case mapkit
+    case user
+}
+
 struct Venue: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     let name: String
@@ -409,12 +545,54 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
     let lat: Double
     let lon: Double
     var isFeatured: Bool = false
+    var source: VenueSource = .curated
+    var externalId: String? = nil
     let createdAt: Date
 
     enum CodingKeys: String, CodingKey {
         case id, name, address, city, lat, lon
         case isFeatured = "is_featured"
+        case source
+        case externalId = "external_id"
         case createdAt  = "created_at"
+    }
+
+    init(
+        id: UUID,
+        name: String,
+        address: String?,
+        city: String?,
+        lat: Double,
+        lon: Double,
+        isFeatured: Bool = false,
+        source: VenueSource = .curated,
+        externalId: String? = nil,
+        createdAt: Date
+    ) {
+        self.id = id
+        self.name = name
+        self.address = address
+        self.city = city
+        self.lat = lat
+        self.lon = lon
+        self.isFeatured = isFeatured
+        self.source = source
+        self.externalId = externalId
+        self.createdAt = createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id         = try c.decode(UUID.self,   forKey: .id)
+        name       = try c.decode(String.self, forKey: .name)
+        address    = try c.decodeIfPresent(String.self, forKey: .address)
+        city       = try c.decodeIfPresent(String.self, forKey: .city)
+        lat        = try c.decode(Double.self, forKey: .lat)
+        lon        = try c.decode(Double.self, forKey: .lon)
+        isFeatured = (try c.decodeIfPresent(Bool.self, forKey: .isFeatured)) ?? false
+        source     = (try c.decodeIfPresent(VenueSource.self, forKey: .source)) ?? .curated
+        externalId = try c.decodeIfPresent(String.self, forKey: .externalId)
+        createdAt  = try c.decode(Date.self,   forKey: .createdAt)
     }
 
     /// Human-readable single-line location: "Vasagatan 1, Göteborg".
@@ -681,6 +859,64 @@ final class SessionService: ObservableObject {
 
     private var pollTask: Task<Void, Never>?
 
+    /// Which mode this store powers. Two stores live in SessionView
+    /// (one for PLAN, one for LIVE) so a user can be in two unrelated
+    /// groups at the same time. Determines:
+    ///   - the `live` flag stamped on every drink this store inserts,
+    ///   - which slice of `drinks` the helpers below filter to,
+    ///   - the UserDefaults key used to remember which session this
+    ///     store was last in (so resumeIfAny picks the right one on
+    ///     relaunch even when the user has different sessions per mode).
+    let scope: SeshMode
+
+    /// The OTHER store. Set by SessionView after both are constructed.
+    /// Used by `leave()` to avoid deleting the shared session_members
+    /// row when both stores happen to track the same session — without
+    /// this, leaving one mode would yank the user out of the other too.
+    weak var cousin: SessionService?
+
+    init(scope: SeshMode) {
+        self.scope = scope
+    }
+
+    /// True for live store, false for plan. Stamped on every drink this
+    /// store inserts and used as the in-memory filter for ledger slices.
+    private var scopeLive: Bool { scope == .live }
+
+    // ---------------------------------------------------------------
+    // Per-mode column helpers (migration 007). These keep the per-scope
+    // querying code from sprouting `if scope == .plan` everywhere.
+    // ---------------------------------------------------------------
+
+    /// `active_plan` for plan store, `active_live` for live store. Used
+    /// when the host ends "this mode" of a session — flips just this
+    /// flag, leaving the OTHER mode's flag (and the legacy `active`
+    /// flag) untouched so the cousin mode stays alive.
+    private var activeColumnForScope: String {
+        scopeLive ? "active_live" : "active_plan"
+    }
+
+    /// `in_plan` for plan store, `in_live` for live store. Used when:
+    ///   - inserting/updating my own session_members row to mark
+    ///     membership in this mode,
+    ///   - filtering the members list to "people still in the sesh in
+    ///     my mode".
+    private var inColumnForScope: String {
+        scopeLive ? "in_live" : "in_plan"
+    }
+
+    /// UserDefaults key for "which session was this store last in".
+    /// Scoped so plan and live can persist different session IDs.
+    private var persistKey: String { "sesh.lastSessionId.\(scope.rawValue)" }
+
+    private func persistSessionID(_ id: UUID?) {
+        if let id {
+            UserDefaults.standard.set(id.uuidString, forKey: persistKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: persistKey)
+        }
+    }
+
     var isActive: Bool { session != nil }
     var myId: UUID? { supabase.auth.currentUser?.id }
     var isHost: Bool {
@@ -841,13 +1077,63 @@ final class SessionService: ObservableObject {
         liveDrinks.map { $0.createdAt }.min()
     }
 
+    /// On launch, restore whichever group this scope was last in. We
+    /// prefer the persisted ID first — that's how plan and live can
+    /// diverge over time (different sessions per scope) without one
+    /// store clobbering the other's choice on next launch.
+    ///
+    /// If nothing is persisted (fresh install, or the user upgraded
+    /// from a single-store version), fall back to scanning memberships
+    /// and entering whatever's active. On a single-mode upgrade both
+    /// stores will land on the same session, which matches legacy
+    /// behaviour. Subsequent leaves/joins persist per scope and the
+    /// two stores can diverge from there.
     func resumeIfAny() async {
         guard let uid = myId else { return }
+
+        // 1. Persisted session for this scope.
+        if let raw = UserDefaults.standard.string(forKey: persistKey),
+           let sid = UUID(uuidString: raw) {
+            // Only resume if the session is still active in MY mode
+            // (per-mode end means `active_<other>` is irrelevant) AND
+            // I'm still a member in MY mode. The two `.eq(...)`
+            // filters do that cleanly server-side.
+            if let row: SeshSession = try? await supabase
+                .from("sessions")
+                .select()
+                .eq("id", value: sid.uuidString.lowercased())
+                .eq(activeColumnForScope, value: true)
+                .single()
+                .execute()
+                .value,
+               let _: SessionMember = try? await supabase
+                .from("session_members")
+                .select()
+                .eq("session_id", value: sid.uuidString.lowercased())
+                .eq("profile_id", value: uid.uuidString.lowercased())
+                .eq(inColumnForScope, value: true)
+                .single()
+                .execute()
+                .value
+            {
+                await enter(session: row)
+                return
+            }
+            // Persisted session is stale (ended for my mode, or I left
+            // from another device) — clear it so we don't keep hitting
+            // the network for a dead row on every launch.
+            persistSessionID(nil)
+        }
+
+        // 2. Fallback: scan all my memberships in this mode, enter the
+        //    first one whose session is still active in this mode.
+        //    Single-mode users land here on first launch after upgrade.
         do {
             let myMemberships: [SessionMember] = try await supabase
                 .from("session_members")
                 .select()
                 .eq("profile_id", value: uid.uuidString.lowercased())
+                .eq(inColumnForScope, value: true)
                 .execute()
                 .value
             for m in myMemberships {
@@ -855,7 +1141,7 @@ final class SessionService: ObservableObject {
                     .from("sessions")
                     .select()
                     .eq("id", value: m.sessionId.uuidString.lowercased())
-                    .eq("active", value: true)
+                    .eq(activeColumnForScope, value: true)
                     .single()
                     .execute()
                     .value {
@@ -883,10 +1169,23 @@ final class SessionService: ObservableObject {
                 .single()
                 .execute()
                 .value
-            struct M: Encodable { let session_id: String; let profile_id: String }
+            // Insert the host's membership row marked as "in this mode
+            // only" — the OTHER mode's flag is FALSE so creating in
+            // plan doesn't silently put the host in live too. They can
+            // mirror later via the cousin's join affordance.
+            struct M: Encodable {
+                let session_id: String
+                let profile_id: String
+                let in_plan: Bool
+                let in_live: Bool
+            }
             _ = try await supabase.from("session_members")
-                .insert(M(session_id: row.id.uuidString.lowercased(),
-                          profile_id: uid.uuidString.lowercased()))
+                .insert(M(
+                    session_id: row.id.uuidString.lowercased(),
+                    profile_id: uid.uuidString.lowercased(),
+                    in_plan: !scopeLive,
+                    in_live: scopeLive
+                ))
                 .execute()
             await enter(session: row)
         } catch {
@@ -898,9 +1197,13 @@ final class SessionService: ObservableObject {
         busy = true; defer { busy = false }
         error = nil
         do {
-            struct P: Encodable { let code: String }
+            // Pass the scope to the RPC so it sets the right in_<mode>
+            // flag (and OR-merges with any existing flag from the
+            // other mode — the user might already be a member in live
+            // when they tap join in plan).
+            struct P: Encodable { let code: String; let mode: String }
             let sid: UUID = try await supabase
-                .rpc("join_session_by_code", params: P(code: code.uppercased()))
+                .rpc("join_session_by_code", params: P(code: code.uppercased(), mode: scope.rawValue))
                 .execute()
                 .value
             let row: SeshSession = try await supabase
@@ -916,28 +1219,90 @@ final class SessionService: ObservableObject {
         }
     }
 
-    func leave() async {
+    /// Leave the group in this mode. Per-mode model (migration 007):
+    /// flips just my `in_<scope>` flag on the session_members row,
+    /// leaving `in_<other>` untouched. So:
+    ///
+    ///   - Other members polling for THIS mode see me disappear (their
+    ///     refresh filters by `in_<scope>`).
+    ///   - Other members polling for the OTHER mode still see me — I
+    ///     remain in that mode for everyone, including myself.
+    ///   - My cousin store stays put: it queries by `in_<other>`, so
+    ///     this update is invisible to it. No cross-store coordination
+    ///     needed.
+    ///
+    /// The `cousinSessionId` parameter is kept for ABI compatibility
+    /// with the call sites — we don't actually use it anymore (the
+    /// per-mode flags decouple the two stores at the DB level), but
+    /// callers still pass it and that's fine.
+    func leave(cousinSessionId: UUID? = nil) async {
+        _ = cousinSessionId  // intentionally unused under the per-mode model
         guard let sid = session?.id, let uid = myId else { clearLocal(); return }
-        _ = try? await supabase.from("session_members").delete()
-            .eq("session_id", value: sid.uuidString.lowercased())
-            .eq("profile_id", value: uid.uuidString.lowercased())
-            .execute()
+        // Two concrete Encodable patches so we match the rest of the
+        // file's update style — Postgrest-Swift is happiest when the
+        // body has a fixed shape it can serialize statically. We can't
+        // share the chain via a ternary because `update(_:)` itself is
+        // a throwing call, so the branches are inlined into the
+        // try/await chain instead.
+        struct InPlanPatch: Encodable { let in_plan: Bool }
+        struct InLivePatch: Encodable { let in_live: Bool }
+        do {
+            if scopeLive {
+                _ = try await supabase.from("session_members")
+                    .update(InLivePatch(in_live: false))
+                    .eq("session_id", value: sid.uuidString.lowercased())
+                    .eq("profile_id", value: uid.uuidString.lowercased())
+                    .execute()
+            } else {
+                _ = try await supabase.from("session_members")
+                    .update(InPlanPatch(in_plan: false))
+                    .eq("session_id", value: sid.uuidString.lowercased())
+                    .eq("profile_id", value: uid.uuidString.lowercased())
+                    .execute()
+            }
+        } catch {
+            // Swallow — same semantics as the previous `try?`. We
+            // still go idle locally; the user can retry next session.
+        }
         clearLocal()
     }
 
-    func end() async {
+    /// End the group in this mode (host-only flow — the UI only surfaces
+    /// this button when `isHost` is true). Per-mode model: flips just
+    /// `active_<scope>` on the sessions row, leaving `active_<other>`
+    /// alone. Every member polling for THIS mode detects the flip in
+    /// their next refresh tick (within ~3s) and goes idle locally. The
+    /// OTHER mode keeps running as if nothing happened — the cousin
+    /// store on every phone (including the host's) is none the wiser.
+    func end(cousinSessionId: UUID? = nil) async {
+        _ = cousinSessionId  // intentionally unused under the per-mode model
         guard let sid = session?.id else { clearLocal(); return }
-        _ = try? await supabase.from("sessions")
-            .update(["active": false])
-            .eq("id", value: sid.uuidString.lowercased())
-            .execute()
+        struct ActivePlanPatch: Encodable { let active_plan: Bool }
+        struct ActiveLivePatch: Encodable { let active_live: Bool }
+        do {
+            if scopeLive {
+                _ = try await supabase.from("sessions")
+                    .update(ActiveLivePatch(active_live: false))
+                    .eq("id", value: sid.uuidString.lowercased())
+                    .execute()
+            } else {
+                _ = try await supabase.from("sessions")
+                    .update(ActivePlanPatch(active_plan: false))
+                    .eq("id", value: sid.uuidString.lowercased())
+                    .execute()
+            }
+        } catch {
+            // Swallow — same semantics as the previous `try?`.
+        }
         clearLocal()
     }
 
-    /// Adds a drink to the session. The `live` flag decides which ledger
-    /// it lands in (live timeline vs. regular order card). The two are
-    /// mutually exclusive — a drink belongs to exactly one mode for life.
-    func addDrink(_ option: DrinkOption, shared: Bool = false, live: Bool = false) async {
+    /// Adds a drink to the session. The `live` flag is derived from the
+    /// store's scope — plan store stamps `live = false`, live store
+    /// stamps `live = true`. Plan and live drinks are mutually exclusive
+    /// per row so the two ledgers never bleed into each other even when
+    /// both stores happen to track the same underlying session.
+    func addDrink(_ option: DrinkOption, shared: Bool = false) async {
         guard let sid = session?.id, let uid = myId else { return }
         struct D: Encodable {
             let session_id: String
@@ -955,7 +1320,7 @@ final class SessionService: ObservableObject {
             volume_ml: option.volumeML,
             abv: option.abv,
             shared: shared,
-            live: live
+            live: scopeLive
         )
         do {
             let inserted: SessionDrink = try await supabase.from("session_drinks")
@@ -970,21 +1335,22 @@ final class SessionService: ObservableObject {
         }
     }
 
-    /// Removes this user's most recently added drink of the given option,
-    /// scoped to the requested ledger. `live` must match the ledger the
-    /// drink was added to — otherwise the regular and live undo buttons
-    /// would interfere with each other.
-    func removeMyLast(of option: DrinkOption, shared: Bool = false, live: Bool = false) async {
+    /// Removes the most recently added matching drink in this store's
+    /// ledger. The store's scope decides which ledger we look at — plan
+    /// store touches `live == false` rows, live store touches `live ==
+    /// true` rows. This keeps the regular and live undo buttons isolated
+    /// even when the two stores share a session.
+    func removeMyLast(of option: DrinkOption, shared: Bool = false) async {
         guard let uid = myId else { return }
         let candidate: SessionDrink?
         if shared {
             candidate = drinks
-                .filter { $0.drinkName == option.name && $0.shared && $0.live == live }
+                .filter { $0.drinkName == option.name && $0.shared && $0.live == scopeLive }
                 .sorted { $0.createdAt > $1.createdAt }
                 .first
         } else {
             candidate = drinks
-                .filter { $0.profileId == uid && $0.drinkName == option.name && !$0.shared && $0.live == live }
+                .filter { $0.profileId == uid && $0.drinkName == option.name && !$0.shared && $0.live == scopeLive }
                 .sorted { $0.createdAt > $1.createdAt }
                 .first
         }
@@ -997,22 +1363,42 @@ final class SessionService: ObservableObject {
 
     private func enter(session: SeshSession) async {
         self.session = session
+        // Persist so the next launch can restore THIS scope's session
+        // independently of the cousin scope.
+        persistSessionID(session.id)
         await refresh()
         startPolling()
+    }
+
+    /// Patch the current user's entry in `memberProfiles` immediately
+    /// without waiting for the next 3-second poll. Called by SessionView
+    /// when AuthService publishes a profile edit so the user sees their
+    /// new weight/age/sex reflected in the live BAC the moment they
+    /// hit Save, not three seconds later.
+    func applyMyProfile(_ profile: Profile) {
+        guard isActive else { return }
+        memberProfiles[profile.id] = profile
     }
 
     private func clearLocal() {
         stopPolling()
         session = nil; members = []; memberProfiles = [:]; drinks = []
+        persistSessionID(nil)
     }
 
     private func refresh() async {
         guard let sid = session?.id else { return }
         do {
+            // Per-mode roster: only fetch members whose `in_<scope>`
+            // flag is still TRUE. Anyone who left this mode (but might
+            // still be in the other) gets filtered out server-side, so
+            // they correctly disappear from this scope's UI without
+            // affecting the cousin scope's roster.
             let ms: [SessionMember] = try await supabase
                 .from("session_members")
                 .select()
                 .eq("session_id", value: sid.uuidString.lowercased())
+                .eq(inColumnForScope, value: true)
                 .execute()
                 .value
             let ds: [SessionDrink] = try await supabase
@@ -1023,26 +1409,56 @@ final class SessionService: ObservableObject {
                 .execute()
                 .value
 
-            let neededIds = Set(ms.map(\.profileId)).subtracting(memberProfiles.keys)
-            if !neededIds.isEmpty {
-                let ids = neededIds.map { $0.uuidString.lowercased() }
+            // Re-fetch every member's profile on each poll, not just new
+            // ones. We used to only fetch on first sight, which left the
+            // cache stale forever — so when the user (or any group
+            // member) updated their weight/sex/age in profile settings,
+            // the live Widmark formula kept reading the old values and
+            // BAC didn't budge. Refreshing the lot keeps every member's
+            // BAC in sync with whatever they last saved.
+            let allIds = Set(ms.map(\.profileId))
+            if !allIds.isEmpty {
+                let ids = allIds.map { $0.uuidString.lowercased() }
                 let ps: [Profile] = try await supabase
                     .from("profiles")
                     .select()
                     .in("id", values: ids)
                     .execute()
                     .value
+                // Replace in-place so a removed-then-rejoined profile
+                // doesn't keep its prior values.
                 for p in ps { memberProfiles[p.id] = p }
             }
 
-            // if host ended session, clean up
+            // Has the host ended THIS mode of the session? Per-mode
+            // model: we only care about `active_<scope>`, not the
+            // legacy global `active` (which now stays TRUE forever)
+            // and not the OTHER mode's flag (cousin scope handles that
+            // independently). The legacy `active = false` check stays
+            // as a fallback for environments that haven't run
+            // migration 007 yet — there `activePlan`/`activeLive`
+            // default to TRUE on decode and we'd otherwise miss a
+            // host-end that flipped only `active`.
             if let row: SeshSession = try? await supabase
                 .from("sessions")
                 .select()
                 .eq("id", value: sid.uuidString.lowercased())
                 .single()
                 .execute()
-                .value, row.active == false {
+                .value {
+                let endedForMyMode = scopeLive ? !row.activeLive : !row.activePlan
+                if endedForMyMode || row.active == false {
+                    clearLocal()
+                    return
+                }
+            }
+
+            // Did I get kicked out of THIS mode (e.g. left from another
+            // device, or — though we don't expose this yet — a host
+            // removed me)? Detect via my own membership row's
+            // `in_<scope>` flag. We already pulled the filtered list
+            // above, so a missing self-row in `ms` means I'm out.
+            if let uid = myId, !ms.contains(where: { $0.profileId == uid }) {
                 clearLocal()
                 return
             }
@@ -1179,6 +1595,147 @@ extension LocationService: CLLocationManagerDelegate {
     }
 }
 
+/// One row in the MapKit-backed search results. We don't reuse `Venue`
+/// here because a result is "potential venue" — until the user actually
+/// checks in we never write it to the DB. Keeping the type distinct
+/// makes the call sites obvious and prevents accidentally seeding our
+/// venues table with random taps.
+struct MapKitVenueResult: Identifiable, Hashable {
+    /// Stable id derived from `MKMapItem.identifier` (iOS 18+) when
+    /// present, otherwise a synthetic "lat,lon|name" key. Used both as
+    /// the SwiftUI list id AND as the dedupe key against `external_id`.
+    let id: String
+    let name: String
+    let address: String?
+    let city: String?
+    let lat: Double
+    let lon: Double
+
+    /// Distance in metres from the search center, when known. Surfaced
+    /// so the UI can show "0.4 km" next to each result without doing
+    /// the arithmetic in the view.
+    let distance: CLLocationDistance?
+
+    init(mapItem: MKMapItem, from origin: CLLocation?) {
+        // iOS 26+ APIs: `location` for coordinates, `address` for the
+        // short street line, `addressRepresentations` for structured
+        // city/region. Replaces the deprecated `placemark` accessors.
+        let coord = mapItem.location.coordinate
+        let extID = mapItem.identifier?.rawValue
+        self.id = extID
+            ?? "\(coord.latitude),\(coord.longitude)|\(mapItem.name ?? "")"
+        self.name = mapItem.name ?? "Unknown"
+        // shortAddress is the compact "Vasagatan 1" form when available;
+        // fall back to fullAddress so we never show nothing on rows that
+        // do have an address.
+        if let addr = mapItem.address {
+            self.address = addr.shortAddress ?? addr.fullAddress
+        } else {
+            self.address = nil
+        }
+        self.city = mapItem.addressRepresentations?.cityName
+        self.lat = coord.latitude
+        self.lon = coord.longitude
+        if let origin {
+            self.distance = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                .distance(from: origin)
+        } else {
+            self.distance = nil
+        }
+    }
+}
+
+/// Wraps `MKLocalSearch` so the venue sheet can offer "search any bar
+/// nearby" without hard-coding a global venue list. Single in-flight
+/// request: starting a new search cancels the previous one so a fast
+/// typist doesn't get stale results.
+@MainActor
+final class MapKitVenueSearch: ObservableObject {
+    @Published private(set) var results: [MapKitVenueResult] = []
+    @Published private(set) var isSearching = false
+    @Published private(set) var lastError: String? = nil
+
+    private var current: MKLocalSearch?
+
+    /// Run a search. `query` is the user's text; `origin` (when known)
+    /// is used to bias the region and compute distances. We restrict
+    /// to bar/restaurant POI categories so a search for "vasa" doesn't
+    /// pollute the list with bus stops.
+    func search(query: String, origin: CLLocation?) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Cancel any in-flight search first — typing a new char shouldn't
+        // race the previous one.
+        current?.cancel()
+        current = nil
+        guard !trimmed.isEmpty else {
+            results = []
+            isSearching = false
+            return
+        }
+
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = trimmed
+        request.resultTypes = [.pointOfInterest]
+        // Bias to bars/nightlife/restaurants — the universe of places
+        // someone would meaningfully "check into" for the sesh. Brewery /
+        // winery cover dedicated drinking spots that aren't tagged
+        // .nightlife.
+        request.pointOfInterestFilter = MKPointOfInterestFilter(
+            including: [.nightlife, .restaurant, .brewery, .winery]
+        )
+        // ~20 km radius around the user's location when we have it,
+        // otherwise let MapKit pick a default. The radius is a soft
+        // bias, not a hard filter, so we still get hits if the user
+        // wandered slightly outside it.
+        if let origin {
+            request.region = MKCoordinateRegion(
+                center: origin.coordinate,
+                latitudinalMeters: 20_000,
+                longitudinalMeters: 20_000
+            )
+        }
+
+        let search = MKLocalSearch(request: request)
+        current = search
+        isSearching = true
+        lastError = nil
+
+        search.start { [weak self] response, error in
+            Task { @MainActor in
+                guard let self else { return }
+                // If we got cancelled by a newer query, ignore — the
+                // newer call already replaced `current` and reset state.
+                guard self.current === search else { return }
+                self.isSearching = false
+                self.current = nil
+                if let error {
+                    let ns = error as NSError
+                    // MKError.unknown / cancelled — quiet failure.
+                    if ns.domain == MKErrorDomain, ns.code == MKError.Code.unknown.rawValue {
+                        self.results = []
+                        return
+                    }
+                    self.lastError = error.localizedDescription
+                    self.results = []
+                    return
+                }
+                let items = response?.mapItems ?? []
+                self.results = items.map { MapKitVenueResult(mapItem: $0, from: origin) }
+            }
+        }
+    }
+
+    /// Clear the result list — used when the sheet closes or the user
+    /// empties the search field.
+    func clear() {
+        current?.cancel()
+        current = nil
+        results = []
+        isSearching = false
+        lastError = nil
+    }
+}
+
 @MainActor
 final class VenueService: ObservableObject {
     @Published private(set) var venues: [Venue] = []
@@ -1293,6 +1850,126 @@ final class VenueService: ObservableObject {
         }
     }
 
+    // MARK: - MapKit check-in
+
+    /// Check the user into a venue surfaced by `MapKitVenueSearch`. If we
+    /// already know about it (matched by `external_id`) we just point
+    /// `currentVenue` at the existing row — no DB write. Otherwise we
+    /// insert a new `mapkit`-tier venue and use the returned row.
+    ///
+    /// The DB enforces the curated-only rule on specials via trigger, so
+    /// even if this method's source value were wrong the moderation
+    /// guarantee would still hold.
+    func checkIn(mapKitResult result: MapKitVenueResult) async {
+        // 1. Fast path: already in our local list.
+        if let existing = venues.first(where: {
+            $0.externalId == result.id && $0.source == .mapkit
+        }) {
+            currentVenue = existing
+            return
+        }
+
+        // 2. Re-check the DB in case another device beat us to the insert
+        //    (or our local list is stale). Look up by (source, external_id),
+        //    which is the same shape as the unique index.
+        do {
+            let matches: [Venue] = try await supabase
+                .from("venues")
+                .select()
+                .eq("source", value: "mapkit")
+                .eq("external_id", value: result.id)
+                .limit(1)
+                .execute()
+                .value
+            if let hit = matches.first {
+                if !venues.contains(where: { $0.id == hit.id }) {
+                    venues.append(hit)
+                }
+                currentVenue = hit
+                return
+            }
+        } catch {
+            // Read failure is non-fatal — fall through and try insert.
+            // Worst case the unique index rejects us and we surface that.
+        }
+
+        // 3. Insert a new mapkit row. RLS allows it because source != 'curated'.
+        struct NewMapKitVenue: Encodable {
+            let name: String
+            let address: String?
+            let city: String?
+            let lat: Double
+            let lon: Double
+            let is_featured: Bool
+            let source: String
+            let external_id: String
+        }
+        let payload = NewMapKitVenue(
+            name: result.name,
+            address: result.address,
+            city: result.city,
+            lat: result.lat,
+            lon: result.lon,
+            is_featured: false,
+            source: "mapkit",
+            external_id: result.id
+        )
+        do {
+            let inserted: [Venue] = try await supabase
+                .from("venues")
+                .insert(payload)
+                .select()
+                .execute()
+                .value
+            if let row = inserted.first {
+                venues.append(row)
+                currentVenue = row
+                return
+            }
+        } catch {
+            // Insert lost a race with another device — re-read by external_id
+            // and use the winner. If that also fails we fall through to a
+            // local-only stub so the user's check-in still works for this
+            // session even if it doesn't get persisted.
+            do {
+                let matches: [Venue] = try await supabase
+                    .from("venues")
+                    .select()
+                    .eq("source", value: "mapkit")
+                    .eq("external_id", value: result.id)
+                    .limit(1)
+                    .execute()
+                    .value
+                if let hit = matches.first {
+                    if !venues.contains(where: { $0.id == hit.id }) {
+                        venues.append(hit)
+                    }
+                    currentVenue = hit
+                    return
+                }
+            } catch {
+                // fall through
+            }
+        }
+
+        // 4. Last resort: local-only stub. Stable id from external_id so
+        //    a later real insert dedupes cleanly via reconcileCurrent().
+        let stub = Venue(
+            id: UUID(),
+            name: result.name,
+            address: result.address,
+            city: result.city,
+            lat: result.lat,
+            lon: result.lon,
+            isFeatured: false,
+            source: .mapkit,
+            externalId: result.id,
+            createdAt: Date()
+        )
+        venues.append(stub)
+        currentVenue = stub
+    }
+
     private func applyFallback() {
         venues = HardcodedVenues.all
         var grouped: [UUID: [VenueSpecial]] = [:]
@@ -1336,6 +2013,166 @@ final class VenueService: ObservableObject {
     }
 }
 
+// MARK: - Invites
+//
+// Polling-based "in-app inbox" for invites. There is intentionally no push
+// notification path yet — the recipient has to have the app open (or
+// foreground it) to see the invite. The trade-off is acceptable for the
+// first cut: a friend tapping an invite while the app is backgrounded just
+// sees it on next foreground. Push can be layered on later by reading from
+// the same `invites` table this service polls.
+//
+// Polling cadence is deliberately slower than SessionService's 3 s loop —
+// invites are rare events, and burning a query every 3 s for an empty
+// inbox is wasteful. 7 s is fast enough that "host taps send → recipient
+// sees banner" still feels live (typically <10 s end-to-end).
+@MainActor
+final class InvitesService: ObservableObject {
+    /// Pending invites for the signed-in user, newest first. Drives the
+    /// banner pinned at the top of SessionView and the inbox sheet.
+    @Published private(set) var pending: [Invite] = []
+    /// Sender profiles, keyed by sender_id, populated alongside `pending`
+    /// so the banner / sheet can render avatar + name without a second
+    /// round trip per row.
+    @Published private(set) var senderProfiles: [UUID: Profile] = [:]
+    /// Surfaced in the sheet when an accept / decline fails; nil otherwise.
+    @Published var error: String?
+
+    private var pollTask: Task<Void, Never>?
+
+    /// Start the polling loop. Idempotent — calling twice is a no-op.
+    /// RootView calls this once auth lands, and stops it on sign-out.
+    func start() {
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refresh()
+                try? await Task.sleep(nanoseconds: 7_000_000_000)
+            }
+        }
+    }
+
+    func stop() {
+        pollTask?.cancel()
+        pollTask = nil
+        pending = []
+        senderProfiles = [:]
+    }
+
+    /// Single fetch + sender-profile hydration. Public so the UI can poke
+    /// it after an accept / decline to refresh without waiting up to 7 s.
+    func refresh() async {
+        guard let uid = supabase.auth.currentUser?.id else { return }
+        do {
+            // Explicit column list (instead of `*`) so a stale PostgREST
+            // schema cache can't silently drop the `mode` field on us —
+            // a missing mode would default to "plan" in the decoder and
+            // route live invites to plan mode of the same session, which
+            // is the wrong half of the per-mode split.
+            let rows: [Invite] = try await supabase
+                .from("invites")
+                .select("id,session_id,sender_id,recipient_id,join_code,created_at,responded_at,status,mode")
+                .eq("recipient_id", value: uid.uuidString.lowercased())
+                .eq("status", value: "pending")
+                .order("created_at", ascending: false)
+                .execute()
+                .value
+            self.pending = rows
+
+            // Hydrate sender profiles for every row we don't already have.
+            // We never drop entries from the cache here — a sender whose
+            // invite was just accepted (and therefore disappears from
+            // `pending`) might still need to be rendered by a sheet that's
+            // already on screen for one extra frame.
+            let missing = Set(rows.map(\.senderId)).subtracting(senderProfiles.keys)
+            if !missing.isEmpty {
+                let ids = missing.map { $0.uuidString.lowercased() }
+                let ps: [Profile] = try await supabase
+                    .from("profiles")
+                    .select()
+                    .in("id", values: ids)
+                    .execute()
+                    .value
+                for p in ps { senderProfiles[p.id] = p }
+            }
+        } catch {
+            // Swallow — empty inbox is a fine fallback, and we don't want a
+            // transient network blip to flash a red banner. The next poll
+            // recovers automatically.
+        }
+    }
+
+    /// Send an invite to each of `recipientIds` for the given session +
+    /// snapshot of its join code. Uses an upsert with `ignoreDuplicates`
+    /// so a re-tap (or two devices both firing on the same crew) collapses
+    /// to one row per (session, recipient) thanks to the unique index.
+    /// Returns the number of rows accepted by the server, useful for a
+    /// "Sent to N friends" toast in the UI.
+    @discardableResult
+    func send(sessionId: UUID, joinCode: String, mode: SeshMode, recipientIds: [UUID]) async -> Int {
+        guard let uid = supabase.auth.currentUser?.id else { return 0 }
+        let unique = Array(Set(recipientIds)).filter { $0 != uid }
+        guard !unique.isEmpty else { return 0 }
+        struct Row: Encodable {
+            let session_id: String
+            let sender_id: String
+            let recipient_id: String
+            let join_code: String
+            let mode: String
+        }
+        let rows: [Row] = unique.map { rid in
+            Row(
+                session_id: sessionId.uuidString.lowercased(),
+                sender_id: uid.uuidString.lowercased(),
+                recipient_id: rid.uuidString.lowercased(),
+                join_code: joinCode,
+                mode: mode.rawValue
+            )
+        }
+        do {
+            // `ignoreDuplicates` makes the unique-key collision a soft no-op
+            // instead of a 409 — a host re-sending to the same crew gets a
+            // silent success rather than an error toast.
+            _ = try await supabase
+                .from("invites")
+                .upsert(rows, onConflict: "session_id,recipient_id", ignoreDuplicates: true)
+                .execute()
+            return rows.count
+        } catch {
+            self.error = "Couldn't send invite"
+            return 0
+        }
+    }
+
+    /// Flip an invite to `accepted` or `declined`. We update by id (RLS
+    /// already pins to recipient_id = auth.uid(), so a malicious id from
+    /// another inbox can't sneak through). The local row is removed
+    /// optimistically so the banner/sheet collapse instantly — the next
+    /// poll re-confirms.
+    func updateStatus(_ inviteId: UUID, to status: String) async {
+        struct Patch: Encodable {
+            let status: String
+            let responded_at: String
+        }
+        let patch = Patch(status: status, responded_at: ISO8601DateFormatter().string(from: Date()))
+        // Optimistic removal — the row is no longer "pending" by definition.
+        pending.removeAll { $0.id == inviteId }
+        do {
+            _ = try await supabase
+                .from("invites")
+                .update(patch)
+                .eq("id", value: inviteId.uuidString.lowercased())
+                .execute()
+        } catch {
+            // Rollback isn't worth the complexity — the next refresh will
+            // restore the row if the update truly failed. Surface a soft
+            // error string so the inbox sheet can show a retry hint.
+            self.error = "Couldn't update invite"
+            await refresh()
+        }
+    }
+}
+
 // MARK: - Live Sesh — Group Roast
 
 /// A roast: a punchy headline aimed at the most-drunk member of the group,
@@ -1348,16 +2185,107 @@ struct LiveRoast: Hashable {
     let advice: String
 }
 
+/// Whose roast is this — and which grammar to use. Lines targeting the
+/// current user need second-person verbs ("you are"), while lines about
+/// another player use third-person ("Mauritz is"). The helpers below let
+/// each roast template stay readable instead of branching at every word.
+enum RoastSubject: Equatable {
+    case you            // current user — speak in second person
+    case name(String)   // another member — third person, by first name
+
+    var isYou: Bool { if case .you = self { return true }; return false }
+
+    /// Sentence-leading subject. "You" or the first name.
+    var title: String {
+        switch self {
+        case .you:         return "You"
+        case .name(let n): return n
+        }
+    }
+
+    /// Mid-sentence subject — lowercased pronoun, names stay capitalised.
+    var mid: String {
+        switch self {
+        case .you:         return "you"
+        case .name(let n): return n
+        }
+    }
+
+    /// Subject + contracted "be": "You're" / "Mauritz is". The bread and
+    /// butter — most roast lines use this shape.
+    var titleIs: String {
+        switch self {
+        case .you:         return "You're"
+        case .name(let n): return "\(n) is"
+        }
+    }
+
+    /// "are" / "is".
+    var areIs: String { isYou ? "are" : "is" }
+
+    /// Possessive determiner: "your" / "their".
+    var poss: String { isYou ? "your" : "their" }
+
+    /// Object pronoun: "you" / "them".
+    var obj: String { isYou ? "you" : "them" }
+
+    /// Subject pronoun: "you" / "they".
+    var subjectPronoun: String { isYou ? "you" : "they" }
+
+    /// Subject pronoun + contracted "be": "you're" / "they're".
+    var pronounIs: String { isYou ? "you're" : "they're" }
+
+    /// "You are" / "They are" — capitalised, uncontracted (for end-of-line
+    /// emphasis like "…They are not.").
+    var capPronounAre: String { isYou ? "You are" : "They are" }
+
+    /// Conjugate a base verb for the subject. "think" → "think" / "thinks";
+    /// "need" → "need" / "needs"; "have" → "have" / "has"; "be" → "are" / "is".
+    func verb(_ base: String) -> String {
+        if isYou {
+            switch base {
+            case "be": return "are"
+            default:   return base
+            }
+        }
+        switch base {
+        case "have": return "has"
+        case "be":   return "is"
+        case "do":   return "does"
+        default:
+            if base.hasSuffix("s") || base.hasSuffix("x")
+                || base.hasSuffix("ch") || base.hasSuffix("sh")
+                || base.hasSuffix("z") {
+                return base + "es"
+            }
+            if base.hasSuffix("y"),
+               let prev = base.dropLast().last,
+               !"aeiou".contains(prev) {
+                return base.dropLast() + "ies"
+            }
+            return base + "s"
+        }
+    }
+
+    /// Pick one of two phrasings depending on subject — used for lines
+    /// that don't translate cleanly via the standard helpers
+    /// (e.g. "Beware of Mauritz" → "Heads up" in 2nd person).
+    func choose(you youText: String, them themText: String) -> String {
+        isYou ? youText : themText
+    }
+}
+
 enum LiveRoastBook {
-    /// Picks a roast for the leader. `name` is the leader's first name
-    /// (already extracted by the caller) so the lines can refer to them
-    /// by name. `bac` selects the tier; `seed` rotates within the tier.
-    static func roast(name: String, bac: Double, seed: Int) -> LiveRoast {
-        let bank = candidates(for: bac, name: name)
+    /// Picks a roast for the leader. `subject` carries both the name (for
+    /// third-person lines) and a flag for second-person grammar when the
+    /// leader IS the current user. `bac` selects the tier; `seed` rotates
+    /// within the tier.
+    static func roast(subject: RoastSubject, bac: Double, seed: Int) -> LiveRoast {
+        let bank = candidates(for: bac, subject: subject)
         guard !bank.isEmpty else {
             return LiveRoast(
-                headline: "\(name) is in the lead.",
-                advice: "Keep an eye on them. Water, food, friends."
+                headline: "\(subject.titleIs) in the lead.",
+                advice: "Keep an eye on \(subject.obj). Water, food, friends."
             )
         }
         return bank[abs(seed) % bank.count]
@@ -1378,59 +2306,63 @@ enum LiveRoastBook {
         return bank[abs(seed) % bank.count]
     }
 
-    private static func candidates(for bac: Double, name: String) -> [LiveRoast] {
+    private static func candidates(for bac: Double, subject s: RoastSubject) -> [LiveRoast] {
         switch bac {
         case ..<0.02:
             return [
-                LiveRoast(headline: "\(name) is leading the pack — barely a sip in.",
+                LiveRoast(headline: "\(s.titleIs) leading the pack — barely a sip in.",
                           advice: "Pace yourselves. Eat. Hydrate."),
-                LiveRoast(headline: "\(name) leads. Honestly that's embarrassing for everyone.",
+                LiveRoast(headline: "\(s.title) \(s.verb("lead")). Honestly that's embarrassing for everyone.",
                           advice: "Pick up the pace, gently. Water first."),
             ]
         case 0.02..<0.05:
             return [
-                LiveRoast(headline: "\(name) is the front-runner. The night has potential.",
+                LiveRoast(headline: "\(s.titleIs) the front-runner. The night has potential.",
                           advice: "Snack break. Water between rounds."),
-                LiveRoast(headline: "\(name) is warming up. Texts about to get spicy.",
-                          advice: "Hide their phone. Eat carbs."),
+                LiveRoast(headline: "\(s.titleIs) warming up. Texts about to get spicy.",
+                          advice: "Hide \(s.poss) phone. Eat carbs."),
             ]
         case 0.05..<0.08:
             return [
-                LiveRoast(headline: "Beware of \(name) — obnoxious mode incoming.",
-                          advice: "Strap in. Hand them water."),
-                LiveRoast(headline: "\(name) just hit talkative tier. Brace for life advice.",
-                          advice: "Nod politely. Refill their water."),
-                LiveRoast(headline: "\(name) is now the loudest in the group. Statistically.",
+                LiveRoast(headline: s.choose(
+                              you:  "Heads up — obnoxious mode incoming.",
+                              them: "Beware of \(s.mid) — obnoxious mode incoming."),
+                          advice: "Strap in. Hand \(s.obj) water."),
+                LiveRoast(headline: "\(s.title) just hit talkative tier. Brace for life advice.",
+                          advice: "Nod politely. Refill \(s.poss) water."),
+                LiveRoast(headline: "\(s.titleIs) now the loudest in the group. Statistically.",
                           advice: "Encourage food. Start tracking shots."),
             ]
         case 0.08..<0.15:
             return [
-                LiveRoast(headline: "\(name) is officially the entertainment. Document everything.",
-                          advice: "Do NOT let \(name) drive. No exceptions."),
-                LiveRoast(headline: "\(name) thinks they're whispering. They are not.",
+                LiveRoast(headline: "\(s.titleIs) officially the entertainment. Document everything.",
+                          advice: s.choose(
+                              you:  "Do NOT drive. No exceptions.",
+                              them: "Do NOT let \(s.mid) drive. No exceptions.")),
+                LiveRoast(headline: "\(s.title) \(s.verb("think")) \(s.pronounIs) whispering. \(s.capPronounAre) not.",
                           advice: "Cab money on standby. Big water."),
-                LiveRoast(headline: "\(name) just challenged the bartender to a debate. Help.",
-                          advice: "Steer them toward food. Keep their phone."),
-                LiveRoast(headline: "\(name) is forming opinions on geopolitics. Nobody asked.",
+                LiveRoast(headline: "\(s.title) just challenged the bartender to a debate. Help.",
+                          advice: "Steer \(s.obj) toward food. Keep \(s.poss) phone."),
+                LiveRoast(headline: "\(s.titleIs) forming opinions on geopolitics. Nobody asked.",
                           advice: "Water. Carbs. Light topics only."),
             ]
         case 0.15..<0.25:
             return [
-                LiveRoast(headline: "\(name) is a problem. Hide their phone. NOW.",
-                          advice: "Water, food, friend nearby. \(name) is the group's responsibility."),
-                LiveRoast(headline: "\(name) just confessed something they can't take back.",
-                          advice: "Stop pouring for them. Buddy them up. Cab home."),
-                LiveRoast(headline: "\(name) is one drink from declaring love for a stranger.",
-                          advice: "Cut them off gently. Stay close. No driving."),
+                LiveRoast(headline: "\(s.titleIs) a problem. Hide \(s.poss) phone. NOW.",
+                          advice: "Water, food, friend nearby. \(s.titleIs) the group's responsibility."),
+                LiveRoast(headline: "\(s.title) just confessed something \(s.subjectPronoun) can't take back.",
+                          advice: "Stop pouring for \(s.obj). Buddy up. Cab home."),
+                LiveRoast(headline: "\(s.titleIs) one drink from declaring love for a stranger.",
+                          advice: "Cut \(s.obj) off gently. Stay close. No driving."),
             ]
         default:
             return [
-                LiveRoast(headline: "Critical: \(name) needs supervision tonight.",
-                          advice: "Stop pouring. Stay with them. Above 0.30 — get help."),
-                LiveRoast(headline: "\(name) is in 'whose bed is this' territory.",
+                LiveRoast(headline: "Critical: \(s.mid) \(s.verb("need")) supervision tonight.",
+                          advice: "Stop pouring. Stay close. Above 0.30 — get help."),
+                LiveRoast(headline: "\(s.titleIs) in 'whose bed is this' territory.",
                           advice: "Water. Sober adult. Side-sleep when home."),
-                LiveRoast(headline: "\(name) is officially a tomorrow problem.",
-                          advice: "End the sesh for them. Stay close until they're safe."),
+                LiveRoast(headline: "\(s.titleIs) officially a tomorrow problem.",
+                          advice: "End the sesh for \(s.obj). Stay close until safe."),
             ]
         }
     }
@@ -1621,10 +2553,661 @@ final class LiveSeshState: ObservableObject {
     }
 }
 
+// MARK: - Ghost members (manually-added live sesh participants)
+//
+// Sometimes the people you're drinking with don't have the app. Rather
+// than leaving them off the leaderboard entirely, the host can add them
+// by hand: name + sex + age + weight is enough to drive the same Widmark
+// BAC math we use for real members. Each ghost has their own drink log,
+// updated by tapping their row and picking from the catalog.
+//
+// Storage scope: device-local only. Ghosts never hit Supabase — they're
+// not real users and we don't want to invent fake auth identities for
+// them. Persisted in UserDefaults so a backgrounded app doesn't lose
+// the night's tab.
+//
+// Lifecycle: scoped to live mode (the user requested it there
+// explicitly). The store hangs off SessionView and is passed into
+// LiveSeshView; PLAN never sees these.
+
+/// One drink consumed by a ghost member. Mirrors `LiveDrink`'s shape so
+/// we can reuse the same per-drink Widmark contribution math, but stays
+/// a separate type because ghosts don't have UUID-based identity in the
+/// same namespace as real session drinks.
+struct GhostDrink: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let optionName: String
+    let detail: String
+    let category: DrinkCategory
+    let volumeML: Double
+    let abv: Double
+    let consumedAt: Date
+
+    init(id: UUID = UUID(), option: DrinkOption, consumedAt: Date = Date()) {
+        self.id = id
+        self.optionName = option.name
+        self.detail = option.detail
+        self.category = option.category
+        self.volumeML = option.volumeML
+        self.abv = option.abv
+        self.consumedAt = consumedAt
+    }
+
+    var grams: Double { volumeML * abv * 0.789 }
+
+    /// Best-effort lookup back to the original DrinkOption for glyph rendering.
+    func option() -> DrinkOption {
+        if let match = DrinkCatalog.allOptions.first(where: { $0.name == optionName }) {
+            return match
+        }
+        return DrinkOption(
+            category: category,
+            name: optionName,
+            detail: detail,
+            volumeML: volumeML,
+            abv: abv
+        )
+    }
+}
+
+/// A manually-added participant in the live sesh. `weightKg` + `sex`
+/// are everything BAC math needs; `age` is captured because the rest of
+/// the app collects it as part of any drinker profile (and might use it
+/// later for tier-based warnings) — even if Widmark itself ignores it.
+struct GhostMember: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    var name: String
+    var sex: Sex
+    var age: Int
+    var weightKg: Double
+    var drinks: [GhostDrink]
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        sex: Sex,
+        age: Int,
+        weightKg: Double,
+        drinks: [GhostDrink] = [],
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.name = name
+        self.sex = sex
+        self.age = age
+        self.weightKg = weightKg
+        self.drinks = drinks
+        self.createdAt = createdAt
+    }
+}
+
+/// On-device store for ghost members. Same persistence pattern as
+/// `LiveSeshState` (JSONEncoder + iso8601), keyed under a stable v1 key
+/// so future schema changes can migrate without colliding.
+@MainActor
+final class GhostMembersStore: ObservableObject {
+    @Published var members: [GhostMember] = []
+
+    private let storeKey = "sesh.live.ghosts.v1"
+    private let eliminationRate = 0.015
+
+    init() { load() }
+
+    func add(name: String, sex: Sex, age: Int, weightKg: Double) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let g = GhostMember(name: trimmed, sex: sex, age: age, weightKg: weightKg)
+        members.append(g)
+        save()
+    }
+
+    func remove(_ id: UUID) {
+        members.removeAll { $0.id == id }
+        save()
+    }
+
+    /// Wipe the entire ghost roster. Called when the user ends their
+    /// live sesh — the BAC math is meaningless across nights, and
+    /// keeping stale ghosts around would silently inflate tomorrow's
+    /// numbers when the user opens the app again.
+    func clearAll() {
+        guard !members.isEmpty else { return }
+        members.removeAll()
+        save()
+    }
+
+    func addDrink(_ option: DrinkOption, to ghostId: UUID, at consumedAt: Date = Date()) {
+        guard let idx = members.firstIndex(where: { $0.id == ghostId }) else { return }
+        members[idx].drinks.append(GhostDrink(option: option, consumedAt: consumedAt))
+        save()
+    }
+
+    func removeLastDrink(from ghostId: UUID) {
+        guard let idx = members.firstIndex(where: { $0.id == ghostId }) else { return }
+        guard !members[idx].drinks.isEmpty else { return }
+        members[idx].drinks.removeLast()
+        save()
+    }
+
+    func removeDrink(_ drinkId: UUID, from ghostId: UUID) {
+        guard let idx = members.firstIndex(where: { $0.id == ghostId }) else { return }
+        members[idx].drinks.removeAll { $0.id == drinkId }
+        save()
+    }
+
+    /// Per-drink Widmark, identical to `LiveSeshState.bac` so a ghost and
+    /// a real user with matching stats and drinks read the same BAC. Each
+    /// drink contributes `(grams / (mass × r)) × 100` minus 0.015 ×
+    /// hours-since-that-drink, clamped at 0.
+    func bac(for ghost: GhostMember, now: Date = Date()) -> Double {
+        let bodyGrams = ghost.weightKg * 1000
+        let denom = bodyGrams * ghost.sex.r
+        guard denom > 0 else { return 0 }
+        return ghost.drinks.reduce(0.0) { acc, d in
+            let hoursSince = max(0, now.timeIntervalSince(d.consumedAt) / 3600)
+            let contribution = (d.grams / denom) * 100 - eliminationRate * hoursSince
+            return acc + max(0, contribution)
+        }
+    }
+
+    // MARK: persistence
+
+    private func save() {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        if let data = try? enc.encode(members) {
+            UserDefaults.standard.set(data, forKey: storeKey)
+        }
+    }
+
+    private func load() {
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        if let data = UserDefaults.standard.data(forKey: storeKey),
+           let restored = try? dec.decode([GhostMember].self, from: data) {
+            members = restored
+        }
+    }
+}
+
+// MARK: - Saved groups
+//
+// User-curated, on-device list of groups they want to keep around for
+// one-tap rejoin. Surfaces in GroupSheet's idle view as "SAVED GROUPS"
+// and is toggled from the active view's star button.
+//
+// Two write paths:
+//   • `save(...)` — explicit, fired by the user tapping the star while
+//     they're in a group. Adds an entry (or refreshes its snapshot if
+//     one already exists).
+//   • `refreshSnapshotIfSaved(...)` — silent, fired on every member
+//     refresh from SessionService. Only touches entries the user has
+//     already explicitly saved, so we never auto-add anything they
+//     didn't ask for, but the snapshot fields (member count, host name,
+//     last-joined timestamp) stay current.
+//
+// Stored in UserDefaults — these aren't sensitive (just a 6-char join
+// code + a name) and we don't want a network round-trip on every sheet
+// open. The list is bounded to keep storage and the UI in check.
+
+/// A single previously-seen crew member, snapshotted at save time so we
+/// can re-list them in the "invite crew" share card without needing the
+/// network. Identified by Supabase profile id (which is also the auth
+/// user id — same UUID flow as `SessionMember.profileId`).
+struct SavedMember: Codable, Equatable, Hashable, Identifiable {
+    let id: UUID
+    var name: String
+    var avatarURL: String?
+}
+
+struct SavedGroup: Codable, Identifiable, Equatable, Hashable {
+    /// Session id — the dedupe key. Two stores hitting the same session
+    /// (mirrored plan↔live) collapse to one saved entry.
+    let id: UUID
+    var joinCode: String
+    var lastJoinedAt: Date
+    var lastMemberCount: Int
+    /// Host's display name when last seen. Optional — on the first save
+    /// the host's profile may not have made it into memberProfiles yet,
+    /// in which case we leave this blank and fill it in on a later
+    /// refresh tick.
+    var lastHostName: String?
+    /// Snapshot of the crew (excluding the current user) at save time.
+    /// Drives the "tap saved group → start new sesh + invite previous
+    /// members" flow. We snapshot the whole roster so the share message
+    /// can name people even if their profiles aren't cached anymore.
+    /// May be empty for entries saved before this field existed — the
+    /// custom `init(from:)` defaults missing values to `[]`.
+    var savedMembers: [SavedMember]
+
+    init(
+        id: UUID,
+        joinCode: String,
+        lastJoinedAt: Date,
+        lastMemberCount: Int,
+        lastHostName: String?,
+        savedMembers: [SavedMember]
+    ) {
+        self.id = id
+        self.joinCode = joinCode
+        self.lastJoinedAt = lastJoinedAt
+        self.lastMemberCount = lastMemberCount
+        self.lastHostName = lastHostName
+        self.savedMembers = savedMembers
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, joinCode, lastJoinedAt, lastMemberCount, lastHostName, savedMembers
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.joinCode = try c.decode(String.self, forKey: .joinCode)
+        self.lastJoinedAt = try c.decode(Date.self, forKey: .lastJoinedAt)
+        self.lastMemberCount = try c.decode(Int.self, forKey: .lastMemberCount)
+        self.lastHostName = try c.decodeIfPresent(String.self, forKey: .lastHostName)
+        // Older v1 entries didn't carry a member roster. Default to []
+        // so they still decode cleanly — they just won't contribute to
+        // the invite card until the user re-saves them.
+        self.savedMembers = (try c.decodeIfPresent([SavedMember].self, forKey: .savedMembers)) ?? []
+    }
+}
+
+@MainActor
+final class SavedGroupsStore: ObservableObject {
+    @Published private(set) var groups: [SavedGroup] = []
+
+    /// Storage key. Bumped to v1 from the start so we have a clean lane
+    /// to migrate from later (delete-on-decode-failure is the policy if
+    /// we ever change the schema incompatibly).
+    private let key = "sesh.savedGroups.v1"
+
+    /// Soft cap on how many entries we keep. Anything older falls off
+    /// the bottom of the list. 12 is enough to cover a busy month of
+    /// sesh-going without turning the idle sheet into a wall of codes.
+    private let maxEntries = 12
+
+    init() { load() }
+
+    /// Has the user explicitly saved this session? Drives the star
+    /// toggle in the active view (filled vs. outlined).
+    func isSaved(id: UUID) -> Bool {
+        groups.contains(where: { $0.id == id })
+    }
+
+    /// Explicit save (or snapshot-refresh, if already present). Called
+    /// from the active-view star button. Idempotent — re-saving an
+    /// already-saved group just refreshes its metadata and bumps it to
+    /// the top of the list.
+    func save(session: SeshSession, memberCount: Int, hostName: String?, members: [SavedMember]) {
+        upsert(session: session, memberCount: memberCount, hostName: hostName, members: members, allowInsert: true)
+    }
+
+    /// Silent snapshot refresh. Updates `lastMemberCount`, `lastHostName`,
+    /// `lastJoinedAt`, and the saved-members roster on entries the user
+    /// has already saved, but never inserts a new one. This keeps
+    /// automatic recording (driven off SessionService refresh ticks)
+    /// from sneaking groups into the list behind the user's back while
+    /// still making sure a saved entry's metadata reflects the most
+    /// recent visit — including the "previous crew" snapshot used by
+    /// the invite share card.
+    func refreshSnapshotIfSaved(session: SeshSession, memberCount: Int, hostName: String?, members: [SavedMember]) {
+        guard isSaved(id: session.id) else { return }
+        upsert(session: session, memberCount: memberCount, hostName: hostName, members: members, allowInsert: false)
+    }
+
+    /// Remove an entry by session id. Used by the X button on each row
+    /// and by the active-view star toggle when going from saved → not.
+    func remove(id: UUID) {
+        guard groups.contains(where: { $0.id == id }) else { return }
+        groups.removeAll { $0.id == id }
+        persist()
+    }
+
+    /// Shared upsert path used by both `save` and `refreshSnapshotIfSaved`.
+    /// `allowInsert == false` is what makes the silent refresh safe: it
+    /// never adds an entry the user didn't explicitly save.
+    private func upsert(session: SeshSession, memberCount: Int, hostName: String?, members: [SavedMember], allowInsert: Bool) {
+        let existing = groups.first(where: { $0.id == session.id })
+        // Preserve the previously-known host name when this refresh
+        // hasn't loaded the host's profile yet — otherwise a transient
+        // nil would clobber a perfectly good label.
+        let preservedHostName: String? = {
+            if let incoming = hostName, !incoming.isEmpty { return incoming }
+            return existing?.lastHostName
+        }()
+        // Same defensive carve-out for the member roster: if the
+        // refresh tick happens before profiles are cached, `members`
+        // can come in empty. Don't overwrite a perfectly good roster
+        // with an empty one.
+        let preservedMembers: [SavedMember] = {
+            if !members.isEmpty { return members }
+            return existing?.savedMembers ?? []
+        }()
+        let entry = SavedGroup(
+            id: session.id,
+            joinCode: session.joinCode,
+            lastJoinedAt: Date(),
+            lastMemberCount: max(memberCount, 1),
+            lastHostName: preservedHostName,
+            savedMembers: preservedMembers
+        )
+        if let idx = groups.firstIndex(where: { $0.id == session.id }) {
+            groups[idx] = entry
+        } else if allowInsert {
+            groups.append(entry)
+        } else {
+            return
+        }
+        groups.sort { $0.lastJoinedAt > $1.lastJoinedAt }
+        if groups.count > maxEntries {
+            groups = Array(groups.prefix(maxEntries))
+        }
+        persist()
+    }
+
+    private func persist() {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        guard let data = try? enc.encode(groups) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+
+    private func load() {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        guard let decoded = try? dec.decode([SavedGroup].self, from: data) else {
+            // Schema drift — drop the cache rather than wedging on it.
+            UserDefaults.standard.removeObject(forKey: key)
+            return
+        }
+        groups = decoded.sorted { $0.lastJoinedAt > $1.lastJoinedAt }
+    }
+}
+
+// MARK: - Invite UI
+//
+// Two pieces sit on top of `InvitesService`:
+//
+//   - `InviteBanner` — pinned card under the ModeTopBar whenever there's
+//     at least one pending invite. Renders the most recent sender's avatar
+//     + a "+N more" affordance when the inbox has more than one row.
+//   - `InvitesSheet` — full inbox, presented when the banner is tapped.
+//     Each row has Accept / Decline buttons that delegate back to the
+//     SessionView so the accept path can hop straight into the session.
+//
+// The two views are intentionally read-only over `pending` (no local
+// state) so polling-driven updates flow through unmodified.
+
+private struct InviteBanner: View {
+    let count: Int
+    let latest: Invite?
+    let senderProfiles: [UUID: Profile]
+    let onTap: () -> Void
+
+    /// Pulsing glow ring + subtle scale. Drives both the outer shadow and
+    /// the leading "NEW" pip so the banner feels alive — important for an
+    /// alert that doesn't have a push notification behind it.
+    @State private var pulse = false
+    /// Springy entrance — the banner drops in then settles with a tiny
+    /// over-shoot. Triggered on first appear so each new invite gets the
+    /// "look at me" beat without re-running on every parent re-render.
+    @State private var hasAppeared = false
+
+    private var senderName: String {
+        guard let latest else { return "Someone" }
+        return senderProfiles[latest.senderId]?.name ?? "Someone"
+    }
+
+    private var senderAvatarURL: String? {
+        guard let latest else { return nil }
+        return senderProfiles[latest.senderId]?.avatarURL
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 14) {
+                ZStack {
+                    // Pulsing ring behind the avatar — reads as a "live"
+                    // indicator without needing a separate dot.
+                    Circle()
+                        .stroke(Color.whiskey.opacity(pulse ? 0.0 : 0.55), lineWidth: 2)
+                        .scaleEffect(pulse ? 1.55 : 1.0)
+                        .frame(width: 44, height: 44)
+                    Circle()
+                        .stroke(Color.whiskey.opacity(pulse ? 0.0 : 0.35), lineWidth: 2)
+                        .scaleEffect(pulse ? 1.85 : 1.0)
+                        .frame(width: 44, height: 44)
+                    AvatarView(
+                        urlString: senderAvatarURL,
+                        initial: String(senderName.prefix(1)).uppercased(),
+                        size: 44
+                    )
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.ink)
+                            .frame(width: 6, height: 6)
+                            .shadow(color: Color.ink.opacity(0.6), radius: 2)
+                        Text(count > 1 ? "\(count) NEW INVITES" : "NEW INVITE")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .tracking(2.4)
+                            .foregroundStyle(Color.ink)
+                    }
+                    Text(count > 1
+                         ? "\(senderName) and \(count - 1) other\(count - 1 == 1 ? "" : "s") want you in"
+                         : "\(senderName) wants you to join the sesh")
+                        .font(.system(size: 14, weight: .black, design: .rounded))
+                        .foregroundStyle(Color.ink)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                ZStack {
+                    Circle()
+                        .fill(Color.ink.opacity(0.18))
+                        .frame(width: 30, height: 30)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 13, weight: .black))
+                        .foregroundStyle(Color.ink)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
+            .background(
+                ZStack {
+                    // Solid whiskey base + a soft top-highlight gradient
+                    // for depth — without it the card reads flat.
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.whiskey)
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.cream.opacity(0.18), .clear],
+                                startPoint: .top,
+                                endPoint: .center
+                            )
+                        )
+                }
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.cream.opacity(0.35), lineWidth: 1)
+            )
+            // Layered glow: a tight whiskey halo for color, plus a wider
+            // soft black shadow for depth. Together the banner lifts off
+            // the page hard enough to read as "ALERT" not "card".
+            .shadow(color: Color.whiskey.opacity(pulse ? 0.85 : 0.55), radius: pulse ? 22 : 14, y: 8)
+            .shadow(color: Color.black.opacity(0.45), radius: 18, y: 12)
+            .scaleEffect(hasAppeared ? 1.0 : 0.85)
+            .opacity(hasAppeared ? 1.0 : 0)
+        }
+        .buttonStyle(PressScaleStyle())
+        .accessibilityLabel(count > 1 ? "\(count) new sesh invites" : "New sesh invite")
+        .onAppear {
+            withAnimation(.spring(response: 0.55, dampingFraction: 0.7)) {
+                hasAppeared = true
+            }
+            withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: false)) {
+                pulse = true
+            }
+        }
+    }
+}
+
+private struct InvitesSheet: View {
+    @ObservedObject var invites: InvitesService
+    let onAccept: (Invite) -> Void
+    let onDecline: (Invite) -> Void
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("INVITES")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .tracking(2.4)
+                            .foregroundStyle(Color.bronze)
+                        Text(invites.pending.isEmpty
+                             ? "All caught up"
+                             : "Tap accept to drop straight into the sesh")
+                            .font(.system(size: 22, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .lineLimit(2)
+                    }
+                    .padding(.top, 8)
+
+                    if invites.pending.isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: "tray")
+                                .font(.system(size: 32, weight: .light))
+                                .foregroundStyle(Color.cream.opacity(0.45))
+                            Text("Your inbox is empty.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 60)
+                    } else {
+                        VStack(spacing: 10) {
+                            ForEach(invites.pending) { invite in
+                                InviteRow(
+                                    invite: invite,
+                                    sender: invites.senderProfiles[invite.senderId],
+                                    onAccept: { onAccept(invite) },
+                                    onDecline: { onDecline(invite) }
+                                )
+                            }
+                        }
+                    }
+
+                    if let err = invites.error {
+                        Text(err)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color(red: 0.85, green: 0.32, blue: 0.23))
+                    }
+
+                    Spacer(minLength: 24)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 40)
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+private struct InviteRow: View {
+    let invite: Invite
+    let sender: Profile?
+    let onAccept: () -> Void
+    let onDecline: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                AvatarView(
+                    urlString: sender?.avatarURL,
+                    initial: String((sender?.name ?? "?").prefix(1)).uppercased(),
+                    size: 40
+                )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(sender?.name ?? "Someone")
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    Text("Sent you a sesh — code \(invite.joinCode)")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.65))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 8) {
+                Button(action: onDecline) {
+                    Text("DECLINE")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(1.6)
+                        .foregroundStyle(Color.cream.opacity(0.85))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.cream.opacity(0.06))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Color.cream.opacity(0.18), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(PressScaleStyle())
+
+                Button(action: onAccept) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .black))
+                        Text("ACCEPT")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .tracking(1.6)
+                    }
+                    .foregroundStyle(Color.ink)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.whiskey)
+                    )
+                    .shadow(color: Color.whiskey.opacity(0.45), radius: 12, y: 5)
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.inkElev)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.10), lineWidth: 1)
+        )
+    }
+}
+
 // MARK: - Root
 
 struct RootView: View {
     @StateObject private var auth = AuthService()
+    /// One invites inbox per signed-in user, owned at the root so the
+    /// poller survives Sheet/TabView churn lower in the tree. Started in
+    /// `.onChange(of: auth.state)` and stopped on sign-out so the loop
+    /// only runs while there's actually a user to fetch invites for.
+    @StateObject private var invites = InvitesService()
 
     var body: some View {
         ZStack {
@@ -1636,11 +3219,19 @@ struct RootView: View {
                 AuthView(auth: auth)
                     .transition(.opacity)
             case .signedIn(let profile):
-                SessionView(profile: profile, auth: auth)
+                SessionView(profile: profile, auth: auth, invites: invites)
                     .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.35), value: auth.state)
+        .onChange(of: auth.state) { _, new in
+            switch new {
+            case .signedIn:
+                invites.start()
+            case .signedOut, .loading:
+                invites.stop()
+            }
+        }
     }
 }
 
@@ -2087,14 +3678,203 @@ private struct LoungePickerField<Content: View>: View {
     }
 }
 
+// MARK: - Mode switching
+//
+// Two top-level modes — PLAN and LIVE — are presented as a paged TabView
+// (iPhone-home-style swipe). The user picks a side either by tapping the
+// pill switcher or by swiping horizontally. PLAN is the calculator-with-
+// duration-slider experience: "I'll drink X over Y hours, what's my BAC?"
+// LIVE is real-time tracking with timestamped drinks and decay between
+// pours. Keeping the names short and oppositional makes the switcher
+// readable at a glance.
+
+enum SeshMode: String, Hashable, Identifiable {
+    case plan, live
+
+    /// Self-identity is fine for `.sheet(item:)` — there are only two
+    /// values and they're each their own identity.
+    var id: String { rawValue }
+
+    /// Human-facing label used in the mirror button ("Continue with PLAN
+    /// group …"). Uppercase to match the switcher pill typography.
+    var label: String {
+        switch self {
+        case .plan: return "PLAN"
+        case .live: return "LIVE"
+        }
+    }
+
+    var other: SeshMode {
+        self == .plan ? .live : .plan
+    }
+}
+
+/// Top bar shown above the paged TabView. Houses the mode switcher and
+/// the profile chip — replaces the old Masthead + LiveSeshBar split.
+/// Pinned to the top of the screen so it doesn't scroll with content.
+private struct ModeTopBar: View {
+    @Binding var mode: SeshMode
+    let profile: Profile
+    /// True when there's something happening in LIVE that the user should
+    /// notice from the PLAN side (live timeline running, group has live
+    /// drinks, etc.). Drives the pulsing dot on the LIVE segment.
+    let liveActive: Bool
+    let onTapProfile: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ModeSwitcher(mode: $mode, liveActive: liveActive)
+            Spacer(minLength: 8)
+            Button(action: onTapProfile) {
+                AvatarView(
+                    urlString: profile.avatarURL,
+                    initial: String(profile.name.prefix(1)).uppercased(),
+                    size: 32
+                )
+                .overlay(
+                    Circle()
+                        .strokeBorder(Color.cream.opacity(0.18), lineWidth: 1)
+                )
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+    }
+}
+
+/// Pill-shaped two-segment switcher. Tapping a segment animates the
+/// thumb across to the new selection. The thumb is filled with whiskey
+/// for LIVE and a more neutral cream tint for PLAN — visually
+/// reinforcing the energy difference between the two modes.
+private struct ModeSwitcher: View {
+    @Binding var mode: SeshMode
+    let liveActive: Bool
+
+    @Namespace private var thumb
+
+    var body: some View {
+        HStack(spacing: 0) {
+            segment(.plan, label: "PLAN")
+            segment(.live, label: "LIVE", showLiveDot: liveActive)
+        }
+        .padding(3)
+        .background(
+            Capsule()
+                .fill(Color.cream.opacity(0.05))
+        )
+        .overlay(
+            Capsule()
+                .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Mode")
+        .accessibilityValue(mode == .plan ? "Plan" : "Live")
+    }
+
+    @ViewBuilder
+    private func segment(_ value: SeshMode, label: String, showLiveDot: Bool = false) -> some View {
+        let isOn = mode == value
+        let isLive = value == .live
+        Button {
+            // Spring matches the TabView page swipe so the thumb and the
+            // page transition feel like one motion.
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                mode = value
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if showLiveDot {
+                    LivePulseDot()
+                        .frame(width: 7, height: 7)
+                }
+                Text(label)
+                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                    .tracking(2.2)
+                    .foregroundStyle(textColor(isOn: isOn, isLive: isLive))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .padding(.horizontal, 14)
+            .background(
+                ZStack {
+                    if isOn {
+                        Capsule()
+                            .fill(thumbFill(isLive: isLive))
+                            .matchedGeometryEffect(id: "thumb", in: thumb)
+                            .shadow(
+                                color: (isLive ? Color.whiskey : Color.cream).opacity(isLive ? 0.45 : 0.15),
+                                radius: 10, y: 4
+                            )
+                    }
+                }
+            )
+        }
+        .buttonStyle(.plain)
+        .contentShape(Capsule())
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+        .accessibilityLabel(label)
+    }
+
+    private func thumbFill(isLive: Bool) -> Color {
+        isLive ? Color.whiskey : Color.cream.opacity(0.92)
+    }
+
+    private func textColor(isOn: Bool, isLive: Bool) -> Color {
+        if isOn {
+            return isLive ? Color.ink : Color.ink
+        }
+        return Color.cream.opacity(0.55)
+    }
+}
+
+/// Slowly-pulsing dot used on the LIVE segment when the live timeline is
+/// running. Pure CSS-style: scaleEffect + opacity tied to a repeating
+/// animation. No timer, no @State — SwiftUI repeats it for free.
+private struct LivePulseDot: View {
+    @State private var on = false
+
+    var body: some View {
+        Circle()
+            .fill(Color.whiskey)
+            .shadow(color: Color.whiskey.opacity(0.85), radius: on ? 5 : 2)
+            .scaleEffect(on ? 1.12 : 0.9)
+            .opacity(on ? 1.0 : 0.55)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.95).repeatForever(autoreverses: true)) {
+                    on = true
+                }
+            }
+    }
+}
+
 // MARK: - Session view (the former ContentView)
 
 private struct SessionView: View {
     let profile: Profile
     @ObservedObject var auth: AuthService
-    @StateObject private var group = SessionService()
+    /// In-app invite inbox, owned by RootView so the polling loop is
+    /// scoped to the auth lifecycle rather than this view's lifetime.
+    @ObservedObject var invites: InvitesService
+    /// Two independent group stores — one per mode. A user can be in
+    /// different groups across PLAN and LIVE, in only one, or in
+    /// neither. Each store remembers its own session across launches
+    /// (UserDefaults, keyed by scope). The cousin reference is wired in
+    /// `.task` below so each store can avoid clobbering the other when
+    /// they happen to point at the same session (the "mirror" case).
+    @StateObject private var planGroup = SessionService(scope: .plan)
+    @StateObject private var liveGroup = SessionService(scope: .live)
     @StateObject private var live = LiveSeshState()
     @StateObject private var recents = RecentDrinksStore()
+    /// Manually-added live-mode participants. Live-only by design — see
+    /// the GhostMembersStore comment for the reasoning. Lives in
+    /// SessionView so it survives mode switches and tab gestures (a
+    /// store on LiveSeshView would re-init every time the user swiped
+    /// back to PLAN and over again).
+    @StateObject private var ghosts = GhostMembersStore()
+    /// On-device cache of groups the user has been in. Updated whenever a
+    /// SessionService refresh lands on a session it's tracking. Surfaces
+    /// in GroupSheet's idle view so rejoining a previous group is a tap
+    /// rather than another round of "what was the code again?".
+    @StateObject private var savedGroups = SavedGroupsStore()
     /// Location + venue services. Owned here (the topmost user-facing
     /// view) and passed into LiveSeshView so both modes share one source
     /// of truth for "where am I tonight?" and "what specials apply?".
@@ -2105,18 +3885,27 @@ private struct SessionView: View {
     @State private var hours: Double = 1
     @State private var menuOpen = false
     @State private var profileOpen = false
-    @State private var groupOpen = false
+    /// Which group sheet is open, if any. Driven by GroupBar taps in
+    /// each page. Using a scope-tagged value lets one `.sheet` handle
+    /// both modes — fewer state vars, no chance of both sheets fighting.
+    @State private var groupSheetScope: SeshMode? = nil
     @State private var shareMode = false
-    @State private var liveOpen = false
     @State private var venueOpen = false
+    /// Whether the invites inbox sheet is open. Pinned-banner tap opens
+    /// it; accept/decline inside the sheet drains the banner naturally
+    /// because each action removes the row from `invites.pending`.
+    @State private var invitesSheetOpen = false
+    /// Which page the user is on. Driven by both the segmented switcher
+    /// at the top and the swipe gesture on the underlying TabView.
+    @State private var mode: SeshMode = .plan
 
     private let eliminationRate = 0.015
 
     private var personalOrder: [OrderItem] {
-        if group.isActive {
+        if planGroup.isActive {
             // Resolve via VenueService so venue specials (Fittkittlaren etc.)
             // — which aren't in DrinkCatalog — still render in the order card.
-            return group.myDrinks().map { d in
+            return planGroup.myDrinks().map { d in
                 OrderItem(id: d.id, option: venues.resolveOption(for: d), shared: false)
             }
         }
@@ -2124,8 +3913,8 @@ private struct SessionView: View {
     }
 
     private var sharedOrder: [OrderItem] {
-        guard group.isActive else { return [] }
-        return group.sharedDrinks().map { d in
+        guard planGroup.isActive else { return [] }
+        return planGroup.sharedDrinks().map { d in
             OrderItem(id: d.id, option: venues.resolveOption(for: d), shared: true)
         }
     }
@@ -2137,14 +3926,14 @@ private struct SessionView: View {
 
     /// The list shown in the menu sheet (what +/- operates on there). In share mode this is the shared pool.
     private var order: [OrderItem] {
-        (group.isActive && shareMode) ? sharedOrder : personalOrder
+        (planGroup.isActive && shareMode) ? sharedOrder : personalOrder
     }
 
     private func orderBinding() -> Binding<[OrderItem]> {
         Binding(
             get: { order },
             set: { newValue in
-                if !group.isActive { localOrder = newValue }
+                if !planGroup.isActive { localOrder = newValue }
                 // group changes are driven through MenuSheet callbacks
             }
         )
@@ -2152,8 +3941,8 @@ private struct SessionView: View {
 
     /// Ethanol grams attributed to me for BAC: personal + even share of the group's shared pool.
     private var totalAlcoholGrams: Double {
-        if group.isActive {
-            return group.effectiveGrams(for: profile.id)
+        if planGroup.isActive {
+            return planGroup.effectiveGrams(for: profile.id)
         }
         return localOrder.reduce(0) { $0 + $1.option.grams }
     }
@@ -2191,163 +3980,224 @@ private struct SessionView: View {
 
     private func addLocal(_ option: DrinkOption) {
         recents.record(option)
-        if group.isActive {
+        if planGroup.isActive {
             let shared = shareMode
-            // Regular (non-live) ledger: live=false so this drink shows
-            // up only in the order card and feeds the duration-slider BAC.
-            let t: Task<Void, Never> = Task { await group.addDrink(option, shared: shared, live: false) }
+            // Plan ledger: store stamps live=false from its scope.
+            let t: Task<Void, Never> = Task { await planGroup.addDrink(option, shared: shared) }
             _ = t
         } else {
             localOrder.append(OrderItem(option: option))
         }
     }
 
+    /// Bridge from a SessionService into the SavedGroupsStore. This is
+    /// the *silent* refresh path: it only updates entries the user has
+    /// already explicitly saved (via the active-view star toggle) so
+    /// poll ticks don't sneak random groups into the saved list.
+    ///
+    /// Called on every member-change tick (and on first appear) so the
+    /// snapshot fields on already-saved entries — host name, member
+    /// count, "last joined" timestamp — stay current as the user
+    /// re-visits a group.
+    ///
+    /// Quietly no-ops when the store has no active session (common
+    /// during the resume window before resumeIfAny lands) or when the
+    /// session isn't in the saved list.
+    private func recordSavedGroup(from store: SessionService) {
+        guard let session = store.session else { return }
+        let hostName = store.memberProfiles[session.hostId]?.name
+        let myId = profile.id
+        // Snapshot everyone *except* the current user — the invite
+        // share card lists "the previous crew" from the host's POV, so
+        // their own name shouldn't show up there. Members whose
+        // profiles haven't been cached yet are dropped (they'll fill in
+        // on a later poll tick once the profile lands).
+        let snapshot: [SavedMember] = store.members.compactMap { member in
+            guard member.profileId != myId,
+                  let prof = store.memberProfiles[member.profileId] else { return nil }
+            return SavedMember(id: prof.id, name: prof.name, avatarURL: prof.avatarURL)
+        }
+        savedGroups.refreshSnapshotIfSaved(
+            session: session,
+            memberCount: store.members.count,
+            hostName: hostName,
+            members: snapshot
+        )
+    }
+
     private func removeOneLocal(_ option: DrinkOption) {
-        if group.isActive {
+        if planGroup.isActive {
             let shared = shareMode
-            let t: Task<Void, Never> = Task { await group.removeMyLast(of: option, shared: shared, live: false) }
+            let t: Task<Void, Never> = Task { await planGroup.removeMyLast(of: option, shared: shared) }
             _ = t
         } else if let idx = localOrder.lastIndex(where: { $0.option == option }) {
             localOrder.remove(at: idx)
         }
     }
 
+    /// True when something live is happening that the user should notice
+    /// from PLAN — drives the pulsing dot on the LIVE pill. Looks at the
+    /// LIVE store specifically (not plan) so a quiet plan group with no
+    /// live drinks doesn't pulse the LIVE pill needlessly.
+    private var liveActive: Bool {
+        if liveGroup.isActive { return liveGroup.hasLiveActivity }
+        return live.isActive
+    }
+
     var body: some View {
         ZStack {
-            AtmosphereBackground(accent: status.color)
+            // The atmosphere accent shifts when the user is on LIVE so
+            // the whole screen reads "this is the live experience" even
+            // before any content swipes in.
+            AtmosphereBackground(accent: mode == .live ? Color.whiskey : status.color)
+                .animation(.easeInOut(duration: 0.45), value: mode)
 
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 24) {
-                    Masthead(profile: profile) { profileOpen = true }
+            VStack(spacing: 0) {
+                ModeTopBar(
+                    mode: $mode,
+                    profile: profile,
+                    liveActive: liveActive,
+                    onTapProfile: { profileOpen = true }
+                )
+                .padding(.horizontal, 22)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
 
-                    GroupBar(
-                        session: group.session,
-                        memberCount: group.members.count,
-                        onTap: { groupOpen = true }
-                    )
-
-                    VenueChip(
-                        location: location,
-                        venues: venues,
-                        onTap: { venueOpen = true }
-                    )
-
-                    LiveSeshBar(
-                        live: live,
-                        group: group,
-                        profile: profile,
-                        onTap: {
-                            // In a group session, the group itself is the
-                            // live backing — no need to start the solo
-                            // LiveSeshState. Otherwise auto-start solo so
-                            // the user doesn't have to "start" then "add".
-                            if !group.isActive, !live.isActive { live.start() }
-                            liveOpen = true
-                        }
-                    )
-
-                    BACReadout(
-                        bac: bac,
-                        status: status,
-                        hoursUntilSober: hoursUntil(bacThreshold: 0.0),
-                        hoursUntilEULimit: hoursUntil(bacThreshold: 0.02),
-                        hoursUntilUSLimit: hoursUntil(bacThreshold: 0.08)
-                    )
-
-                    if group.isActive {
-                        GroupRoster(group: group, selfId: profile.id, hours: hours)
-                    }
-
-                    VibeCard(status: status, message: vibe)
-
-                    VStack(spacing: 12) {
-                        OrderCard(
-                            order: combinedOrder,
-                            memberCount: max(group.members.count, 1),
-                            groupActive: group.isActive,
-                            onOpen: {
-                                shareMode = false
-                                menuOpen = true
-                            },
-                            onOpenShared: group.isActive ? {
-                                shareMode = true
-                                menuOpen = true
-                            } : nil,
-                            onRemoveOne: { option, shared in
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
-                                    if group.isActive {
-                                        let t: Task<Void, Never> = Task { await group.removeMyLast(of: option, shared: shared, live: false) }
-                                        _ = t
-                                    } else if let idx = localOrder.lastIndex(where: { $0.option == option }) {
-                                        localOrder.remove(at: idx)
-                                    }
-                                }
-                            },
-                            onAddOne: { option, shared in
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
-                                    recents.record(option)
-                                    if group.isActive {
-                                        let t: Task<Void, Never> = Task { await group.addDrink(option, shared: shared, live: false) }
-                                        _ = t
-                                    } else {
-                                        localOrder.append(OrderItem(option: option))
-                                    }
-                                }
-                            }
-                        )
-
-                        InputRow(
-                            kicker: "02",
-                            title: "Duration",
-                            valueText: formatHours(hours),
-                            unit: "hours",
-                            accent: status.color
-                        ) {
-                            TintedSlider(value: $hours, range: 0...12, step: 0.25, accent: status.color)
-                                .onChange(of: hours) { _, newValue in
-                                    guard group.isActive else { return }
-                                    let t: Task<Void, Never> = Task {
-                                        await group.updateMyDuration(newValue)
-                                    }
-                                    _ = t
-                                }
-                        }
-
-                        YouRow(profile: profile) { profileOpen = true }
-                    }
-
-                    Disclaimer()
-                        .padding(.top, 4)
+                TabView(selection: $mode) {
+                    planPage.tag(SeshMode.plan)
+                    livePage.tag(SeshMode.live)
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, 22)
-                .padding(.bottom, 72)
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                // Smooth horizontal swipe between modes; matches the
+                // ModeSwitcher's spring so tapping the pill and dragging
+                // the page feel like the same animation.
+                .animation(.spring(response: 0.4, dampingFraction: 0.82), value: mode)
+            }
+
+            // Floating invite banner — pinned just below the ModeTopBar.
+            // Drops in from the top whenever a new pending invite arrives
+            // and snaps out the moment the inbox empties (accept,
+            // decline, or sender flipped status server-side).
+            if !invites.pending.isEmpty {
+                VStack {
+                    InviteBanner(
+                        count: invites.pending.count,
+                        latest: invites.pending.first,
+                        senderProfiles: invites.senderProfiles,
+                        onTap: { invitesSheetOpen = true }
+                    )
+                    .padding(.horizontal, 22)
+                    .padding(.top, 56)   // clears ModeTopBar
+                    Spacer()
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(20)
             }
         }
+        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: invites.pending.count)
+        .sheet(isPresented: $invitesSheetOpen) {
+            InvitesSheet(
+                invites: invites,
+                onAccept: { invite in
+                    // Accept = join in the SAME mode the sender was in
+                    // when they fired this invite. A live host's invite
+                    // has to drop the recipient into live, otherwise
+                    // they'd land in plan mode of the same session and
+                    // miss every drink the host is logging live-side.
+                    Task {
+                        await invites.updateStatus(invite.id, to: "accepted")
+                        if invite.mode == "live" {
+                            await liveGroup.join(code: invite.joinCode)
+                            // Make sure the user actually lands on the
+                            // LIVE page so they SEE the group they just
+                            // joined — without this they'd accept and
+                            // then wonder where it went.
+                            mode = .live
+                        } else {
+                            await planGroup.join(code: invite.joinCode)
+                            mode = .plan
+                        }
+                        invitesSheetOpen = false
+                    }
+                },
+                onDecline: { invite in
+                    Task { await invites.updateStatus(invite.id, to: "declined") }
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
         .preferredColorScheme(.dark)
+        .onChange(of: mode) { _, new in
+            // Auto-start the solo live timeline the first time the user
+            // swipes into LIVE — saves them from a "Start" → "Add" two-step.
+            // In a live group, the group itself is the live backing so we
+            // don't touch LiveSeshState.
+            if new == .live, !liveGroup.isActive, !live.isActive {
+                live.start()
+            }
+        }
         .animation(.spring(response: 0.55, dampingFraction: 0.82), value: status)
-        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: group.isActive)
-        .task { await group.resumeIfAny() }
+        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: planGroup.isActive)
+        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: liveGroup.isActive)
+        // Wire each store's cousin reference so leave() doesn't yank the
+        // shared session_members row when both stores happen to track the
+        // same session. Has to happen before resumeIfAny so leaves issued
+        // during resume (e.g. stale persisted session) check correctly.
+        .task {
+            planGroup.cousin = liveGroup
+            liveGroup.cousin = planGroup
+            // Resume both in parallel — independent network calls, no
+            // ordering requirement between them.
+            await withTaskGroup(of: Void.self) { tg in
+                tg.addTask { await planGroup.resumeIfAny() }
+                tg.addTask { await liveGroup.resumeIfAny() }
+            }
+        }
         // Pull venue + specials catalog on first launch so the chip /
         // picker have something to render. Falls back to hardcoded
         // Handelspuben if the migration hasn't been applied yet.
         .task { await venues.refresh() }
-        // When the members list refreshes (entry or 3s poll), pull my synced
-        // duration from the DB into the local slider so the slider position
-        // matches what other phones see. Without this the slider could
-        // drift between devices.
-        .onChange(of: group.members) { _, _ in
-            guard group.isActive, let synced = group.myDuration() else { return }
+        // When the plan members list refreshes (entry or 3s poll), pull
+        // my synced duration from the DB into the local slider so the
+        // slider position matches what other phones see.
+        .onChange(of: planGroup.members) { _, _ in
+            guard planGroup.isActive, let synced = planGroup.myDuration() else { return }
             // Avoid jitter when the local value already matches.
             if abs(synced - hours) > 0.01 {
                 hours = synced
             }
+            recordSavedGroup(from: planGroup)
+        }
+        // Same recording hook for live so a group joined only in live
+        // mode still ends up in the saved-groups list. The two `.onChange`
+        // calls dedupe naturally — `record` keys on session id, so a
+        // mirrored group only ever produces one entry.
+        .onChange(of: liveGroup.members) { _, _ in
+            recordSavedGroup(from: liveGroup)
+        }
+        // First-frame seed: if either store resumed into an existing
+        // session before the .onChange observers were wired, record it
+        // now so the saved-groups list reflects "where I am right now"
+        // even if the user never refreshes the roster.
+        .onAppear {
+            recordSavedGroup(from: planGroup)
+            recordSavedGroup(from: liveGroup)
+        }
+        // Profile edits (weight/age/sex) need to flow into the live
+        // Widmark formula immediately. Otherwise the per-drink BAC
+        // stays anchored to the cached profile until the next 3-second
+        // poll fetches the new row from the DB. Patch both stores'
+        // memberProfiles so PLAN and LIVE reflect the change in lockstep.
+        .onChange(of: profile) { _, new in
+            planGroup.applyMyProfile(new)
+            liveGroup.applyMyProfile(new)
         }
         .sheet(isPresented: $menuOpen) {
             MenuSheet(
                 order: orderBinding(),
                 shareMode: $shareMode,
-                showShareToggle: group.isActive,
+                showShareToggle: planGroup.isActive,
                 venueSpecials: venues.currentSpecialsAsOptions(),
                 venueName: venues.currentVenue?.name,
                 onAdd: { addLocal($0) },
@@ -2363,8 +4213,17 @@ private struct SessionView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
-        .sheet(isPresented: $groupOpen) {
-            GroupSheet(group: group)
+        .sheet(item: $groupSheetScope) { scope in
+            // One sheet, two scopes. The store + cousin pair flips
+            // depending on which page asked to open it. Mirror button
+            // inside reads from `cousin` to offer "Continue with [other]
+            // group · CODE".
+            GroupSheet(
+                group: scope == .plan ? planGroup : liveGroup,
+                cousin: scope == .plan ? liveGroup : planGroup,
+                savedGroups: savedGroups,
+                invites: invites
+            )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
@@ -2375,16 +4234,145 @@ private struct SessionView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
-        .fullScreenCover(isPresented: $liveOpen) {
-            LiveSeshView(
-                live: live,
-                group: group,
-                recents: recents,
-                location: location,
-                venues: venues,
-                profile: profile
-            )
+    }
+
+    // MARK: - Pages
+    //
+    // Two pages, one TabView. Both rely on shared SessionView state
+    // (group, live, venues, recents) so swiping between them is just a
+    // visual change — no data has to migrate.
+
+    private var planPage: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 24) {
+                GroupBar(
+                    scope: .plan,
+                    session: planGroup.session,
+                    memberCount: planGroup.members.count,
+                    onTap: { groupSheetScope = .plan }
+                )
+
+                VenueChip(
+                    location: location,
+                    venues: venues,
+                    onTap: { venueOpen = true }
+                )
+
+                BACReadout(
+                    bac: bac,
+                    status: status,
+                    hoursUntilSober: hoursUntil(bacThreshold: 0.0),
+                    hoursUntilEULimit: hoursUntil(bacThreshold: 0.02),
+                    hoursUntilUSLimit: hoursUntil(bacThreshold: 0.08)
+                )
+
+                if planGroup.isActive {
+                    GroupRoster(group: planGroup, selfId: profile.id, hours: hours)
+                }
+
+                VibeCard(status: status, message: vibe)
+
+                VStack(spacing: 12) {
+                    OrderCard(
+                        order: combinedOrder,
+                        memberCount: max(planGroup.members.count, 1),
+                        groupActive: planGroup.isActive,
+                        onOpen: {
+                            shareMode = false
+                            menuOpen = true
+                        },
+                        onOpenShared: planGroup.isActive ? {
+                            shareMode = true
+                            menuOpen = true
+                        } : nil,
+                        onRemoveOne: { option, shared in
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                if planGroup.isActive {
+                                    let t: Task<Void, Never> = Task { await planGroup.removeMyLast(of: option, shared: shared) }
+                                    _ = t
+                                } else if let idx = localOrder.lastIndex(where: { $0.option == option }) {
+                                    localOrder.remove(at: idx)
+                                }
+                            }
+                        },
+                        onAddOne: { option, shared in
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                recents.record(option)
+                                if planGroup.isActive {
+                                    let t: Task<Void, Never> = Task { await planGroup.addDrink(option, shared: shared) }
+                                    _ = t
+                                } else {
+                                    localOrder.append(OrderItem(option: option))
+                                }
+                            }
+                        }
+                    )
+
+                    InputRow(
+                        kicker: "02",
+                        title: "Duration",
+                        valueText: formatHours(hours),
+                        unit: "hours",
+                        accent: status.color
+                    ) {
+                        TintedSlider(value: $hours, range: 0...12, step: 0.25, accent: status.color)
+                            .onChange(of: hours) { _, newValue in
+                                guard planGroup.isActive else { return }
+                                let t: Task<Void, Never> = Task {
+                                    await planGroup.updateMyDuration(newValue)
+                                }
+                                _ = t
+                            }
+                    }
+
+                    // YouRow (sex/weight/age stats row) intentionally
+                    // removed — those values are personal data and the
+                    // profile sheet (top-bar avatar tap) already exposes
+                    // them in an editable form. Keeping a duplicate at
+                    // the bottom of the plan page just put a private
+                    // readout in the line of sight of anyone glancing
+                    // at the host's phone.
+                }
+
+                Disclaimer()
+                    .padding(.top, 4)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 6)
+            .padding(.bottom, 72)
         }
+        .animation(.spring(response: 0.55, dampingFraction: 0.82), value: status)
+        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: planGroup.isActive)
+    }
+
+    /// LIVE page — the existing LiveSeshView, embedded inline. The
+    /// `embedded` flag tells it to skip its own header (the ModeTopBar
+    /// above the TabView is shared) and to route the END action to the
+    /// solo-live "clear timeline" flow rather than dismissing a modal.
+    private var livePage: some View {
+        LiveSeshView(
+            live: live,
+            group: liveGroup,
+            recents: recents,
+            location: location,
+            venues: venues,
+            ghosts: ghosts,
+            profile: profile,
+            embedded: true,
+            onOpenGroupSheet: { groupSheetScope = .live },
+            onExitLiveTimeline: {
+                // Solo END handler: clear the timeline and slide back to
+                // PLAN. In a group there's nothing to end here — the
+                // group's lifecycle is owned by GroupSheet. Ghost members
+                // also reset — they're scoped to the night, not the
+                // app install (a stale ghost roster would silently
+                // inflate tomorrow's roster + leaderboard).
+                ghosts.clearAll()
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                    mode = .plan
+                }
+            }
+        )
     }
 }
 
@@ -4295,6 +6283,10 @@ struct CameraPicker: UIViewControllerRepresentable {
 // MARK: - Group Bar
 
 private struct GroupBar: View {
+    /// Which mode this bar represents — drives the kicker label so the
+    /// user always knows whether the active group they see is their PLAN
+    /// or LIVE one (they can be different).
+    let scope: SeshMode
     let session: SeshSession?
     let memberCount: Int
     let onTap: () -> Void
@@ -4313,7 +6305,7 @@ private struct GroupBar: View {
 
                 if let s = session {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("GROUP SESH")
+                        Text("\(scope.label) GROUP")
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
                             .tracking(2.2)
                             .foregroundStyle(Color.whiskey)
@@ -4331,11 +6323,11 @@ private struct GroupBar: View {
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("DRINK TOGETHER")
+                        Text("\(scope.label) GROUP")
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
                             .tracking(2.2)
                             .foregroundStyle(Color.bronze)
-                        Text("Start a group sesh")
+                        Text("Drink together in \(scope.label.lowercased())")
                             .font(.system(size: 14, weight: .semibold, design: .rounded))
                             .foregroundStyle(Color.cream)
                     }
@@ -4482,14 +6474,31 @@ private struct VenueChip: View {
 private struct VenueSheet: View {
     @ObservedObject var location: LocationService
     @ObservedObject var venues: VenueService
+    @StateObject private var search = MapKitVenueSearch()
+    @State private var query: String = ""
+    @State private var checkInInFlight: String? = nil
     @Environment(\.dismiss) private var dismiss
 
-    private var sortedVenues: [Venue] {
+    /// Featured/curated venues only. MapKit-tier rows that the user has
+    /// previously checked into are omitted here — they surface via search,
+    /// not via this curated list.
+    private var featuredVenues: [Venue] {
         venues.sortedByDistance(from: location.location)
+            .filter { $0.source == .curated }
+    }
+
+    private var trimmedQuery: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func distanceLabel(for venue: Venue) -> String? {
         guard let m = venues.distance(from: location.location, to: venue) else { return nil }
+        if m < 1000 { return "\(Int(m.rounded())) m away" }
+        return String(format: "%.1f km away", m / 1000)
+    }
+
+    private func distanceLabel(metres: CLLocationDistance?) -> String? {
+        guard let m = metres else { return nil }
         if m < 1000 { return "\(Int(m.rounded())) m away" }
         return String(format: "%.1f km away", m / 1000)
     }
@@ -4536,24 +6545,12 @@ private struct VenueSheet: View {
                         .buttonStyle(PressScaleStyle())
                     }
 
-                    VStack(spacing: 10) {
-                        ForEach(sortedVenues) { venue in
-                            VenueRow(
-                                venue: venue,
-                                distance: distanceLabel(for: venue),
-                                specialsCount: venues.specials(for: venue).count,
-                                isCurrent: venues.currentVenue?.id == venue.id
-                            ) {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                    venues.currentVenue = venue
-                                }
-                                dismiss()
-                            }
-                        }
-                    }
+                    searchField
 
-                    if sortedVenues.isEmpty {
-                        emptyState
+                    if !trimmedQuery.isEmpty {
+                        searchSection
+                    } else {
+                        featuredSection
                     }
 
                     Spacer(minLength: 24)
@@ -4567,6 +6564,140 @@ private struct VenueSheet: View {
         .task {
             await venues.refresh()
             location.requestAccess()
+        }
+        // Debounced re-search: 300ms after the user stops typing. .task(id:)
+        // cancels the previous Task whenever `query` changes, so the sleep
+        // gets thrown away and only the latest keystroke runs MKLocalSearch.
+        .task(id: query) {
+            let snapshot = trimmedQuery
+            guard !snapshot.isEmpty else {
+                search.clear()
+                return
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if Task.isCancelled { return }
+            search.search(query: snapshot, origin: location.location)
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.bronze)
+            TextField("", text: $query, prompt:
+                Text("Search any bar nearby…")
+                    .foregroundStyle(Color.cream.opacity(0.45))
+            )
+            .textFieldStyle(.plain)
+            .autocorrectionDisabled(true)
+            .textInputAutocapitalization(.words)
+            .submitLabel(.search)
+            .font(.system(size: 14, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color.cream)
+            if !trimmedQuery.isEmpty {
+                Button {
+                    query = ""
+                    search.clear()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.cream.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.cream.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var featuredSection: some View {
+        if !featuredVenues.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeader("FEATURED", caption: "Curated bars with specials")
+                ForEach(featuredVenues) { venue in
+                    VenueRow(
+                        venue: venue,
+                        distance: distanceLabel(for: venue),
+                        specialsCount: venues.specials(for: venue).count,
+                        isCurrent: venues.currentVenue?.id == venue.id
+                    ) {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            venues.currentVenue = venue
+                        }
+                        dismiss()
+                    }
+                }
+            }
+        } else {
+            emptyState
+        }
+    }
+
+    @ViewBuilder
+    private var searchSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(
+                "ANY BAR",
+                caption: search.isSearching ? "Searching…" : "From Apple Maps · no specials"
+            )
+            if search.isSearching && search.results.isEmpty {
+                HStack(spacing: 10) {
+                    ProgressView().tint(Color.whiskey)
+                    Text("Looking for places near you…")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.55))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 18)
+            } else if search.results.isEmpty {
+                Text("No bars matched “\(trimmedQuery)”.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.55))
+                    .padding(.vertical, 14)
+            } else {
+                ForEach(search.results) { result in
+                    MapKitResultRow(
+                        result: result,
+                        distance: distanceLabel(metres: result.distance),
+                        isPending: checkInInFlight == result.id,
+                        isCurrent: venues.currentVenue?.externalId == result.id
+                    ) {
+                        Task { await performCheckIn(result) }
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func performCheckIn(_ result: MapKitVenueResult) async {
+        checkInInFlight = result.id
+        await venues.checkIn(mapKitResult: result)
+        checkInInFlight = nil
+        dismiss()
+    }
+
+    private func sectionHeader(_ title: String, caption: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .tracking(2.2)
+                .foregroundStyle(Color.whiskey)
+            Text(caption)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .tracking(0.6)
+                .foregroundStyle(Color.cream.opacity(0.45))
+            Spacer(minLength: 0)
         }
     }
 
@@ -4729,6 +6860,93 @@ private struct VenueRow: View {
     }
 }
 
+/// Row for a MapKit search hit. Visually muted compared to VenueRow so
+/// the user reads "this is not a curated bar, just any place that exists
+/// on the map." No FEATURED badge, no specials affordance, no star —
+/// just name, address, and distance. Tapping triggers a check-in flow
+/// that may need a network round-trip, hence the spinner state.
+private struct MapKitResultRow: View {
+    let result: MapKitVenueResult
+    let distance: String?
+    let isPending: Bool
+    let isCurrent: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(isCurrent ? Color.whiskey.opacity(0.32) : Color.cream.opacity(0.05))
+                        .frame(width: 44, height: 44)
+                    if isPending {
+                        ProgressView().tint(Color.cream.opacity(0.8))
+                    } else {
+                        Image(systemName: "mappin")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(isCurrent ? Color.whiskey : Color.cream.opacity(0.6))
+                    }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(result.name)
+                        .font(.system(size: 15, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .lineLimit(1)
+                    HStack(spacing: 8) {
+                        if let addr = result.address, !addr.isEmpty {
+                            Text(addr)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .tracking(0.4)
+                                .foregroundStyle(Color.cream.opacity(0.5))
+                                .lineLimit(1)
+                        } else if let city = result.city {
+                            Text(city)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .tracking(0.4)
+                                .foregroundStyle(Color.cream.opacity(0.5))
+                                .lineLimit(1)
+                        }
+                        if let d = distance {
+                            Text("·")
+                                .foregroundStyle(Color.cream.opacity(0.25))
+                            Text(d)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .tracking(0.4)
+                                .foregroundStyle(Color.cream.opacity(0.5))
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+                if isCurrent {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(Color.whiskey)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.bronze.opacity(0.55))
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isCurrent ? Color.whiskey.opacity(0.10) : Color.cream.opacity(0.025))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(
+                        isCurrent ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.06),
+                        lineWidth: 1
+                    )
+            )
+            .opacity(isPending ? 0.7 : 1)
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(isPending)
+    }
+}
+
 // MARK: - Group Roster
 
 private struct GroupRoster: View {
@@ -4853,37 +7071,52 @@ private struct MemberRow: View {
                     }
                 }
 
-                GeometryReader { geo in
-                    let fraction = min(max(bac / 0.20, 0), 1)
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.cream.opacity(0.08))
-                        Capsule()
-                            .fill(status.color)
-                            .frame(width: geo.size.width * CGFloat(fraction))
-                            .shadow(color: status.color.opacity(0.5), radius: 4)
+                // BAC bar is privacy-sensitive in plan mode — only the
+                // user sees their own. For other members we render a
+                // subtle "they're in the sesh" line instead, so the row
+                // still feels populated without leaking their numbers.
+                if isSelf {
+                    GeometryReader { geo in
+                        let fraction = min(max(bac / 0.20, 0), 1)
+                        ZStack(alignment: .leading) {
+                            Capsule()
+                                .fill(Color.cream.opacity(0.08))
+                            Capsule()
+                                .fill(status.color)
+                                .frame(width: geo.size.width * CGFloat(fraction))
+                                .shadow(color: status.color.opacity(0.5), radius: 4)
+                        }
                     }
+                    .frame(height: 5)
+                } else {
+                    Text("In the sesh")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.45))
                 }
-                .frame(height: 5)
             }
 
             Spacer(minLength: 8)
 
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(String(format: "%.3f", bac))
-                    .font(.system(size: 16, weight: .black, design: .rounded))
-                    .foregroundStyle(Color.cream)
-                    .contentTransition(.numericText(value: bac))
-                HStack(spacing: 4) {
-                    Text("\(personalCount) \(personalCount == 1 ? "drink" : "drinks")")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .tracking(1.4)
-                        .foregroundStyle(status.color)
-                    if sharedCount > 0 {
-                        Text("· +\(sharedCount)÷\(max(memberCount, 1))")
+            // Trailing column: numeric BAC + drink count. Self only —
+            // a teammate's BAC and drink count are personal data and
+            // shouldn't leak into the host's roster view.
+            if isSelf {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(String(format: "%.3f", bac))
+                        .font(.system(size: 16, weight: .black, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .contentTransition(.numericText(value: bac))
+                    HStack(spacing: 4) {
+                        Text("\(personalCount) \(personalCount == 1 ? "drink" : "drinks")")
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .tracking(1.0)
-                            .foregroundStyle(Color.whiskey.opacity(0.85))
+                            .tracking(1.4)
+                            .foregroundStyle(status.color)
+                        if sharedCount > 0 {
+                            Text("· +\(sharedCount)÷\(max(memberCount, 1))")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .tracking(1.0)
+                                .foregroundStyle(Color.whiskey.opacity(0.85))
+                        }
                     }
                 }
             }
@@ -4895,12 +7128,228 @@ private struct MemberRow: View {
 
 private struct GroupSheet: View {
     @ObservedObject var group: SessionService
+    /// The OTHER mode's store. Used to surface a "Continue with [other]
+    /// group · CODE" affordance when this scope is idle but the cousin
+    /// has an active group — one tap mirrors that group into this scope
+    /// without making the user re-type the code.
+    @ObservedObject var cousin: SessionService
+    /// On-device cache of previously-joined groups. Drives the "RECENT
+    /// GROUPS" list shown in the idle view so rejoining is one tap.
+    /// Filtered down to "not the cousin's current group" before display
+    /// so we don't dangle a saved entry next to a live mirror affordance
+    /// for the same code.
+    @ObservedObject var savedGroups: SavedGroupsStore
+    /// In-app invite sender. Used by `previousCrewCard` so the host can
+    /// fire invites at every saved-crew member with one tap, instead of
+    /// kicking out to iMessage.
+    @ObservedObject var invites: InvitesService
     @Environment(\.dismiss) private var dismiss
 
     @State private var joinCode: String = ""
     @State private var showCopied = false
     @State private var confirmLeave = false
     @State private var confirmEnd = false
+    /// "Sent to N friends" / "Already invited" toast shown after the
+    /// in-app invite button fires. Cleared on a short timer so the card
+    /// returns to its idle state for re-sends.
+    @State private var inviteSendToast: String?
+    /// Set when the user taps a saved-group row, which kicks off a
+    /// brand-new session and queues up an invite for the previous crew.
+    /// Drives the "bring back the crew" share card at the top of the
+    /// active view. Cleared when the user dismisses the card or leaves
+    /// the group.
+    @State private var pendingInvite: PendingCrewInvite?
+
+    /// What we know about a pending invite: just the saved roster. The
+    /// new session's join code comes from `group.session?.joinCode` at
+    /// render time, so the share message stays in sync if the host
+    /// regenerates the code (not currently a flow, but cheap insurance).
+    private struct PendingCrewInvite: Equatable {
+        let crew: [SavedMember]
+        /// The saved entry's id (which == its previous session id).
+        /// Only used so the active view can wipe the card if the user
+        /// somehow ends up in a different session than the one we
+        /// just created (shouldn't happen, but defensive).
+        let sourceSavedId: UUID
+    }
+
+    /// Returns the cousin's join code only when (a) the cousin is in a
+    /// group, and (b) we're not already in the same one. Both conditions
+    /// matter — without (b) the mirror button would show even after the
+    /// user mirrored, which would be confusing.
+    private var mirrorableCode: String? {
+        guard let cousinSession = cousin.session else { return nil }
+        if group.session?.id == cousinSession.id { return nil }
+        return cousinSession.joinCode
+    }
+
+    /// True when this scope and the cousin scope are tracking the same
+    /// underlying session (mirrored). Used by the host-end flow to swap
+    /// the dialog copy for one that promises only a per-mode leave —
+    /// otherwise "End for everyone" would be a lie, since the carve-out
+    /// in `SessionService.end(cousinSessionId:)` keeps the session alive
+    /// for the cousin scope and the rest of the group in this case.
+    private var cousinSharesSession: Bool {
+        guard let mine = group.session?.id, let theirs = cousin.session?.id else {
+            return false
+        }
+        return mine == theirs
+    }
+
+    /// Saved groups, filtered for what's worth showing in this sheet's
+    /// idle view. We trim the cousin's current group out of the list so
+    /// the mirror affordance (which already covers that exact join with
+    /// richer copy) doesn't get a visual duplicate. We also trim
+    /// whatever this scope is currently in, just defensively — the idle
+    /// view never renders while `group.isActive`, but the guard makes
+    /// the intent explicit.
+    private var visibleSavedGroups: [SavedGroup] {
+        let mineID = group.session?.id
+        let cousinID = cousin.session?.id
+        return savedGroups.groups.filter { entry in
+            entry.id != mineID && entry.id != cousinID
+        }
+    }
+
+    /// The pill-shaped save/saved toggle shown in the active view. Lets
+    /// the user pin the current group to the SAVED GROUPS list (or pop
+    /// it back off). Not strictly required to rejoin later — they could
+    /// always type the code — but it's the only way to surface a group
+    /// in this sheet's idle list.
+    /// Build the SavedMember roster from the current SessionService —
+    /// used by both `saveToggleButton` and the silent refresh path. We
+    /// drop the current user (the share message is from their POV) and
+    /// drop members whose profile rows haven't been cached yet (they
+    /// fill in on a later poll once the profile lands).
+    private func crewSnapshot() -> [SavedMember] {
+        let myId = group.myId
+        return group.members.compactMap { m in
+            guard m.profileId != myId,
+                  let prof = group.memberProfiles[m.profileId] else { return nil }
+            return SavedMember(id: prof.id, name: prof.name, avatarURL: prof.avatarURL)
+        }
+    }
+
+    @ViewBuilder
+    private func saveToggleButton(session: SeshSession) -> some View {
+        let isSaved = savedGroups.isSaved(id: session.id)
+        Button {
+            if isSaved {
+                savedGroups.remove(id: session.id)
+            } else {
+                let hostName = group.memberProfiles[session.hostId]?.name
+                savedGroups.save(
+                    session: session,
+                    memberCount: group.members.count,
+                    hostName: hostName,
+                    members: crewSnapshot()
+                )
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: isSaved ? "star.fill" : "star")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(isSaved ? Color.whiskey : Color.cream.opacity(0.85))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isSaved ? "SAVED CREW" : "SAVE THIS CREW")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(1.8)
+                        .foregroundStyle(Color.cream)
+                    Text(isSaved
+                         ? "Tap to remove from your list"
+                         : "Pin the crew so you can re-invite them later")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.65))
+                }
+                Spacer()
+                if isSaved {
+                    // A tiny "Saved" pill on the trailing edge so the
+                    // active state reads at a glance without leaning on
+                    // the icon alone.
+                    Text("ON")
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .tracking(1.4)
+                        .foregroundStyle(Color.whiskey)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.55), lineWidth: 1))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(isSaved
+                          ? Color.whiskey.opacity(0.14)
+                          : Color.cream.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(
+                        isSaved ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.12),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(PressScaleStyle())
+        .accessibilityLabel(isSaved ? "Remove from saved groups" : "Save this group")
+    }
+
+    @ViewBuilder
+    private var savedGroupsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("SAVED CREWS")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.bronze)
+                Spacer()
+                Text("Tap to start a new sesh")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.45))
+            }
+
+            VStack(spacing: 8) {
+                ForEach(visibleSavedGroups) { entry in
+                    SavedGroupRow(
+                        entry: entry,
+                        busy: group.busy,
+                        onTap: {
+                            // Saved groups don't rejoin the *old*
+                            // session anymore — that one almost always
+                            // ended already, and the user's intent
+                            // ("get the crew back together") is better
+                            // served by spinning up a fresh session
+                            // and surfacing a one-tap share affordance
+                            // that names the previous crew. The host
+                            // sends the share via iMessage; previous
+                            // members tap the code to drop in.
+                            Task {
+                                await group.create()
+                                if group.isActive {
+                                    pendingInvite = PendingCrewInvite(
+                                        crew: entry.savedMembers,
+                                        sourceSavedId: entry.id
+                                    )
+                                    // We deliberately do NOT dismiss
+                                    // the sheet here — the active
+                                    // view's "bring back the crew"
+                                    // card is the whole point of the
+                                    // tap. The user can dismiss the
+                                    // sheet themselves once they've
+                                    // shared the code (or skipped).
+                                }
+                                // If create() fails the SessionService
+                                // surfaces the error in `group.error`,
+                                // which the sheet already renders below.
+                            }
+                        },
+                        onRemove: { savedGroups.remove(id: entry.id) }
+                    )
+                }
+            }
+        }
+    }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -4926,11 +7375,28 @@ private struct GroupSheet: View {
             .padding(.bottom, 40)
         }
         .preferredColorScheme(.dark)
+        // Clear the pending-invite card when the user leaves the
+        // group, so a future create()-or-join doesn't inherit a stale
+        // "bring back the crew" prompt. We deliberately don't clear
+        // on every session-id change — the saved-group tap path goes
+        // nil → newId and we want the card to survive that exact
+        // transition (the assignment that *sets* pendingInvite happens
+        // immediately after `create()` resolves, but the onChange
+        // observer would race that assignment if we cleared on every
+        // flip).
+        .onChange(of: group.session?.id) { _, newValue in
+            if newValue == nil { pendingInvite = nil }
+        }
     }
 
     private var header: some View {
         HStack {
-            Text(group.isActive ? "YOUR GROUP" : "GROUP SESH")
+            // Always name the scope so the user can tell at a glance
+            // which mode's group they're managing. Important now that
+            // PLAN and LIVE can hold different groups.
+            Text(group.isActive
+                 ? "YOUR \(group.scope.label) GROUP"
+                 : "\(group.scope.label) GROUP")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .tracking(3.0)
                 .foregroundStyle(Color.bronze)
@@ -4946,10 +7412,58 @@ private struct GroupSheet: View {
                 .font(.system(size: 28, weight: .black, design: .rounded))
                 .foregroundStyle(Color.cream)
                 .tracking(-0.6)
-            Text("Start a sesh, share the code, and see everyone's BAC in real time. Each person's BAC uses their own weight and profile.")
+            Text("\(group.scope == .plan ? "Plan" : "Live") groups are independent — start a sesh here, share the code, and see everyone's BAC in real time. The other mode keeps its own group.")
                 .font(.system(size: 14, weight: .regular, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(0.7))
                 .lineSpacing(3)
+        }
+
+        // Mirror affordance: if the OTHER mode already has a group, the
+        // shortest path to "be in the same one here" is one tap. We
+        // pre-fill the code instead of auto-joining so the user has a
+        // moment to reconsider — joining is irreversible from inside
+        // this sheet (you'd have to leave again).
+        if let code = mirrorableCode {
+            Button {
+                Task {
+                    await group.join(code: code)
+                    if group.isActive { dismiss() }
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 14, weight: .bold))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("CONTINUE WITH \(group.scope.other.label) GROUP")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .tracking(1.6)
+                        Text("Code \(code) · join in \(group.scope.label.lowercased()) too")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.7))
+                    }
+                    Spacer()
+                    if group.busy {
+                        ProgressView().tint(Color.cream)
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.bronze)
+                    }
+                }
+                .foregroundStyle(Color.cream)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.whiskey.opacity(0.12))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.whiskey.opacity(0.45), lineWidth: 1)
+                )
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(group.busy)
         }
 
         Button {
@@ -4983,6 +7497,18 @@ private struct GroupSheet: View {
         }
         .buttonStyle(PressScaleStyle())
         .disabled(group.busy)
+
+        // Saved groups — one-tap rejoin for anything the user has
+        // explicitly starred via the active-view save toggle. We hide
+        // the cousin's current group from the list so it doesn't
+        // overlap with the mirror affordance above (which already
+        // offers that exact join with richer copy). When the user
+        // hasn't saved anything yet we just skip the section entirely
+        // rather than render an empty-state — the join-code field
+        // below is the natural fallback.
+        if !visibleSavedGroups.isEmpty {
+            savedGroupsSection
+        }
 
         VStack(alignment: .leading, spacing: 10) {
             Text("OR JOIN WITH A CODE")
@@ -5041,9 +7567,187 @@ private struct GroupSheet: View {
         }
     }
 
+    /// Build the "round 2" share message: warm, name-checks the
+    /// previous crew, includes the new join code. Falls back to a plain
+    /// invite if the saved roster was empty (older saves without a
+    /// snapshot, or solo-saved groups).
+    private func crewInviteMessage(crew: [SavedMember], code: String) -> String {
+        let names = crew.map { $0.name }.filter { !$0.isEmpty }
+        guard !names.isEmpty else {
+            return "Round 2! Drop in with code \(code)."
+        }
+        let listed: String
+        switch names.count {
+        case 1: listed = names[0]
+        case 2: listed = "\(names[0]) & \(names[1])"
+        default:
+            let head = names.dropLast().joined(separator: ", ")
+            listed = "\(head) & \(names.last!)"
+        }
+        return "Hey \(listed) — round 2! Drop in with code \(code)."
+    }
+
+    /// One-tap "bring back the crew" affordance shown at the top of the
+    /// active view immediately after the user taps a saved-group row.
+    /// The saved roster powers both the avatar list (so the crew is
+    /// recognizable at a glance) and the share message body. Dismissing
+    /// the card is non-destructive — it just hides the affordance for
+    /// this session; the user can still use the regular SHARE button
+    /// below to send the bare code.
+    @ViewBuilder
+    private func previousCrewCard(session: SeshSession, invite: PendingCrewInvite) -> some View {
+        let message = crewInviteMessage(crew: invite.crew, code: session.joinCode)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("BRING BACK THE CREW")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.whiskey)
+                Spacer()
+                Button {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                        pendingInvite = nil
+                    }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.cream.opacity(0.55))
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(Color.cream.opacity(0.06)))
+                }
+                .buttonStyle(PressScaleStyle())
+                .accessibilityLabel("Dismiss invite reminder")
+            }
+
+            Text("New session is up. Send your last crew the code and they'll be in.")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.78))
+                .lineSpacing(2)
+
+            // Crew strip — overlapping avatars on the leading edge,
+            // up to four names on the trailing side. Anything past
+            // four collapses into a "+N" pill so the row never wraps.
+            if !invite.crew.isEmpty {
+                HStack(spacing: 10) {
+                    HStack(spacing: -8) {
+                        ForEach(invite.crew.prefix(5)) { m in
+                            AvatarView(
+                                urlString: m.avatarURL,
+                                initial: String(m.name.prefix(1)).uppercased(),
+                                size: 28
+                            )
+                            .overlay(
+                                Circle().strokeBorder(Color.inkElev, lineWidth: 2)
+                            )
+                        }
+                    }
+                    let displayed = Array(invite.crew.prefix(3).map { $0.name })
+                    let remaining = invite.crew.count - displayed.count
+                    Text(displayed.joined(separator: ", ") + (remaining > 0 ? " +\(remaining)" : ""))
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.85))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+            }
+
+            // PRIMARY action: fire an in-app invite to every saved-crew
+            // member at once. Recipients see a banner appear in their app
+            // on the next poll and can tap Accept to drop straight into
+            // this session — no copy-paste, no iMessage round trip. The
+            // ShareLink below stays as a secondary fallback for friends
+            // who don't have the app open right now.
+            Button {
+                Task {
+                    let recipients = invite.crew.map(\.id)
+                    let sent = await invites.send(
+                        sessionId: session.id,
+                        joinCode: session.joinCode,
+                        mode: group.scope,
+                        recipientIds: recipients
+                    )
+                    inviteSendToast = sent > 0
+                        ? "Sent to \(sent) friend\(sent == 1 ? "" : "s")"
+                        : "Already invited"
+                    // Hold the toast briefly, then dismiss the card —
+                    // the card has done its job and the active view can
+                    // settle back into its normal layout.
+                    try? await Task.sleep(nanoseconds: 1_400_000_000)
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
+                        pendingInvite = nil
+                        inviteSendToast = nil
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: inviteSendToast == nil ? "paperplane.fill" : "checkmark")
+                        .font(.system(size: 12, weight: .bold))
+                    Text(inviteSendToast ?? "SEND INVITE")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(1.6)
+                    Spacer()
+                    if inviteSendToast == nil {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Color.ink.opacity(0.55))
+                    }
+                }
+                .foregroundStyle(Color.ink)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.whiskey)
+                )
+                .shadow(color: Color.whiskey.opacity(0.45), radius: 14, y: 6)
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(inviteSendToast != nil)
+
+            // SECONDARY: iMessage share, in case any of the saved crew
+            // doesn't have the app open right now. Compact treatment so
+            // it reads as a fallback rather than a sibling.
+            ShareLink(item: message) {
+                HStack(spacing: 6) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 11, weight: .bold))
+                    Text("Or share via Messages")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                }
+                .foregroundStyle(Color.cream.opacity(0.6))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.whiskey.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.whiskey.opacity(0.45), lineWidth: 1)
+        )
+        .transition(.asymmetric(
+            insertion: .scale(scale: 0.95).combined(with: .opacity),
+            removal: .opacity
+        ))
+    }
+
     @ViewBuilder
     private var activeView: some View {
         if let session = group.session {
+            // "Bring back the crew" share card — only shows when the
+            // user just spun this session up by tapping a saved-group
+            // row. Sits at the top of the active view so it's the
+            // first thing they see post-create, but is dismissible
+            // and non-blocking.
+            if let invite = pendingInvite {
+                previousCrewCard(session: session, invite: invite)
+            }
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("SHARE THIS CODE")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -5157,6 +7861,14 @@ private struct GroupSheet: View {
                 }
             }
 
+            // Save toggle — adds the current group to the saved list (or
+            // removes it if already there). The store keys on session id,
+            // so saving here is what causes this group to show up in the
+            // idle-view "SAVED GROUPS" list next time the user comes back.
+            // We pass the live member count + host name so the snapshot
+            // looks right immediately, without waiting for the next poll.
+            saveToggleButton(session: session)
+
             if group.isHost {
                 Button {
                     confirmEnd = true
@@ -5177,14 +7889,35 @@ private struct GroupSheet: View {
                         )
                 }
                 .buttonStyle(PressScaleStyle())
-                .confirmationDialog("End this sesh for everyone?", isPresented: $confirmEnd, titleVisibility: .visible) {
-                    Button("End for everyone", role: .destructive) {
+                // End now truly ends for everyone — the previous
+                // "mirrored = per-mode leave" carve-out shipped a silent
+                // no-op for the rest of the group when the host had the
+                // session in both modes, so it's gone. If the cousin
+                // shares the session, `end()` also clears the cousin's
+                // local state so both modes on the host's phone go idle
+                // together.
+                .confirmationDialog(
+                    "End \(group.scope.label.lowercased()) sesh for everyone?",
+                    isPresented: $confirmEnd,
+                    titleVisibility: .visible
+                ) {
+                    Button("End \(group.scope.label.lowercased()) for everyone", role: .destructive) {
                         Task {
-                            await group.end()
+                            await group.end(cousinSessionId: cousin.session?.id)
                             dismiss()
                         }
                     }
                     Button("Cancel", role: .cancel) {}
+                } message: {
+                    if cousinSharesSession {
+                        // Per-mode end (migration 007): plan and live
+                        // are independent even when they track the
+                        // same session. Reassure the host that ending
+                        // here doesn't yank their other mode.
+                        Text("Only \(group.scope.label.lowercased()) ends. Your \(group.scope.other.label.lowercased()) mode stays in the group.")
+                    } else {
+                        Text("Everyone in \(group.scope.label.lowercased()) mode will go idle. The session stays alive for any \(group.scope.other.label.lowercased())-mode members.")
+                    }
                 }
             } else {
                 Button {
@@ -5206,17 +7939,154 @@ private struct GroupSheet: View {
                         )
                 }
                 .buttonStyle(PressScaleStyle())
-                .confirmationDialog("Leave this sesh?", isPresented: $confirmLeave, titleVisibility: .visible) {
-                    Button("Leave", role: .destructive) {
+                .confirmationDialog(
+                    "Leave \(group.scope.label.lowercased()) sesh?",
+                    isPresented: $confirmLeave,
+                    titleVisibility: .visible
+                ) {
+                    Button("Leave \(group.scope.label.lowercased())", role: .destructive) {
                         Task {
-                            await group.leave()
+                            // The cousin id is no longer used by
+                            // `leave()` under the per-mode model — the
+                            // DB-level `in_<scope>` flag decouples the
+                            // two stores. Kept in the call for ABI
+                            // compatibility; the parameter is ignored.
+                            await group.leave(cousinSessionId: cousin.session?.id)
                             dismiss()
                         }
                     }
                     Button("Cancel", role: .cancel) {}
+                } message: {
+                    if cousinSharesSession {
+                        Text("Only \(group.scope.label.lowercased()) leaves. Your \(group.scope.other.label.lowercased()) mode stays in the group.")
+                    }
                 }
             }
         }
+    }
+}
+
+// MARK: - Saved-group row
+//
+// One row in the "RECENT GROUPS" list. The whole card is a tap target
+// (rejoin via the cached join code), with an inline trash button on the
+// trailing edge for "I don't actually want this in my list anymore".
+//
+// Layout note: the join code is the headline, set in the same heavy
+// monospaced face the active-view code badge uses. The secondary line
+// blends host name (when known) and member count, and we render a
+// soft "n d ago" timestamp on the trailing side so the user can tell at
+// a glance which entries are stale.
+
+private struct SavedGroupRow: View {
+    let entry: SavedGroup
+    /// True while the parent SessionService is busy joining/creating
+    /// something. Used to grey out and disable the row so we don't fire
+    /// a second join while the first one is in flight.
+    let busy: Bool
+    let onTap: () -> Void
+    let onRemove: () -> Void
+
+    /// Compact "joined N {unit} ago" formatter. Falls back to a short
+    /// date for anything older than a week so the strings don't grow
+    /// ridiculous ("joined 47d ago").
+    private var lastJoinedLabel: String {
+        let interval = Date().timeIntervalSince(entry.lastJoinedAt)
+        if interval < 60 { return "just now" }
+        if interval < 3600 { return "\(Int(interval / 60))m ago" }
+        if interval < 86_400 { return "\(Int(interval / 3600))h ago" }
+        if interval < 86_400 * 7 { return "\(Int(interval / 86_400))d ago" }
+        let f = DateFormatter()
+        f.dateFormat = "MMM d"
+        return f.string(from: entry.lastJoinedAt)
+    }
+
+    /// "Hosted by Mauritz · 4 people" / "4 people" when the host name
+    /// hasn't been cached yet. Single people gets a singular noun so
+    /// "1 people" doesn't slip into the UI.
+    private var detailLabel: String {
+        let memberPart = "\(entry.lastMemberCount) \(entry.lastMemberCount == 1 ? "person" : "people")"
+        if let host = entry.lastHostName, !host.isEmpty {
+            return "Hosted by \(host) · \(memberPart)"
+        }
+        return memberPart
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Tap target: the whole card minus the trash button. We
+            // wrap it in a Button so SwiftUI gives us hit-testing and
+            // press feedback for free.
+            Button(action: onTap) {
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.whiskey.opacity(0.16))
+                            .frame(width: 44, height: 44)
+                        Text(String(entry.joinCode.prefix(2)))
+                            .font(.system(size: 14, weight: .black, design: .monospaced))
+                            .tracking(1.5)
+                            .foregroundStyle(Color.whiskey)
+                    }
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 8) {
+                            Text(entry.joinCode)
+                                .font(.system(size: 15, weight: .black, design: .monospaced))
+                                .tracking(2.4)
+                                .foregroundStyle(Color.cream)
+                            Text("·")
+                                .foregroundStyle(Color.bronze.opacity(0.7))
+                            Text(lastJoinedLabel)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .tracking(0.6)
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        }
+                        Text(detailLabel)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.7))
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.bronze)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(busy)
+
+            // Trash affordance — destructive enough to want a discrete
+            // tap target, subtle enough not to dominate the row. We use
+            // a slightly larger hit area than the icon so it's easy to
+            // hit on a phone.
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.cream.opacity(0.55))
+                    .frame(width: 32, height: 32)
+                    .background(
+                        Circle().fill(Color.cream.opacity(0.05))
+                    )
+                    .overlay(
+                        Circle().strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(PressScaleStyle())
+            .accessibilityLabel("Remove \(entry.joinCode) from recent groups")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.inkElev.opacity(0.6))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+        )
+        .opacity(busy ? 0.55 : 1.0)
     }
 }
 
@@ -5505,6 +8375,13 @@ fileprivate struct TimelineEntry: Identifiable {
     let removable: Bool
 }
 
+/// Identifiable wrapper around a ghost id so we can drive
+/// `.sheet(item:)` with it. SwiftUI requires an `Identifiable` payload
+/// (not an `Optional<UUID>`) — wrapping keeps the call site readable.
+private struct GhostPickerTarget: Identifiable {
+    let id: UUID
+}
+
 /// Full-screen Live Sesh. A `TimelineView` re-evaluates the body every 30s
 /// so BAC, time-to-sober, and the drink-history "X minutes ago" labels all
 /// stay current without manual refresh. Quick-add tiles live at the bottom
@@ -5525,12 +8402,36 @@ private struct LiveSeshView: View {
     /// to the top of the picker.
     @ObservedObject var location: LocationService
     @ObservedObject var venues: VenueService
+    /// Manually-added live-mode participants. Owned by SessionView so
+    /// it survives mode swipes; injected here to render the roster
+    /// section and accept new drinks.
+    @ObservedObject var ghosts: GhostMembersStore
     let profile: Profile
+    /// True when this view is hosted inline as a TabView page (not a
+    /// modal). Suppresses the duplicate close header and the "Started…"
+    /// chrome that the parent ModeTopBar already covers.
+    var embedded: Bool = false
+    /// Tap-handler for the live GroupBar — opens the parent's group
+    /// sheet bound to scope = .live. Only used when embedded; the modal
+    /// presentation has no group sheet of its own.
+    var onOpenGroupSheet: (() -> Void)? = nil
+    /// Called by the END action when running embedded — the parent uses
+    /// this to slide back to PLAN after clearing the live timeline. nil
+    /// when the view is presented modally (the close button uses dismiss
+    /// instead).
+    var onExitLiveTimeline: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var menuOpen = false
     @State private var confirmEnd = false
     @State private var venueOpen = false
+    /// Whether the add-person form is up. One global `@State` is enough
+    /// because we only ever add one ghost at a time.
+    @State private var addPersonOpen = false
+    /// When non-nil, the catalog sheet is up scoped to this ghost (the
+    /// next pick goes onto their tab, not the user's). nil ⇒ the
+    /// regular `menuOpen` flow runs and picks land on the user.
+    @State private var pickingForGhostId: UUID? = nil
     /// When in a group, controls whether new drinks are added as shared
     /// rounds (split across all members) or as personal drinks. Ignored
     /// in solo mode. Persists between taps so a "round of shots" doesn't
@@ -5608,7 +8509,8 @@ private struct LiveSeshView: View {
         recents.record(option)
         if inGroup {
             let isShared = shareMode
-            let t: Task<Void, Never> = Task { await group.addDrink(option, shared: isShared, live: true) }
+            // Live store stamps live=true from its scope.
+            let t: Task<Void, Never> = Task { await group.addDrink(option, shared: isShared) }
             _ = t
         } else {
             live.add(option)
@@ -5628,7 +8530,8 @@ private struct LiveSeshView: View {
             if let drink = group.drinks.first(where: { $0.id == id }) {
                 let opt = venues.resolveOption(for: drink)
                 let t: Task<Void, Never> = Task {
-                    await group.removeMyLast(of: opt, shared: drink.shared, live: drink.live)
+                    // Live store knows its own scope — no need to pass live.
+                    await group.removeMyLast(of: opt, shared: drink.shared)
                 }
                 _ = t
             }
@@ -5669,6 +8572,36 @@ private struct LiveSeshView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
+        // Per-ghost drink picker. Reuses LiveMenuSheet — same catalog
+        // and venue-specials surface the user gets — but routes the
+        // pick into the ghost's drink log instead of the user's. The
+        // bound id doubles as the dismissal flag (nil ⇒ closed).
+        .sheet(item: Binding(
+            get: { pickingForGhostId.map(GhostPickerTarget.init) },
+            set: { pickingForGhostId = $0?.id }
+        )) { target in
+            LiveMenuSheet(
+                venueSpecials: venues.currentSpecialsAsOptions(),
+                venueName: venues.currentVenue?.name,
+                onPick: { option in
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                        ghosts.addDrink(option, to: target.id)
+                    }
+                    pickingForGhostId = nil
+                }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.ink)
+        }
+        .sheet(isPresented: $addPersonOpen) {
+            AddPersonSheet { name, sex, age, weightKg in
+                ghosts.add(name: name, sex: sex, age: age, weightKg: weightKg)
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.ink)
+        }
         .confirmationDialog(
             "End Live Sesh?",
             isPresented: $confirmEnd,
@@ -5676,7 +8609,14 @@ private struct LiveSeshView: View {
         ) {
             Button("End sesh", role: .destructive) {
                 live.end()
-                dismiss()
+                // When embedded, hand control back to the parent so it
+                // can swipe to PLAN. When presented modally, fall back
+                // to environment-driven dismissal.
+                if let onExitLiveTimeline {
+                    onExitLiveTimeline()
+                } else {
+                    dismiss()
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -5690,6 +8630,19 @@ private struct LiveSeshView: View {
         let status = statusFor(bac: bac)
         VStack(alignment: .leading, spacing: 22) {
             header(bac: bac, status: status, now: now)
+            // Live mode has its own group, independent of plan. Surfacing
+            // a GroupBar here lets the user join/leave/mirror without
+            // jumping back to PLAN. Only shown when embedded (i.e. as a
+            // tab page) — the legacy modal presentation has no parent
+            // group sheet to open.
+            if embedded, let onOpenGroupSheet {
+                GroupBar(
+                    scope: .live,
+                    session: group.session,
+                    memberCount: group.members.count,
+                    onTap: onOpenGroupSheet
+                )
+            }
             VenueChip(
                 location: location,
                 venues: venues,
@@ -5701,6 +8654,19 @@ private struct LiveSeshView: View {
                 LiveGroupRoster(group: group, selfId: profile.id, now: now)
                 LiveRoastCard(group: group, profile: profile, now: now)
             }
+            // Manually-added ghost members — always shown in live mode.
+            // Acts as the "+ Add person" entry point even when there are
+            // no ghosts yet, so the affordance is always discoverable.
+            LiveGhostSection(
+                ghosts: ghosts,
+                now: now,
+                onPickDrink: { ghostId in
+                    pickingForGhostId = ghostId
+                },
+                onAddPerson: {
+                    addPersonOpen = true
+                }
+            )
             VibeCard(status: status, message: vibeMessage(for: status))
             timelineSection(now: now)
             Disclaimer()
@@ -5756,28 +8722,34 @@ private struct LiveSeshView: View {
                 }
             }
             Spacer()
-            Button {
-                // In a group, "END" closes the live view but doesn't kill
-                // the underlying group — that's managed via GroupSheet.
-                // Solo: confirm before clearing the local timeline.
-                if inGroup {
-                    dismiss()
-                } else if live.isActive {
-                    confirmEnd = true
-                } else {
-                    dismiss()
+            // Close affordance:
+            // - Embedded + solo + live.isActive: keep END so the user
+            //   can clear the timeline (only action with meaning).
+            // - Embedded otherwise: hide — swiping back to PLAN is the
+            //   way out, which is what the parent ModeTopBar provides.
+            // - Modal: full set (DONE / END / CLOSE) since there's no
+            //   other way to dismiss.
+            if !embedded || (!inGroup && live.isActive) {
+                Button {
+                    if inGroup {
+                        dismiss()
+                    } else if live.isActive {
+                        confirmEnd = true
+                    } else {
+                        dismiss()
+                    }
+                } label: {
+                    Text(inGroup ? "DONE" : (live.isActive ? "END" : "CLOSE"))
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(2.0)
+                        .foregroundStyle(Color.cream)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Color.cream.opacity(0.06)))
+                        .overlay(Capsule().strokeBorder(Color.cream.opacity(0.2), lineWidth: 1))
                 }
-            } label: {
-                Text(inGroup ? "DONE" : (live.isActive ? "END" : "CLOSE"))
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .tracking(2.0)
-                    .foregroundStyle(Color.cream)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Capsule().fill(Color.cream.opacity(0.06)))
-                    .overlay(Capsule().strokeBorder(Color.cream.opacity(0.2), lineWidth: 1))
+                .buttonStyle(PressScaleStyle())
             }
-            .buttonStyle(PressScaleStyle())
         }
     }
 
@@ -6405,6 +9377,452 @@ private struct LiveRosterRow: View {
     }
 }
 
+// MARK: - Ghost roster (manually-added members in live mode)
+
+/// Section that lists every locally-added ghost member, plus a tappable
+/// "+ Add person" affordance. Lives below `LiveGroupRoster` (or stands
+/// alone in solo mode) and ticks on the same `now: Date` so BACs update
+/// in lockstep with everything else on the page.
+///
+/// Per-row tap → opens the parent's drink picker scoped to that ghost
+/// (the parent owns the sheet because it already owns one for the user's
+/// own drinks; reusing it keeps catalog state aligned).
+/// Per-row trailing menu → wind back last drink / remove the ghost.
+private struct LiveGhostSection: View {
+    @ObservedObject var ghosts: GhostMembersStore
+    let now: Date
+    var onPickDrink: (UUID) -> Void
+    var onAddPerson: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("MANUALLY ADDED")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.bronze)
+                Spacer()
+                if !ghosts.members.isEmpty {
+                    Text("\(ghosts.members.count) \(ghosts.members.count == 1 ? "guest" : "guests")")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .tracking(1.4)
+                        .foregroundStyle(Color.cream.opacity(0.55))
+                }
+            }
+
+            if ghosts.members.isEmpty {
+                emptyState
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(ghosts.members) { ghost in
+                        LiveGhostRow(
+                            ghost: ghost,
+                            bac: ghosts.bac(for: ghost, now: now),
+                            onTap: { onPickDrink(ghost.id) },
+                            onUndo: {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                    ghosts.removeLastDrink(from: ghost.id)
+                                }
+                            },
+                            onRemove: {
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                                    ghosts.remove(ghost.id)
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+
+            Button(action: onAddPerson) {
+                HStack(spacing: 10) {
+                    Image(systemName: "person.badge.plus")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.whiskey)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(Color.whiskey.opacity(0.14)))
+                        .overlay(Circle().strokeBorder(Color.whiskey.opacity(0.5), lineWidth: 1))
+                    Text("ADD PERSON")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(2.0)
+                        .foregroundStyle(Color.cream)
+                    Spacer()
+                    Text("No app needed")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .tracking(1.0)
+                        .foregroundStyle(Color.cream.opacity(0.45))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.bronze)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.cream.opacity(0.04))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(
+                            Color.whiskey.opacity(0.35),
+                            style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                        )
+                )
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color.cream.opacity(0.025))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Nobody added yet")
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.cream)
+            Text("Add the people you're drinking with who don't have the app. Tap their row to log their drinks.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.55))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.bottom, 4)
+    }
+}
+
+private struct LiveGhostRow: View {
+    let ghost: GhostMember
+    let bac: Double
+    var onTap: () -> Void
+    var onUndo: () -> Void
+    var onRemove: () -> Void
+
+    private var status: Status {
+        switch bac {
+        case ..<0.02: return .sober
+        case 0.02..<0.05: return .buzzed
+        case 0.05..<0.08: return .impaired
+        case 0.08..<0.15: return .drunk
+        default: return .danger
+        }
+    }
+
+    private var initial: String { String(ghost.name.prefix(1)).uppercased() }
+    private var drinkCount: Int { ghost.drinks.count }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onTap) {
+                HStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.cream.opacity(0.06))
+                            .frame(width: 38, height: 38)
+                        Circle()
+                            .strokeBorder(
+                                Color.whiskey.opacity(0.55),
+                                style: StrokeStyle(lineWidth: 1.5, dash: [3, 2])
+                            )
+                            .frame(width: 38, height: 38)
+                        Text(initial)
+                            .font(.system(size: 14, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.85))
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text(ghost.name)
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                                .lineLimit(1)
+                            Text("GUEST")
+                                .font(.system(size: 8.5, weight: .black, design: .monospaced))
+                                .tracking(1.4)
+                                .foregroundStyle(Color.bronze)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .overlay(Capsule().strokeBorder(Color.bronze.opacity(0.55), lineWidth: 1))
+                        }
+                        GeometryReader { geo in
+                            let fraction = min(max(bac / 0.20, 0), 1)
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(Color.cream.opacity(0.08))
+                                Capsule()
+                                    .fill(status.color)
+                                    .frame(width: geo.size.width * CGFloat(fraction))
+                                    .shadow(color: status.color.opacity(0.5), radius: 4)
+                            }
+                        }
+                        .frame(height: 4)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(String(format: "%.3f", bac))
+                            .font(.system(size: 16, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .monospacedDigit()
+                            .contentTransition(.numericText(value: bac))
+                        Text("\(drinkCount) \(drinkCount == 1 ? "drink" : "drinks")")
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .tracking(1.2)
+                            .foregroundStyle(status.color)
+                    }
+                }
+            }
+            .buttonStyle(PressScaleStyle())
+
+            // Per-row overflow: undo last drink / remove the ghost.
+            // Kept compact so the BAC numeric stays the visual anchor of
+            // the row; the menu button is opt-in chrome.
+            Menu {
+                if drinkCount > 0 {
+                    Button {
+                        onUndo()
+                    } label: {
+                        Label("Undo last drink", systemImage: "arrow.uturn.backward")
+                    }
+                }
+                Button(role: .destructive) {
+                    onRemove()
+                } label: {
+                    Label("Remove \(ghost.name)", systemImage: "person.fill.xmark")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.cream.opacity(0.55))
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(Color.cream.opacity(0.05)))
+                    .overlay(Circle().strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.06), lineWidth: 1)
+        )
+    }
+}
+
+// MARK: - Add Person Sheet (creates a ghost member)
+
+/// Form for capturing a ghost member's stats. Modeled on the auth
+/// signup form (`SexToggle` + `TintedSlider`) so it feels consistent
+/// with how the user entered their own profile. The save button is
+/// disabled until there's a non-empty name — everything else has a
+/// reasonable default.
+private struct AddPersonSheet: View {
+    var onSave: (_ name: String, _ sex: Sex, _ age: Int, _ weightKg: Double) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String = ""
+    @State private var sex: Sex = .male
+    @State private var age: Double = 28
+    @State private var weight: Double = 75
+    @FocusState private var nameFocused: Bool
+
+    private var canSave: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        ZStack {
+            AtmosphereBackground(accent: Color.whiskey)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    header
+
+                    nameField
+
+                    InputRow(
+                        kicker: "01",
+                        title: "Sex",
+                        valueText: sex.short,
+                        unit: "",
+                        accent: Color.whiskey
+                    ) {
+                        SexToggle(sex: $sex, accent: Color.whiskey)
+                    }
+
+                    InputRow(
+                        kicker: "02",
+                        title: "Age",
+                        valueText: "\(Int(age))",
+                        unit: "yrs",
+                        accent: Color.whiskey
+                    ) {
+                        TintedSlider(value: $age, range: 18...80, step: 1, accent: Color.whiskey)
+                    }
+
+                    InputRow(
+                        kicker: "03",
+                        title: "Weight",
+                        valueText: "\(Int(weight))",
+                        unit: "kg",
+                        accent: Color.whiskey
+                    ) {
+                        TintedSlider(value: $weight, range: 40...160, step: 1, accent: Color.whiskey)
+                    }
+
+                    saveButton
+
+                    Text("Stats stay on your phone. We use them to estimate this person's BAC the same way we do yours.")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 4)
+
+                    Spacer(minLength: 24)
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 10)
+                .padding(.bottom, 28)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .onAppear { nameFocused = true }
+    }
+
+    private var header: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.whiskey)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: Color.whiskey.opacity(0.8), radius: 5)
+                    Text("ADD PERSON")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(2.6)
+                        .foregroundStyle(Color.whiskey)
+                }
+                Text("New guest")
+                    .font(.system(size: 28, weight: .black, design: .rounded))
+                    .italic()
+                    .foregroundStyle(Color.cream)
+                    .tracking(-0.6)
+            }
+            Spacer()
+            Button {
+                dismiss()
+            } label: {
+                Text("CANCEL")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .tracking(2.0)
+                    .foregroundStyle(Color.cream)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.cream.opacity(0.06)))
+                    .overlay(Capsule().strokeBorder(Color.cream.opacity(0.2), lineWidth: 1))
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+    }
+
+    private var nameField: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Text("00")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(2)
+                    .foregroundStyle(Color.bronze)
+                Text("NAME")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.cream.opacity(0.78))
+            }
+            TextField("", text: $name, prompt: Text("e.g. Alex").foregroundStyle(Color.cream.opacity(0.3)))
+                .focused($nameFocused)
+                .textInputAutocapitalization(.words)
+                .autocorrectionDisabled(true)
+                .submitLabel(.done)
+                .onSubmit { if canSave { commit() } }
+                .font(.system(size: 22, weight: .heavy, design: .rounded))
+                .italic()
+                .foregroundStyle(Color.cream)
+                .tracking(-0.3)
+                .padding(.vertical, 12)
+                .padding(.horizontal, 4)
+                .overlay(
+                    Rectangle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.whiskey, Color.whiskey.opacity(0.2)],
+                                startPoint: .leading, endPoint: .trailing
+                            )
+                        )
+                        .frame(height: 1)
+                        .shadow(color: Color.whiskey.opacity(0.6), radius: 4),
+                    alignment: .bottom
+                )
+        }
+        .padding(.vertical, 14)
+        .padding(.horizontal, 18)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.cream.opacity(0.025))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private var saveButton: some View {
+        Button(action: commit) {
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.cream))
+                Text("ADD TO LIVE SESH")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .tracking(2.0)
+                    .foregroundStyle(Color.ink)
+                Spacer()
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.ink.opacity(0.55))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(canSave ? Color.whiskey : Color.cream.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.whiskey.opacity(canSave ? 0.6 : 0), lineWidth: 1)
+            )
+            .shadow(color: Color.whiskey.opacity(canSave ? 0.45 : 0), radius: 18, y: 8)
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(!canSave)
+        .opacity(canSave ? 1.0 : 0.6)
+    }
+
+    private func commit() {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        onSave(trimmed, sex, Int(age), weight)
+        dismiss()
+    }
+}
+
 // MARK: - Live Roast Card (gamified line about the drunkest member)
 
 /// Surfaces a funny line about whoever's currently in the lead. Picks the
@@ -6445,8 +9863,11 @@ private struct LiveRoastCard: View {
         guard let lead = leader, lead.bac >= 0.02 else {
             return LiveRoastBook.warmup(seed: seed)
         }
-        let nameForLine = lead.isSelf ? "You" : lead.name
-        return LiveRoastBook.roast(name: nameForLine, bac: lead.bac, seed: seed)
+        // Second-person grammar when the user IS the leader, third-person
+        // by first name otherwise. Keeps "You're a problem. Hide your phone."
+        // from coming out as "You is a problem. Hide their phone."
+        let subject: RoastSubject = lead.isSelf ? .you : .name(lead.name)
+        return LiveRoastBook.roast(subject: subject, bac: lead.bac, seed: seed)
     }
 
     private func firstName(_ full: String) -> String {
