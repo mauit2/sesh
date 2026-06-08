@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------------------
+# Xcode / Swift .gitignore
+# ---------------------------------------------------------------------------
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Xcode per-user state — breakpoints, window layout, selected scheme, etc.
+# Nothing here belongs in version control; it's machine-specific and churns
+# constantly. (This is what was accidentally tracked before.)
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+
+# Build products & derived data
+build/
+DerivedData/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+
+# CocoaPods / Carthage (in case you ever add them)
+Pods/
+Carthage/Build/
+
+# Backups & scratch files
+*.bak
+*~
+*.orig
+*.tmp
+
+# Secrets — if you ever move config out of source into a file, keep it out.
+# (Your current Supabase publishable key is a client key and safe to ship,
+# but never commit a service_role key, .env, or signing secrets.)
+*.env
+.env.*
+secrets.xcconfig
+Secrets.local.*
+*.p8
+*.p12
+*.mobileprovision
