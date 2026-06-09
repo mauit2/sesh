@@ -353,6 +353,11 @@ struct SeshSession: Codable, Identifiable, Equatable, Hashable {
     /// matches the legacy single-`active` semantics).
     var activePlan: Bool
     var activeLive: Bool
+    /// Manually-added guests for this session, synced via the JSONB
+    /// `ghosts` column (migration 011). Lets every device in a group see
+    /// the same guest roster + their drinks. Defaults to [] for legacy
+    /// rows / environments that haven't run the migration.
+    var ghosts: [GhostMember]
     enum CodingKeys: String, CodingKey {
         case id
         case hostId = "host_id"
@@ -361,6 +366,7 @@ struct SeshSession: Codable, Identifiable, Equatable, Hashable {
         case active
         case activePlan = "active_plan"
         case activeLive = "active_live"
+        case ghosts
     }
     init(
         id: UUID,
@@ -369,7 +375,8 @@ struct SeshSession: Codable, Identifiable, Equatable, Hashable {
         createdAt: Date,
         active: Bool,
         activePlan: Bool = true,
-        activeLive: Bool = true
+        activeLive: Bool = true,
+        ghosts: [GhostMember] = []
     ) {
         self.id = id
         self.hostId = hostId
@@ -378,6 +385,7 @@ struct SeshSession: Codable, Identifiable, Equatable, Hashable {
         self.active = active
         self.activePlan = activePlan
         self.activeLive = activeLive
+        self.ghosts = ghosts
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -388,6 +396,7 @@ struct SeshSession: Codable, Identifiable, Equatable, Hashable {
         self.active = (try c.decodeIfPresent(Bool.self, forKey: .active)) ?? true
         self.activePlan = (try c.decodeIfPresent(Bool.self, forKey: .activePlan)) ?? true
         self.activeLive = (try c.decodeIfPresent(Bool.self, forKey: .activeLive)) ?? true
+        self.ghosts = (try c.decodeIfPresent([GhostMember].self, forKey: .ghosts)) ?? []
     }
 }
 
@@ -910,6 +919,11 @@ final class SessionService: ObservableObject {
     @Published var members: [SessionMember] = []
     @Published var memberProfiles: [UUID: Profile] = [:]
     @Published var drinks: [SessionDrink] = []
+    /// Manually-added guests, synced across every device in this session
+    /// via the session row's JSONB `ghosts` column. Mirrored into the
+    /// device-local GhostMembersStore by SessionView while a live group
+    /// is active. Empty when there's no session.
+    @Published var ghosts: [GhostMember] = []
     @Published var error: String?
     @Published var busy = false
 
@@ -1440,6 +1454,10 @@ final class SessionService: ObservableObject {
 
     private func enter(session: SeshSession) async {
         self.session = session
+        // Seed the guest roster from the row we just entered with, so the
+        // first frame already shows shared guests instead of waiting for
+        // the first poll.
+        self.ghosts = session.ghosts
         // Persist so the next launch can restore THIS scope's session
         // independently of the cousin scope.
         persistSessionID(session.id)
@@ -1457,9 +1475,31 @@ final class SessionService: ObservableObject {
         memberProfiles[profile.id] = profile
     }
 
+    /// Persist the full guest roster to the session row's JSONB column.
+    /// Optimistically sets the local copy first so the UI is instant, then
+    /// pushes — the next poll reconciles every other device. Last-write-
+    /// wins: two people editing guests in the same second can clobber, but
+    /// for manually-added guests that's a rare, low-stakes collision.
+    func syncGhosts(_ newGhosts: [GhostMember]) async {
+        guard let sid = session?.id else { return }
+        ghosts = newGhosts
+        session?.ghosts = newGhosts
+        struct GhostUpdate: Encodable { let ghosts: [GhostMember] }
+        do {
+            _ = try await supabase
+                .from("sessions")
+                .update(GhostUpdate(ghosts: newGhosts))
+                .eq("id", value: sid.uuidString.lowercased())
+                .execute()
+        } catch {
+            // Non-fatal — the local copy already updated and the next
+            // successful edit (or another device's write) re-converges.
+        }
+    }
+
     private func clearLocal() {
         stopPolling()
-        session = nil; members = []; memberProfiles = [:]; drinks = []
+        session = nil; members = []; memberProfiles = [:]; drinks = []; ghosts = []
         persistSessionID(nil)
     }
 
@@ -1528,6 +1568,14 @@ final class SessionService: ObservableObject {
                     clearLocal()
                     return
                 }
+                // Pull the shared guest roster from the session row so
+                // every device converges on the same set + their drinks.
+                if ghosts != row.ghosts {
+                    ghosts = row.ghosts
+                }
+                // Keep our cached session snapshot's ghosts current too,
+                // so a later enter()/read sees the live value.
+                session?.ghosts = row.ghosts
             }
 
             // Did I get kicked out of THIS mode (e.g. left from another
@@ -2145,6 +2193,26 @@ final class InvitesService: ObservableObject {
     /// Surfaced in the sheet when an accept / decline fails; nil otherwise.
     @Published var error: String?
 
+    /// Invite ids whose floating banner the user swiped away this session.
+    /// The invite stays `pending` (still in the inbox / bell badge) — only
+    /// the attention-grabbing banner is suppressed. Cleared naturally when
+    /// the invite leaves `pending` (accepted / declined / withdrawn), and a
+    /// brand-new invite isn't in this set so its banner still drops in.
+    @Published private(set) var snoozedBannerIds: Set<UUID> = []
+
+    /// Pending invites minus the ones whose banner was swiped away. Drives
+    /// the floating banner; the bell badge keeps using `pending` so a
+    /// snoozed invite is still findable.
+    var bannerInvites: [Invite] {
+        pending.filter { !snoozedBannerIds.contains($0.id) }
+    }
+
+    /// Swipe-to-dismiss: snooze the banner for everything currently shown.
+    /// Idempotent and instant — the invites remain in the inbox.
+    func snoozeBanner() {
+        snoozedBannerIds.formUnion(pending.map(\.id))
+    }
+
     private var pollTask: Task<Void, Never>?
 
     /// Start the polling loop. Idempotent — calling twice is a no-op.
@@ -2185,6 +2253,11 @@ final class InvitesService: ObservableObject {
                 .execute()
                 .value
             self.pending = rows
+            // Drop snooze entries for invites that are no longer pending so
+            // the set can't grow without bound and a re-sent invite (same
+            // recipient, new row id) reappears as a fresh banner.
+            let liveIds = Set(rows.map(\.id))
+            snoozedBannerIds.formIntersection(liveIds)
 
             // Hydrate sender profiles for every row we don't already have.
             // We never drop entries from the cache here — a sender whose
@@ -2848,7 +2921,26 @@ final class GhostMembersStore: ObservableObject {
     private let storeKey = "sesh.live.ghosts.v1"
     private let eliminationRate = 0.015
 
+    /// When set (by SessionView while a live GROUP is active), every local
+    /// mutation is mirrored up to the shared session row so all devices
+    /// converge. nil in solo live mode, where guests stay device-local.
+    /// Set/cleared alongside group entry/exit.
+    var syncSink: (([GhostMember]) -> Void)?
+    /// Guards against an echo loop: `hydrate(_:)` (server → local) must not
+    /// re-fire `syncSink` (local → server).
+    private var isHydrating = false
+
     init() { load() }
+
+    /// Replace the roster from an authoritative server snapshot without
+    /// bouncing it straight back to the server. Used by the group poll.
+    func hydrate(_ newMembers: [GhostMember]) {
+        guard members != newMembers else { return }
+        isHydrating = true
+        members = newMembers
+        persist()
+        isHydrating = false
+    }
 
     func add(name: String, sex: Sex, age: Int, weightKg: Double) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2924,7 +3016,15 @@ final class GhostMembersStore: ObservableObject {
 
     // MARK: persistence
 
+    /// Local persist + (in group mode) mirror to the shared session row.
+    /// `hydrate(_:)` bypasses the sink via `isHydrating` so a server-driven
+    /// update doesn't echo straight back.
     private func save() {
+        persist()
+        if !isHydrating { syncSink?(members) }
+    }
+
+    private func persist() {
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         if let data = try? enc.encode(members) {
@@ -3158,6 +3258,9 @@ private struct InviteBanner: View {
     let latest: Invite?
     let senderProfiles: [UUID: Profile]
     let onTap: () -> Void
+    /// Swipe-up (or tap the ×) to snooze this banner without accepting or
+    /// declining. The invite stays in the inbox behind the bell.
+    let onDismiss: () -> Void
 
     /// Pulsing glow ring + subtle scale. Drives both the outer shadow and
     /// the leading "NEW" pip so the banner feels alive — important for an
@@ -3167,6 +3270,10 @@ private struct InviteBanner: View {
     /// over-shoot. Triggered on first appear so each new invite gets the
     /// "look at me" beat without re-running on every parent re-render.
     @State private var hasAppeared = false
+    /// Live vertical drag while the user swipes the banner away. Negative
+    /// values (upward) follow the finger; release past the threshold
+    /// commits the dismiss.
+    @State private var dragY: CGFloat = 0
 
     private var senderName: String {
         guard let latest else { return "Someone" }
@@ -3179,85 +3286,113 @@ private struct InviteBanner: View {
     }
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 14) {
-                ZStack {
-                    // Pulsing ring behind the avatar — reads as a "live"
-                    // indicator without needing a separate dot.
+        HStack(spacing: 14) {
+            ZStack {
+                // Pulsing ring behind the avatar — reads as a "live"
+                // indicator without needing a separate dot.
+                Circle()
+                    .stroke(Color.whiskey.opacity(pulse ? 0.0 : 0.55), lineWidth: 2)
+                    .scaleEffect(pulse ? 1.55 : 1.0)
+                    .frame(width: 44, height: 44)
+                Circle()
+                    .stroke(Color.whiskey.opacity(pulse ? 0.0 : 0.35), lineWidth: 2)
+                    .scaleEffect(pulse ? 1.85 : 1.0)
+                    .frame(width: 44, height: 44)
+                AvatarView(
+                    urlString: senderAvatarURL,
+                    initial: String(senderName.prefix(1)).uppercased(),
+                    size: 44
+                )
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
                     Circle()
-                        .stroke(Color.whiskey.opacity(pulse ? 0.0 : 0.55), lineWidth: 2)
-                        .scaleEffect(pulse ? 1.55 : 1.0)
-                        .frame(width: 44, height: 44)
-                    Circle()
-                        .stroke(Color.whiskey.opacity(pulse ? 0.0 : 0.35), lineWidth: 2)
-                        .scaleEffect(pulse ? 1.85 : 1.0)
-                        .frame(width: 44, height: 44)
-                    AvatarView(
-                        urlString: senderAvatarURL,
-                        initial: String(senderName.prefix(1)).uppercased(),
-                        size: 44
-                    )
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(Color.ink)
-                            .frame(width: 6, height: 6)
-                            .shadow(color: Color.ink.opacity(0.6), radius: 2)
-                        Text(count > 1 ? "\(count) NEW INVITES" : "NEW INVITE")
-                            .font(.system(size: 11, weight: .black, design: .monospaced))
-                            .tracking(2.4)
-                            .foregroundStyle(Color.ink)
-                    }
-                    Text(count > 1
-                         ? "\(senderName) and \(count - 1) other\(count - 1 == 1 ? "" : "s") want you in"
-                         : "\(senderName) wants you to join the sesh")
-                        .font(.system(size: 14, weight: .black, design: .rounded))
+                        .fill(Color.ink)
+                        .frame(width: 6, height: 6)
+                        .shadow(color: Color.ink.opacity(0.6), radius: 2)
+                    Text(count > 1 ? "\(count) NEW INVITES" : "NEW INVITE")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(2.4)
                         .foregroundStyle(Color.ink)
-                        .lineLimit(1)
                 }
-                Spacer(minLength: 0)
+                Text(count > 1
+                     ? "\(senderName) and \(count - 1) other\(count - 1 == 1 ? "" : "s") want you in"
+                     : "\(senderName) wants you to join the sesh")
+                    .font(.system(size: 14, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            // Explicit dismiss affordance (alongside swipe-up). Snoozes
+            // the banner without touching the invite — it stays in the
+            // inbox behind the bell.
+            Button(action: dismiss) {
                 ZStack {
                     Circle()
                         .fill(Color.ink.opacity(0.18))
                         .frame(width: 30, height: 30)
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 13, weight: .black))
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .black))
                         .foregroundStyle(Color.ink)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 14)
-            .background(
-                ZStack {
-                    // Solid whiskey base + a soft top-highlight gradient
-                    // for depth — without it the card reads flat.
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color.whiskey)
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.cream.opacity(0.18), .clear],
-                                startPoint: .top,
-                                endPoint: .center
-                            )
-                        )
-                }
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(Color.cream.opacity(0.35), lineWidth: 1)
-            )
-            // Layered glow: a tight whiskey halo for color, plus a wider
-            // soft black shadow for depth. Together the banner lifts off
-            // the page hard enough to read as "ALERT" not "card".
-            .shadow(color: Color.whiskey.opacity(pulse ? 0.85 : 0.55), radius: pulse ? 22 : 14, y: 8)
-            .shadow(color: Color.black.opacity(0.45), radius: 18, y: 12)
-            .scaleEffect(hasAppeared ? 1.0 : 0.85)
-            .opacity(hasAppeared ? 1.0 : 0)
+            .buttonStyle(PressScaleStyle())
+            .accessibilityLabel("Dismiss banner")
         }
-        .buttonStyle(PressScaleStyle())
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .background(
+            ZStack {
+                // Solid whiskey base + a soft top-highlight gradient
+                // for depth — without it the card reads flat.
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.whiskey)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.cream.opacity(0.18), .clear],
+                            startPoint: .top,
+                            endPoint: .center
+                        )
+                    )
+            }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.35), lineWidth: 1)
+        )
+        // Layered glow: a tight whiskey halo for color, plus a wider
+        // soft black shadow for depth. Together the banner lifts off
+        // the page hard enough to read as "ALERT" not "card".
+        .shadow(color: Color.whiskey.opacity(pulse ? 0.85 : 0.55), radius: pulse ? 22 : 14, y: 8)
+        .shadow(color: Color.black.opacity(0.45), radius: 18, y: 12)
+        .scaleEffect(hasAppeared ? 1.0 : 0.85)
+        .opacity(hasAppeared ? 1.0 : 0)
+        .offset(y: dragY)
+        // Tap the card body → open the inbox. The × button and swipe
+        // gesture both route to dismiss instead.
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onTapGesture { onTap() }
+        .gesture(
+            DragGesture(minimumDistance: 8)
+                .onChanged { value in
+                    // Follow upward drags only; resist downward so the
+                    // banner doesn't get yanked into the content below.
+                    dragY = min(0, value.translation.height)
+                }
+                .onEnded { value in
+                    if value.translation.height < -44 {
+                        dismiss()
+                    } else {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            dragY = 0
+                        }
+                    }
+                }
+        )
+        .accessibilityElement(children: .combine)
         .accessibilityLabel(count > 1 ? "\(count) new sesh invites" : "New sesh invite")
+        .accessibilityHint("Double-tap to open the inbox, or swipe up to dismiss")
         .onAppear {
             withAnimation(.spring(response: 0.55, dampingFraction: 0.7)) {
                 hasAppeared = true
@@ -3266,6 +3401,12 @@ private struct InviteBanner: View {
                 pulse = true
             }
         }
+    }
+
+    /// Snooze the banner. The parent removes it (its `.transition` plays
+    /// the slide-out); the invite itself stays pending in the inbox.
+    private func dismiss() {
+        onDismiss()
     }
 }
 
@@ -3936,12 +4077,49 @@ private struct ModeTopBar: View {
     /// notice from the PLAN side (live timeline running, group has live
     /// drinks, etc.). Drives the pulsing dot on the LIVE segment.
     let liveActive: Bool
+    /// Number of pending invites — drives the bell badge. The bell is the
+    /// permanent "notification center" entry point, so a swiped-away
+    /// banner is always one tap away here.
+    let inboxCount: Int
+    let onTapInbox: () -> Void
     let onTapProfile: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
             ModeSwitcher(mode: $mode, liveActive: liveActive)
             Spacer(minLength: 8)
+            // Notification-center bell. Only shown when there's something
+            // in the inbox — a 0-count bell would be dead chrome.
+            if inboxCount > 0 {
+                Button(action: onTapInbox) {
+                    ZStack(alignment: .topTrailing) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.cream.opacity(0.05))
+                                .frame(width: 32, height: 32)
+                            Image(systemName: "bell.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Color.whiskey)
+                        }
+                        .overlay(
+                            Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1)
+                        )
+                        // Count badge — caps at 9+ so it never overflows
+                        // the little pill.
+                        Text(inboxCount > 9 ? "9+" : "\(inboxCount)")
+                            .font(.system(size: 9, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.ink)
+                            .padding(.horizontal, 4)
+                            .frame(minWidth: 15, minHeight: 15)
+                            .background(Capsule().fill(Color.whiskey))
+                            .overlay(Capsule().strokeBorder(Color.ink, lineWidth: 1.5))
+                            .offset(x: 5, y: -5)
+                    }
+                }
+                .buttonStyle(PressScaleStyle())
+                .accessibilityLabel("\(inboxCount) pending invite\(inboxCount == 1 ? "" : "s")")
+                .transition(.scale.combined(with: .opacity))
+            }
             Button(action: onTapProfile) {
                 AvatarView(
                     urlString: profile.avatarURL,
@@ -3955,6 +4133,7 @@ private struct ModeTopBar: View {
             }
             .buttonStyle(PressScaleStyle())
         }
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: inboxCount > 0)
     }
 }
 
@@ -4277,6 +4456,8 @@ private struct SessionView: View {
                     mode: $mode,
                     profile: profile,
                     liveActive: liveActive,
+                    inboxCount: invites.pending.count,
+                    onTapInbox: { invitesSheetOpen = true },
                     onTapProfile: { profileOpen = true }
                 )
                 .padding(.horizontal, 22)
@@ -4298,13 +4479,18 @@ private struct SessionView: View {
             // Drops in from the top whenever a new pending invite arrives
             // and snaps out the moment the inbox empties (accept,
             // decline, or sender flipped status server-side).
-            if !invites.pending.isEmpty {
+            if !invites.bannerInvites.isEmpty {
                 VStack {
                     InviteBanner(
-                        count: invites.pending.count,
-                        latest: invites.pending.first,
+                        count: invites.bannerInvites.count,
+                        latest: invites.bannerInvites.first,
                         senderProfiles: invites.senderProfiles,
-                        onTap: { invitesSheetOpen = true }
+                        onTap: { invitesSheetOpen = true },
+                        onDismiss: {
+                            withAnimation(.spring(response: 0.45, dampingFraction: 0.82)) {
+                                invites.snoozeBanner()
+                            }
+                        }
                     )
                     .padding(.horizontal, 22)
                     .padding(.top, 56)   // clears ModeTopBar
@@ -4314,7 +4500,7 @@ private struct SessionView: View {
                 .zIndex(20)
             }
         }
-        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: invites.pending.count)
+        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: invites.bannerInvites.count)
         // A tapped invite push asks us to open the inbox. Refresh first so
         // the just-arrived invite is present even if the 7s poll hasn't
         // come around yet, then present the sheet and reset the flag.
@@ -4416,6 +4602,33 @@ private struct SessionView: View {
         // mirrored group only ever produces one entry.
         .onChange(of: liveGroup.members) { _, _ in
             recordSavedGroup(from: liveGroup)
+        }
+        // Bridge the device-local guest store to the shared session roster
+        // as the user enters / leaves a LIVE group:
+        //   • Enter  → adopt the session's shared guests and start
+        //     mirroring local edits up to the server.
+        //   • Leave / end → stop mirroring and wipe the night's guests
+        //     (covers every group-end path, not just the solo END button
+        //     — that was the original "stale ghosts" bug).
+        .onChange(of: liveGroup.session?.id) { old, new in
+            if old == nil && new != nil {
+                ghosts.hydrate(liveGroup.ghosts)
+                ghosts.syncSink = { [weak liveGroup] members in
+                    Task { @MainActor in await liveGroup?.syncGhosts(members) }
+                }
+            } else if old != nil && new == nil {
+                ghosts.syncSink = nil
+                ghosts.clearAll()
+            }
+        }
+        // Reflect other devices' guest edits (pulled by the 3s session
+        // poll) into the local store, but only while we're in a group —
+        // in solo mode liveGroup.ghosts is empty and must not clobber
+        // device-local guests.
+        .onChange(of: liveGroup.ghosts) { _, newGhosts in
+            if liveGroup.session != nil {
+                ghosts.hydrate(newGhosts)
+            }
         }
         // First-frame seed: if either store resumed into an existing
         // session before the .onChange observers were wired, record it
@@ -7404,6 +7617,10 @@ private struct GroupSheet: View {
     /// active view. Cleared when the user dismisses the card or leaves
     /// the group.
     @State private var pendingInvite: PendingCrewInvite?
+    /// The saved group the user tapped — drives the detail popup that
+    /// lists the crew and offers a one-tap "start sesh & invite". nil
+    /// when the popup is closed.
+    @State private var detailGroup: SavedGroup?
 
     /// What we know about a pending invite: just the saved roster. The
     /// new session's join code comes from `group.session?.joinCode` at
@@ -7559,37 +7776,12 @@ private struct GroupSheet: View {
                     SavedGroupRow(
                         entry: entry,
                         busy: group.busy,
-                        onTap: {
-                            // Saved groups don't rejoin the *old*
-                            // session anymore — that one almost always
-                            // ended already, and the user's intent
-                            // ("get the crew back together") is better
-                            // served by spinning up a fresh session
-                            // and surfacing a one-tap share affordance
-                            // that names the previous crew. The host
-                            // sends the share via iMessage; previous
-                            // members tap the code to drop in.
-                            Task {
-                                await group.create()
-                                if group.isActive {
-                                    pendingInvite = PendingCrewInvite(
-                                        crew: entry.savedMembers,
-                                        sourceSavedId: entry.id
-                                    )
-                                    // We deliberately do NOT dismiss
-                                    // the sheet here — the active
-                                    // view's "bring back the crew"
-                                    // card is the whole point of the
-                                    // tap. The user can dismiss the
-                                    // sheet themselves once they've
-                                    // shared the code (or skipped).
-                                }
-                                // If create() fails the SessionService
-                                // surfaces the error in `group.error`,
-                                // which the sheet already renders below.
-                            }
-                        },
-                        onRemove: { savedGroups.remove(id: entry.id) }
+                        // Tapping a saved crew now opens a detail popup
+                        // (roster + one-tap invite) rather than silently
+                        // spinning up a session. The crew already has the
+                        // app — that's why they're saved — so the popup's
+                        // primary action sends native invites, no iMessage.
+                        onTap: { detailGroup = entry }
                     )
                 }
             }
@@ -7631,6 +7823,23 @@ private struct GroupSheet: View {
         // flip).
         .onChange(of: group.session?.id) { _, newValue in
             if newValue == nil { pendingInvite = nil }
+        }
+        // Saved-crew detail popup: roster + one-tap "start sesh & invite
+        // all". Presented when the user taps a SavedGroupRow.
+        .sheet(item: $detailGroup) { entry in
+            SavedGroupDetailSheet(
+                entry: entry,
+                group: group,
+                invites: invites,
+                onRemove: {
+                    savedGroups.remove(id: entry.id)
+                    detailGroup = nil
+                },
+                onDone: { detailGroup = nil }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.ink)
         }
     }
 
@@ -8230,7 +8439,6 @@ private struct SavedGroupRow: View {
     /// a second join while the first one is in flight.
     let busy: Bool
     let onTap: () -> Void
-    let onRemove: () -> Void
 
     /// Compact "joined N {unit} ago" formatter. Falls back to a short
     /// date for anything older than a week so the strings don't grow
@@ -8246,92 +8454,265 @@ private struct SavedGroupRow: View {
         return f.string(from: entry.lastJoinedAt)
     }
 
-    /// "Hosted by Mauritz · 4 people" / "4 people" when the host name
-    /// hasn't been cached yet. Single people gets a singular noun so
-    /// "1 people" doesn't slip into the UI.
-    private var detailLabel: String {
-        let memberPart = "\(entry.lastMemberCount) \(entry.lastMemberCount == 1 ? "person" : "people")"
-        if let host = entry.lastHostName, !host.isEmpty {
-            return "Hosted by \(host) · \(memberPart)"
-        }
-        return memberPart
+    /// Title prefers the crew's actual names ("Sara, Jonas +2") over the
+    /// opaque join code — names are what make a saved crew recognisable.
+    /// Falls back to the code when no roster was captured (legacy entries).
+    private var title: String {
+        guard !entry.savedMembers.isEmpty else { return entry.joinCode }
+        let names = entry.savedMembers.prefix(2).map(\.name)
+        let remaining = entry.savedMembers.count - names.count
+        return names.joined(separator: ", ") + (remaining > 0 ? " +\(remaining)" : "")
+    }
+
+    private var countLabel: String {
+        let n = max(entry.lastMemberCount, entry.savedMembers.count)
+        return "\(n) \(n == 1 ? "person" : "people")"
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            // Tap target: the whole card minus the trash button. We
-            // wrap it in a Button so SwiftUI gives us hit-testing and
-            // press feedback for free.
-            Button(action: onTap) {
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.whiskey.opacity(0.16))
-                            .frame(width: 44, height: 44)
-                        Text(String(entry.joinCode.prefix(2)))
-                            .font(.system(size: 14, weight: .black, design: .monospaced))
-                            .tracking(1.5)
-                            .foregroundStyle(Color.whiskey)
+        Button(action: onTap) {
+            HStack(spacing: 14) {
+                avatarStack
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(countLabel)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.6))
+                        Circle()
+                            .fill(Color.bronze.opacity(0.5))
+                            .frame(width: 2, height: 2)
+                        Text(lastJoinedLabel)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.45))
                     }
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 8) {
-                            Text(entry.joinCode)
-                                .font(.system(size: 15, weight: .black, design: .monospaced))
-                                .tracking(2.4)
-                                .foregroundStyle(Color.cream)
-                            Text("·")
-                                .foregroundStyle(Color.bronze.opacity(0.7))
-                            Text(lastJoinedLabel)
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                .tracking(0.6)
-                                .foregroundStyle(Color.cream.opacity(0.55))
-                        }
-                        Text(detailLabel)
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.cream.opacity(0.7))
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color.bronze)
                 }
-                .contentShape(Rectangle())
+                Spacer(minLength: 0)
+                ZStack {
+                    Circle()
+                        .fill(Color.whiskey.opacity(0.14))
+                        .frame(width: 30, height: 30)
+                    Image(systemName: "paperplane.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.whiskey)
+                }
             }
-            .buttonStyle(PressScaleStyle())
-            .disabled(busy)
-
-            // Trash affordance — destructive enough to want a discrete
-            // tap target, subtle enough not to dominate the row. We use
-            // a slightly larger hit area than the icon so it's easy to
-            // hit on a phone.
-            Button(action: onRemove) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color.cream.opacity(0.55))
-                    .frame(width: 32, height: 32)
-                    .background(
-                        Circle().fill(Color.cream.opacity(0.05))
-                    )
-                    .overlay(
-                        Circle().strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
-                    )
-            }
-            .buttonStyle(PressScaleStyle())
-            .accessibilityLabel("Remove \(entry.joinCode) from recent groups")
+            .contentShape(Rectangle())
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.inkElev.opacity(0.7))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+            )
+            .opacity(busy ? 0.55 : 1.0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.inkElev.opacity(0.6))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
-        )
-        .opacity(busy ? 0.55 : 1.0)
+        .buttonStyle(PressScaleStyle())
+        .disabled(busy)
+        .accessibilityLabel("Saved crew \(title), \(countLabel)")
+    }
+
+    /// Overlapping avatar cluster. Falls back to a whiskey code tile for
+    /// legacy entries that never captured a roster.
+    @ViewBuilder
+    private var avatarStack: some View {
+        if entry.savedMembers.isEmpty {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.whiskey.opacity(0.16))
+                    .frame(width: 46, height: 46)
+                Text(String(entry.joinCode.prefix(2)))
+                    .font(.system(size: 14, weight: .black, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundStyle(Color.whiskey)
+            }
+        } else {
+            HStack(spacing: -12) {
+                ForEach(entry.savedMembers.prefix(3)) { m in
+                    AvatarView(
+                        urlString: m.avatarURL,
+                        initial: String(m.name.prefix(1)).uppercased(),
+                        size: 34
+                    )
+                    .overlay(Circle().strokeBorder(Color.ink, lineWidth: 2))
+                }
+                if entry.savedMembers.count > 3 {
+                    ZStack {
+                        Circle()
+                            .fill(Color.inkElev)
+                            .frame(width: 34, height: 34)
+                            .overlay(Circle().strokeBorder(Color.ink, lineWidth: 2))
+                        Text("+\(entry.savedMembers.count - 3)")
+                            .font(.system(size: 11, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.8))
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Saved group detail popup
+
+/// Tapping a saved crew opens this. Lists every participant and offers a
+/// single primary action: spin up a fresh session and fire native in-app
+/// invites to the whole crew at once. No iMessage fallback here — by
+/// definition a *saved* crew already has the app (that's how we captured
+/// their profile ids), so the native path is always the right one. The
+/// iMessage share lives in the new-group flow for people who aren't users
+/// yet.
+private struct SavedGroupDetailSheet: View {
+    let entry: SavedGroup
+    @ObservedObject var group: SessionService
+    @ObservedObject var invites: InvitesService
+    /// Remove the crew from the saved list, then close.
+    let onRemove: () -> Void
+    /// Close the popup (parent clears its `detailGroup`).
+    let onDone: () -> Void
+
+    private enum Phase: Equatable { case idle, sending, sent(Int) }
+    @State private var phase: Phase = .idle
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 20) {
+                    header
+                    roster
+                    Spacer(minLength: 8)
+                    primaryButton
+                    removeButton
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 12)
+                .padding(.bottom, 28)
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("SAVED CREW")
+                .font(.system(size: 11, weight: .black, design: .monospaced))
+                .tracking(2.4)
+                .foregroundStyle(Color.bronze)
+            Text("Get the crew back together")
+                .font(.system(size: 24, weight: .black, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .lineLimit(2)
+            Text("Start a fresh sesh and invite everyone with one tap — they'll get a notification.")
+                .font(.system(size: 13, weight: .regular, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.6))
+                .lineSpacing(2)
+                .padding(.top, 2)
+        }
+        .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private var roster: some View {
+        if entry.savedMembers.isEmpty {
+            Text("This crew was saved before we started capturing names. Start the sesh and share the code instead.")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.55))
+        } else {
+            VStack(spacing: 8) {
+                ForEach(entry.savedMembers) { m in
+                    HStack(spacing: 12) {
+                        AvatarView(
+                            urlString: m.avatarURL,
+                            initial: String(m.name.prefix(1)).uppercased(),
+                            size: 38
+                        )
+                        Text(m.name)
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.inkElev.opacity(0.6))
+                    )
+                }
+            }
+        }
+    }
+
+    private var primaryButton: some View {
+        Button(action: start) {
+            HStack(spacing: 8) {
+                Group {
+                    switch phase {
+                    case .idle:
+                        Image(systemName: "paperplane.fill")
+                        Text("START SESH & INVITE ALL")
+                    case .sending:
+                        ProgressView().tint(Color.ink)
+                        Text("STARTING…")
+                    case .sent(let n):
+                        Image(systemName: "checkmark")
+                        Text(n > 0 ? "INVITED \(n) · THEY'LL GET A PING" : "ALREADY INVITED")
+                    }
+                }
+                .font(.system(size: 12, weight: .black, design: .monospaced))
+                .tracking(1.2)
+            }
+            .foregroundStyle(Color.ink)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 15)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.whiskey)
+            )
+            .shadow(color: Color.whiskey.opacity(0.4), radius: 14, y: 6)
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(phase != .idle)
+    }
+
+    private var removeButton: some View {
+        Button(action: onRemove) {
+            Text("Remove from saved")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color(red: 0.85, green: 0.40, blue: 0.34))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(phase != .idle)
+    }
+
+    private func start() {
+        phase = .sending
+        Task {
+            await group.create()
+            guard group.isActive, let session = group.session else {
+                phase = .idle
+                return
+            }
+            let n = await invites.send(
+                sessionId: session.id,
+                joinCode: session.joinCode,
+                mode: group.scope,
+                recipientIds: entry.savedMembers.map(\.id)
+            )
+            phase = .sent(n)
+            // Let the confirmation read for a beat, then close — the
+            // underlying GroupSheet has already flipped to its active
+            // view because group.isActive is now true.
+            try? await Task.sleep(nanoseconds: 1_300_000_000)
+            onDone()
+        }
     }
 }
 
