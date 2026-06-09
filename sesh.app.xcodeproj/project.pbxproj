@@ -7,22 +7,92 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2FB880442FA5FFC900259EDF /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2FB880432FA5FFC800259EDF /* WidgetKit.framework */; };
+		2FB880462FA5FFC900259EDF /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2FB880452FA5FFC900259EDF /* SwiftUI.framework */; };
+		2FB880552FA5FFC900259EDF /* seshLiveActivityExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2FB880422FA5FFC800259EDF /* seshLiveActivityExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		2FE6803B2F96B66D007D694D /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 2FE6803A2F96B66D007D694D /* Supabase */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		2FB880532FA5FFC900259EDF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2FE680222F965BC7007D694D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2FB880412FA5FFC800259EDF;
+			remoteInfo = seshLiveActivityExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		2FB8805A2FA5FFC900259EDF /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				2FB880552FA5FFC900259EDF /* seshLiveActivityExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		2F1D9B8D2FBF18AC00586782 /* seshLiveActivityExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = seshLiveActivityExtension.entitlements; sourceTree = "<group>"; };
+		2FB880422FA5FFC800259EDF /* seshLiveActivityExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = seshLiveActivityExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		2FB880432FA5FFC800259EDF /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		2FB880452FA5FFC900259EDF /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		2FE6802A2F965BC7007D694D /* sesh.app.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = sesh.app.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		2FB880562FA5FFC900259EDF /* Exceptions for "seshLiveActivity" folder in "seshLiveActivityExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 2FB880412FA5FFC800259EDF /* seshLiveActivityExtension */;
+		};
+		2FB8805E2FA6024600259EDF /* Exceptions for "sesh.app" folder in "seshLiveActivityExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				LockScreenDrinkIntent.swift,
+				SeshActivityAttributes.swift,
+				WidgetSharedStore.swift,
+			);
+			target = 2FB880412FA5FFC800259EDF /* seshLiveActivityExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		2FB880472FA5FFC900259EDF /* seshLiveActivity */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				2FB880562FA5FFC900259EDF /* Exceptions for "seshLiveActivity" folder in "seshLiveActivityExtension" target */,
+			);
+			path = seshLiveActivity;
+			sourceTree = "<group>";
+		};
 		2FE6802C2F965BC7007D694D /* sesh.app */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				2FB8805E2FA6024600259EDF /* Exceptions for "sesh.app" folder in "seshLiveActivityExtension" target */,
+			);
 			path = sesh.app;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		2FB8803F2FA5FFC800259EDF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2FB880462FA5FFC900259EDF /* SwiftUI.framework in Frameworks */,
+				2FB880442FA5FFC900259EDF /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		2FE680272F965BC7007D694D /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -37,7 +107,9 @@
 		2FE680212F965BC7007D694D = {
 			isa = PBXGroup;
 			children = (
+				2F1D9B8D2FBF18AC00586782 /* seshLiveActivityExtension.entitlements */,
 				2FE6802C2F965BC7007D694D /* sesh.app */,
+				2FB880472FA5FFC900259EDF /* seshLiveActivity */,
 				2FE680392F96B66D007D694D /* Frameworks */,
 				2FE6802B2F965BC7007D694D /* Products */,
 			);
@@ -47,6 +119,7 @@
 			isa = PBXGroup;
 			children = (
 				2FE6802A2F965BC7007D694D /* sesh.app.app */,
+				2FB880422FA5FFC800259EDF /* seshLiveActivityExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -54,6 +127,8 @@
 		2FE680392F96B66D007D694D /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				2FB880432FA5FFC800259EDF /* WidgetKit.framework */,
+				2FB880452FA5FFC900259EDF /* SwiftUI.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -61,6 +136,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		2FB880412FA5FFC800259EDF /* seshLiveActivityExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2FB880572FA5FFC900259EDF /* Build configuration list for PBXNativeTarget "seshLiveActivityExtension" */;
+			buildPhases = (
+				2FB8803E2FA5FFC800259EDF /* Sources */,
+				2FB8803F2FA5FFC800259EDF /* Frameworks */,
+				2FB880402FA5FFC800259EDF /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				2FB880472FA5FFC900259EDF /* seshLiveActivity */,
+			);
+			name = seshLiveActivityExtension;
+			packageProductDependencies = (
+			);
+			productName = seshLiveActivityExtension;
+			productReference = 2FB880422FA5FFC800259EDF /* seshLiveActivityExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		2FE680292F965BC7007D694D /* sesh.app */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 2FE680352F965BC8007D694D /* Build configuration list for PBXNativeTarget "sesh.app" */;
@@ -68,10 +165,12 @@
 				2FE680262F965BC7007D694D /* Sources */,
 				2FE680272F965BC7007D694D /* Frameworks */,
 				2FE680282F965BC7007D694D /* Resources */,
+				2FB8805A2FA5FFC900259EDF /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				2FB880542FA5FFC900259EDF /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				2FE6802C2F965BC7007D694D /* sesh.app */,
@@ -94,6 +193,9 @@
 				LastSwiftUpdateCheck = 2640;
 				LastUpgradeCheck = 2640;
 				TargetAttributes = {
+					2FB880412FA5FFC800259EDF = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
 					2FE680292F965BC7007D694D = {
 						CreatedOnToolsVersion = 26.4.1;
 					};
@@ -117,11 +219,19 @@
 			projectRoot = "";
 			targets = (
 				2FE680292F965BC7007D694D /* sesh.app */,
+				2FB880412FA5FFC800259EDF /* seshLiveActivityExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		2FB880402FA5FFC800259EDF /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		2FE680282F965BC7007D694D /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -132,6 +242,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		2FB8803E2FA5FFC800259EDF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		2FE680262F965BC7007D694D /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -141,7 +258,77 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		2FB880542FA5FFC900259EDF /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2FB880412FA5FFC800259EDF /* seshLiveActivityExtension */;
+			targetProxy = 2FB880532FA5FFC900259EDF /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		2FB880582FA5FFC900259EDF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = seshLiveActivityExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = H7A4TB3KVA;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = seshLiveActivity/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = seshLiveActivity;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Mau.sesh-app.seshLiveActivity";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		2FB880592FA5FFC900259EDF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = seshLiveActivityExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = H7A4TB3KVA;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = seshLiveActivity/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = seshLiveActivity;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Mau.sesh-app.seshLiveActivity";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		2FE680332F965BC8007D694D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -266,6 +453,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = sesh.app/sesh.app.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = H7A4TB3KVA;
@@ -273,6 +461,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "sesh uses your camera to set a profile photo.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "sesh uses your location only while open to find featured bars near you and surface their drink specials. We never track you in the background.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -300,6 +489,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = sesh.app/sesh.app.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = H7A4TB3KVA;
@@ -307,6 +497,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "sesh uses your camera to set a profile photo.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "sesh uses your location only while open to find featured bars near you and surface their drink specials. We never track you in the background.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -332,6 +523,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		2FB880572FA5FFC900259EDF /* Build configuration list for PBXNativeTarget "seshLiveActivityExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2FB880582FA5FFC900259EDF /* Debug */,
+				2FB880592FA5FFC900259EDF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		2FE680252F965BC7007D694D /* Build configuration list for PBXProject "sesh.app" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

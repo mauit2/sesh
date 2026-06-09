@@ -642,52 +642,79 @@ struct VenueSpecial: Codable, Identifiable, Equatable, Hashable {
     }
 }
 
-/// Hardcoded fallback so the UI works in the simulator before/without the
-/// Supabase migration, or when the network is unavailable. Production
-/// reads from the DB; these values are only surfaced when that fetch
-/// fails or returns empty. Stable UUIDs prevent dupes when the real row
-/// later shows up — the DB id wins as soon as `refresh()` succeeds.
-enum HardcodedVenues {
-    static let handelspuben = Venue(
-        id: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
-        name: "Handelspuben",
-        address: "Vasagatan 1",
-        city: "Göteborg",
-        lat: 57.6991,
-        lon: 11.9712,
-        isFeatured: true,
-        createdAt: Date(timeIntervalSince1970: 0)
-    )
+/// Name-matched local "secret menu" — when a user checks in to a venue
+/// whose name matches one of the patterns below, these specials are
+/// attached to that venue in memory and surface in the drink picker.
+///
+/// Why this isn't a curated featured-venue list anymore:
+///   • The app no longer ships a seeded venue catalog. Users find their
+///     bar via Apple Maps search (MKLocalSearch) like they would any
+///     other place — search "Handelspuben", tap it, you're checked in.
+///   • The specials still attach automatically because we recognise the
+///     venue by name after check-in. The user gets the same result
+///     without us pretending to curate a venue we don't run.
+///
+/// Each pattern is a case-insensitive substring match against
+/// `Venue.name`. The matcher returns `VenueSpecial` rows bound to the
+/// caller's venue id (we don't persist them to Supabase — they're
+/// recognised locally on every checkout/check-in, so the venue id is
+/// whatever the MapKit insert produced).
+private struct LocalSpecialTemplate {
+    let name: String
+    let detail: String
+    let volumeMl: Double
+    let abv: Double
+    let category: String
+    let emoji: String
+}
 
-    static let handelsSpecials: [VenueSpecial] = [
-        VenueSpecial(
-            id: UUID(uuidString: "22222222-2222-4222-8222-222222222221")!,
-            venueId: handelspuben.id,
-            name: "Fittkittlaren",
-            detail: "50 cl jug · 18 cl @ 40%",
-            volumeMl: 500,
-            abv: 0.144,
-            category: "cocktail",
-            emoji: "🍹",
-            createdAt: Date(timeIntervalSince1970: 0)
-        ),
-        VenueSpecial(
-            id: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!,
-            venueId: handelspuben.id,
-            name: "Döda mig",
-            detail: "50 cl jug · 18 cl @ 40%",
-            volumeMl: 500,
-            abv: 0.144,
-            category: "cocktail",
-            emoji: "☠️",
-            createdAt: Date(timeIntervalSince1970: 0)
-        )
+enum LocalSpecialsCatalog {
+    /// Pattern → templates. Add a new bar here and any MapKit pick of
+    /// that bar instantly gets its menu, no migration required.
+    private static let byNamePattern: [(pattern: String, templates: [LocalSpecialTemplate])] = [
+        ("handelspuben", [
+            LocalSpecialTemplate(
+                name: "Fittkittlaren",
+                detail: "50 cl jug · 18 cl @ 40%",
+                volumeMl: 500,
+                abv: 0.144,
+                category: "cocktail",
+                emoji: "🍹"
+            ),
+            LocalSpecialTemplate(
+                name: "Döda mig",
+                detail: "50 cl jug · 18 cl @ 40%",
+                volumeMl: 500,
+                abv: 0.144,
+                category: "cocktail",
+                emoji: "☠️"
+            ),
+        ]),
     ]
 
-    static let all: [Venue] = [handelspuben]
-
-    static func specials(for venueId: UUID) -> [VenueSpecial] {
-        handelsSpecials.filter { $0.venueId == venueId }
+    /// Specials for any venue whose name contains a known pattern,
+    /// bound to the caller's `venueId`. Empty when no pattern matches.
+    /// Synthesised UUIDs (each call is local-only, never persisted) —
+    /// the picker only reads `name` / `detail` / `emoji` / volume / abv,
+    /// so id stability doesn't matter for rendering.
+    static func specials(forVenueNamed name: String, venueId: UUID) -> [VenueSpecial] {
+        let lower = name.lowercased()
+        for entry in byNamePattern where lower.contains(entry.pattern) {
+            return entry.templates.map { tpl in
+                VenueSpecial(
+                    id: UUID(),
+                    venueId: venueId,
+                    name: tpl.name,
+                    detail: tpl.detail,
+                    volumeMl: tpl.volumeMl,
+                    abv: tpl.abv,
+                    category: tpl.category,
+                    emoji: tpl.emoji,
+                    createdAt: Date(timeIntervalSince1970: 0)
+                )
+            }
+        }
+        return []
     }
 }
 
@@ -715,7 +742,26 @@ final class AuthService: ObservableObject {
         case signedIn(Profile)
     }
 
-    @Published var state: State = .loading
+    @Published var state: State = .loading {
+        didSet { syncProfileCacheForLockScreen() }
+    }
+
+    /// Mirror the user's BAC-relevant profile primitives into
+    /// UserDefaults so the lock-screen App Intent can run Widmark
+    /// without booting the SwiftUI hierarchy. See `LockScreenStorageKeys`
+    /// — those keys are the contract between this method and
+    /// `LockScreenDrinkLogger.append`. Cleared on sign-out so the
+    /// next user doesn't inherit the previous user's body weight.
+    private func syncProfileCacheForLockScreen() {
+        switch state {
+        case .signedIn(let p):
+            UserDefaults.standard.set(p.weightKg, forKey: LockScreenStorageKeys.profileWeightKg)
+            UserDefaults.standard.set(p.sex.rawValue, forKey: LockScreenStorageKeys.profileSexRaw)
+        case .signedOut, .loading:
+            UserDefaults.standard.removeObject(forKey: LockScreenStorageKeys.profileWeightKg)
+            UserDefaults.standard.removeObject(forKey: LockScreenStorageKeys.profileSexRaw)
+        }
+    }
 
     init() {
         Task { [weak self] in
@@ -782,6 +828,16 @@ final class AuthService: ObservableObject {
 
     func signOut() async throws {
         try await supabase.auth.signOut()
+        // Tear down any in-flight lock-screen activity AND wipe the
+        // home-screen widget snapshot. The next user to sign in
+        // shouldn't inherit the previous user's BAC card OR see
+        // their roster on the home-screen widget. Local LiveSeshState
+        // gets cleared by the auth state transition anyway — these
+        // calls keep the cross-process surfaces in lockstep.
+        await MainActor.run {
+            LiveActivityController.shared.end()
+            WidgetSharedStore.clear()
+        }
         state = .signedOut
     }
 
@@ -1021,25 +1077,46 @@ final class SessionService: ObservableObject {
     /// pill or the idle CTA.
     var hasLiveActivity: Bool { !liveDrinks.isEmpty }
 
-    /// Per-drink Widmark for live group mode: every drink metabolises from
-    /// its own timestamp, no slider needed. More accurate than the
-    /// slider-based formula and produces the SAME number on every phone
-    /// (no sync drift, since `created_at` is server-stamped).
+    /// Live group Widmark — chronological simulation over the slice of
+    /// drinks that count for this member: their personal pours plus
+    /// their share of every shared round. Per-drink gating is applied
+    /// before the walk so the rest is the same single-timeline math the
+    /// solo calculator uses (see LiveSeshState.bac for the rationale).
+    /// Server-stamped `createdAt` keeps the result identical on every
+    /// phone in the group.
     func liveBAC(for profileId: UUID, now: Date = Date()) -> Double {
         guard let profile = memberProfiles[profileId] else { return 0 }
         let bodyGrams = profile.weightKg * 1000
         let denom = bodyGrams * profile.sex.r
         guard denom > 0 else { return 0 }
         let n = max(members.count, 1)
-        return liveDrinks.reduce(0.0) { acc, d in
+
+        // 1) Project each contributing drink to (timestamp, grams_to_me).
+        //    Drinks that aren't mine and aren't shared drop out here.
+        let events: [(Date, Double)] = liveDrinks.compactMap { d in
             let isMine = d.profileId == profileId && !d.shared
             let isShared = d.shared
-            guard isMine || isShared else { return acc }
+            guard isMine || isShared else { return nil }
             let grams = isShared ? d.grams / Double(n) : d.grams
-            let hoursSince = max(0, now.timeIntervalSince(d.createdAt) / 3600)
-            let contribution = (grams / denom) * 100 - 0.015 * hoursSince
-            return acc + max(0, contribution)
+            return (d.createdAt, grams)
+        }.sorted { $0.0 < $1.0 }
+
+        // 2) Walk forward applying continuous decay between events.
+        var bac: Double = 0
+        var lastEvent: Date? = nil
+        for (when, grams) in events where when <= now {
+            if let last = lastEvent {
+                let hours = when.timeIntervalSince(last) / 3600
+                bac = max(0, bac - 0.015 * hours)
+            }
+            bac += (grams / denom) * 100
+            lastEvent = when
         }
+        if let last = lastEvent {
+            let hours = max(0, now.timeIntervalSince(last) / 3600)
+            bac = max(0, bac - 0.015 * hours)
+        }
+        return bac
     }
 
     /// Hours until a member reaches a BAC threshold under the live model.
@@ -1508,8 +1585,9 @@ final class SessionService: ObservableObject {
 //     instead of continuous tracking.
 //
 //   - VenueService — fetches venues + per-venue specials from Supabase,
-//     with a hardcoded fallback (Handelspuben) so the simulator works
-//     before the migration is applied. Tracks the user's chosen venue
+//     and overlays name-matched local specials (see LocalSpecialsCatalog)
+//     so a venue the user finds via Apple Maps still gets its secret
+//     menu without a curated DB row. Tracks the user's chosen venue
 //     and persists it across launches via UserDefaults.
 
 @MainActor
@@ -1747,7 +1825,16 @@ final class VenueService: ObservableObject {
     /// the main view reads this; the menu sheet reads `specials(for:)`
     /// to show pinned drinks.
     @Published var currentVenue: Venue? {
-        didSet { persistCurrent() }
+        didSet {
+            persistCurrent()
+            // Whenever the user checks into a venue (curated, MapKit,
+            // or stub), make sure any name-matched local specials are
+            // attached to its id. Cheap and idempotent — the merge
+            // dedupes on name, so repeated calls don't double up.
+            if let v = currentVenue {
+                mergeLocalSpecials(for: v)
+            }
+        }
     }
 
     private let currentKey = "sesh.currentVenue.v1"
@@ -1815,9 +1902,12 @@ final class VenueService: ObservableObject {
 
     // MARK: - Network
 
-    /// Loads every venue + special from Supabase. On any failure (or empty
-    /// result) we apply a hardcoded fallback so the user can still try out
-    /// check-in + specials before the migration has been run.
+    /// Loads every venue + special from Supabase. On failure or empty
+    /// result we still apply local name-matched specials to whatever
+    /// venues we do know about (currently just the user's checked-in
+    /// MapKit venue, if any), so a venue like Handelspuben that the
+    /// user found via Apple Maps keeps its secret menu even when the
+    /// DB is empty or offline.
     func refresh() async {
         loading = true; defer { loading = false }
         do {
@@ -1832,21 +1922,20 @@ final class VenueService: ObservableObject {
                 .select()
                 .execute()
                 .value
-            if vs.isEmpty {
-                applyFallback()
-            } else {
-                venues = vs
-                var grouped: [UUID: [VenueSpecial]] = [:]
-                for s in ss {
-                    grouped[s.venueId, default: []].append(s)
-                }
-                specialsByVenue = grouped
-                reconcileCurrent()
+            venues = vs
+            var grouped: [UUID: [VenueSpecial]] = [:]
+            for s in ss {
+                grouped[s.venueId, default: []].append(s)
             }
+            specialsByVenue = grouped
+            attachLocalSpecials()
+            reconcileCurrent()
         } catch {
-            // Either the migration hasn't been run yet or there's no
-            // network. Surface the hardcoded data so check-in still works.
-            applyFallback()
+            // Network or schema problem. Don't seed any venues —
+            // discovery is MapKit-driven. Still attach local specials
+            // to anything already in `venues` (e.g., a previously
+            // checked-in MapKit row that we've kept locally).
+            attachLocalSpecials()
         }
     }
 
@@ -1970,14 +2059,32 @@ final class VenueService: ObservableObject {
         currentVenue = stub
     }
 
-    private func applyFallback() {
-        venues = HardcodedVenues.all
-        var grouped: [UUID: [VenueSpecial]] = [:]
-        for v in HardcodedVenues.all {
-            grouped[v.id] = HardcodedVenues.specials(for: v.id)
+    /// Walk every known venue and, for each, look up locally-defined
+    /// specials by name pattern (see `LocalSpecialsCatalog`). Merges
+    /// into `specialsByVenue` without clobbering anything that was
+    /// already loaded from the DB — if a venue has both DB-defined
+    /// specials and local ones, both surface. Dedupe on `name` so a
+    /// freshly-migrated DB row doesn't double up with the in-memory
+    /// template after a refresh.
+    private func attachLocalSpecials() {
+        for venue in venues {
+            mergeLocalSpecials(for: venue)
         }
-        specialsByVenue = grouped
-        reconcileCurrent()
+    }
+
+    /// Single-venue version of `attachLocalSpecials`. Called from the
+    /// `currentVenue` didSet so a fresh MapKit check-in gets its
+    /// secret menu the same tick the chip flips over — no waiting for
+    /// the next periodic refresh.
+    private func mergeLocalSpecials(for venue: Venue) {
+        let local = LocalSpecialsCatalog.specials(forVenueNamed: venue.name, venueId: venue.id)
+        guard !local.isEmpty else { return }
+        var existing = specialsByVenue[venue.id] ?? []
+        let existingNames = Set(existing.map { $0.name })
+        for s in local where !existingNames.contains(s.name) {
+            existing.append(s)
+        }
+        specialsByVenue[venue.id] = existing
     }
 
     /// If the user is checked into a venue whose row no longer exists in
@@ -2384,7 +2491,21 @@ final class RecentDrinksStore: ObservableObject {
     private let key = "sesh.recentDrinks.v1"
     private let cap = 6
 
-    init() { load() }
+    init() {
+        load()
+        // The lock-screen App Intent also writes to `key` when it
+        // appends a drink. Same notification LiveSeshState listens
+        // for — re-loading from disk here keeps the quick-add tiles
+        // (and the next syncLockScreenActivity push) in step with
+        // what the user actually tapped on their lock screen.
+        NotificationCenter.default.addObserver(
+            forName: .liveSeshLockScreenDidAddDrink,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.load() }
+        }
+    }
 
     /// Records a pick. Moves the option to the front of the list, removing
     /// any prior occurrence so the same drink doesn't take multiple slots.
@@ -2475,7 +2596,23 @@ final class LiveSeshState: ObservableObject {
 
     var isActive: Bool { startedAt != nil }
 
-    init() { load() }
+    init() {
+        load()
+        // Reload from disk whenever the lock-screen App Intent has
+        // appended a drink behind our back. The intent writes through
+        // the same UserDefaults keys we use for persistence — but the
+        // running @StateObject doesn't observe UserDefaults, so we'd
+        // otherwise show a stale timeline until the app is killed and
+        // relaunched. The closure hops to the main actor explicitly
+        // because LiveSeshState is @MainActor-isolated.
+        NotificationCenter.default.addObserver(
+            forName: .liveSeshLockScreenDidAddDrink,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.load() }
+        }
+    }
 
     func start() {
         startedAt = Date()
@@ -2506,22 +2643,81 @@ final class LiveSeshState: ObservableObject {
         save()
     }
 
-    /// Per-drink Widmark: each drink contributes `(grams / (mass × r)) × 100`,
-    /// minus 0.015 × (hours since *that* drink). Contributions clamp at 0 so
-    /// drinks that have fully metabolised drop out naturally.
+    /// Chronological Widmark simulation. BAC accumulates instantly with
+    /// each drink (`(grams / (mass × r)) × 100`) and decays continuously
+    /// at `eliminationRate` between events, clamped to 0 (you can't have
+    /// negative BAC).
+    ///
+    /// Walking chronologically — rather than summing per-drink
+    /// contributions independently — is the difference between counting
+    /// a drink for the full ~2.5h it raises BAC versus silently dropping
+    /// it from the calculator once its individual contribution would go
+    /// negative. The per-drink-clamp approach undercounts dramatically
+    /// in long sessions because early drinks vanish from the sum well
+    /// before the body has actually processed them.
     func bac(profile: Profile, now: Date = Date()) -> Double {
         let bodyGrams = profile.weightKg * 1000
         let denom = bodyGrams * profile.sex.r
         guard denom > 0 else { return 0 }
-        return drinks.reduce(0.0) { acc, d in
-            let hoursSince = max(0, now.timeIntervalSince(d.consumedAt) / 3600)
-            let contribution = (d.grams / denom) * 100 - eliminationRate * hoursSince
-            return acc + max(0, contribution)
+        let sorted = drinks.sorted { $0.consumedAt < $1.consumedAt }
+        var bac: Double = 0
+        var lastEvent: Date? = nil
+        for d in sorted where d.consumedAt <= now {
+            if let last = lastEvent {
+                let hours = d.consumedAt.timeIntervalSince(last) / 3600
+                bac = max(0, bac - eliminationRate * hours)
+            }
+            bac += (d.grams / denom) * 100
+            lastEvent = d.consumedAt
         }
+        if let last = lastEvent {
+            let hours = max(0, now.timeIntervalSince(last) / 3600)
+            bac = max(0, bac - eliminationRate * hours)
+        }
+        return bac
     }
 
     func hoursUntil(threshold: Double, profile: Profile, now: Date = Date()) -> Double {
         max(0, (bac(profile: profile, now: now) - threshold) / eliminationRate)
+    }
+
+    /// Auto-end the sesh if it's gone stale. Two staleness paths:
+    ///
+    ///   • Drinks exist → end when BAC has decayed to 0 AND the last
+    ///     drink was consumed more than `staleAfter` seconds ago. The
+    ///     12h default gives the user the whole "morning after" window
+    ///     to glance at their timeline before we clean up, while still
+    ///     killing the "logged 1 drink and forgot to end" case the
+    ///     next time anything touches LiveSeshState.
+    ///   • No drinks (user pressed start by accident) → end after
+    ///     `emptyStaleAfter` seconds from startedAt. 1h is plenty —
+    ///     a deliberate sesh logs a drink within minutes.
+    ///
+    /// Cheap to call: returns immediately when the sesh isn't active
+    /// or BAC is still > 0, so it's safe to fire on every TimelineView
+    /// tick + every appear without doing real work most of the time.
+    /// Returns true when the sesh was auto-ended so callers can chain
+    /// cleanup (e.g., tearing down the lock-screen activity).
+    @discardableResult
+    func endIfStale(
+        profile: Profile,
+        now: Date = Date(),
+        staleAfter: TimeInterval = 12 * 3600,
+        emptyStaleAfter: TimeInterval = 1 * 3600
+    ) -> Bool {
+        guard isActive else { return false }
+        guard bac(profile: profile, now: now) == 0 else { return false }
+
+        if let last = drinks.map({ $0.consumedAt }).max() {
+            guard now.timeIntervalSince(last) > staleAfter else { return false }
+        } else if let started = startedAt {
+            guard now.timeIntervalSince(started) > emptyStaleAfter else { return false }
+        } else {
+            return false
+        }
+
+        end()
+        return true
     }
 
     // MARK: persistence
@@ -2697,18 +2893,33 @@ final class GhostMembersStore: ObservableObject {
     }
 
     /// Per-drink Widmark, identical to `LiveSeshState.bac` so a ghost and
-    /// a real user with matching stats and drinks read the same BAC. Each
-    /// drink contributes `(grams / (mass × r)) × 100` minus 0.015 ×
-    /// hours-since-that-drink, clamped at 0.
+    /// a real user with matching stats and drinks read the same BAC.
+    /// Chronological simulation: BAC accumulates with each drink and
+    /// decays continuously at the elimination rate between events,
+    /// clamped at 0. (Per-drink-independent decay with a clamp would
+    /// silently drop early drinks from the calculator long before the
+    /// body had finished processing them — see LiveSeshState.bac for
+    /// the longer rationale.)
     func bac(for ghost: GhostMember, now: Date = Date()) -> Double {
         let bodyGrams = ghost.weightKg * 1000
         let denom = bodyGrams * ghost.sex.r
         guard denom > 0 else { return 0 }
-        return ghost.drinks.reduce(0.0) { acc, d in
-            let hoursSince = max(0, now.timeIntervalSince(d.consumedAt) / 3600)
-            let contribution = (d.grams / denom) * 100 - eliminationRate * hoursSince
-            return acc + max(0, contribution)
+        let sorted = ghost.drinks.sorted { $0.consumedAt < $1.consumedAt }
+        var bac: Double = 0
+        var lastEvent: Date? = nil
+        for d in sorted where d.consumedAt <= now {
+            if let last = lastEvent {
+                let hours = d.consumedAt.timeIntervalSince(last) / 3600
+                bac = max(0, bac - eliminationRate * hours)
+            }
+            bac += (d.grams / denom) * 100
+            lastEvent = d.consumedAt
         }
+        if let last = lastEvent {
+            let hours = max(0, now.timeIntervalSince(last) / 3600)
+            bac = max(0, bac - eliminationRate * hours)
+        }
+        return bac
     }
 
     // MARK: persistence
@@ -3228,6 +3439,12 @@ struct RootView: View {
             switch new {
             case .signedIn:
                 invites.start()
+                // Ask for notification permission (first time) and register
+                // / re-upload the APNs token now that there's a user to key
+                // it to. No-op + graceful if the Push capability isn't on
+                // the target yet — see PushNotifications.swift.
+                PushManager.shared.requestAuthorizationAndRegister()
+                PushManager.shared.reuploadTokenIfAvailable()
             case .signedOut, .loading:
                 invites.stop()
             }
@@ -3895,6 +4112,9 @@ private struct SessionView: View {
     /// it; accept/decline inside the sheet drains the banner naturally
     /// because each action removes the row from `invites.pending`.
     @State private var invitesSheetOpen = false
+    /// Observes push taps. When a sesh-invite notification is tapped,
+    /// `push.openInvites` flips true and we present the inbox + refresh.
+    @ObservedObject private var push = PushManager.shared
     /// Which page the user is on. Driven by both the segmented switcher
     /// at the top and the swipe gesture on the underlying TabView.
     @State private var mode: SeshMode = .plan
@@ -4095,6 +4315,15 @@ private struct SessionView: View {
             }
         }
         .animation(.spring(response: 0.45, dampingFraction: 0.82), value: invites.pending.count)
+        // A tapped invite push asks us to open the inbox. Refresh first so
+        // the just-arrived invite is present even if the 7s poll hasn't
+        // come around yet, then present the sheet and reset the flag.
+        .onChange(of: push.openInvites) { _, shouldOpen in
+            guard shouldOpen else { return }
+            Task { await invites.refresh() }
+            invitesSheetOpen = true
+            push.openInvites = false
+        }
         .sheet(isPresented: $invitesSheetOpen) {
             InvitesSheet(
                 invites: invites,
@@ -4153,10 +4382,22 @@ private struct SessionView: View {
                 tg.addTask { await planGroup.resumeIfAny() }
                 tg.addTask { await liveGroup.resumeIfAny() }
             }
+            // Garbage-collect any stale solo sesh that was abandoned
+            // without an explicit END (e.g., user logged a drink
+            // weeks ago and never reopened the app). The check is a
+            // no-op when BAC is still > 0, so a legitimately long
+            // night isn't affected — only sessions that have
+            // biologically wound down get cleaned up. If we did end
+            // it, also tear down the lock-screen activity so the
+            // dead card stops following the user around.
+            if live.endIfStale(profile: profile) {
+                LiveActivityController.shared.end()
+            }
         }
         // Pull venue + specials catalog on first launch so the chip /
-        // picker have something to render. Falls back to hardcoded
-        // Handelspuben if the migration hasn't been applied yet.
+        // picker have something to render. With no curated seed list,
+        // an empty DB just means "Featured" stays empty and the user
+        // discovers their bar via the search field.
         .task { await venues.refresh() }
         // When the plan members list refreshes (entry or 3s poll), pull
         // my synced duration from the DB into the local slider so the
@@ -4366,8 +4607,12 @@ private struct SessionView: View {
                 // group's lifecycle is owned by GroupSheet. Ghost members
                 // also reset — they're scoped to the night, not the
                 // app install (a stale ghost roster would silently
-                // inflate tomorrow's roster + leaderboard).
+                // inflate tomorrow's roster + leaderboard). The
+                // lock-screen activity is torn down here too — the
+                // child view's confirmation handler does the same on
+                // its path, this one covers parent-driven exits.
                 ghosts.clearAll()
+                LiveActivityController.shared.end()
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
                     mode = .plan
                 }
@@ -6365,9 +6610,9 @@ private struct GroupBar: View {
 
 // MARK: - Venue Chip / Sheet
 //
-// The chip is the user's persistent "Tonight at: Handelspuben" marker —
-// shown in the home view header. Tap → VenueSheet → pick a featured bar
-// (sorted by distance) or check out. When a venue is selected the chip
+// The chip is the user's persistent "Tonight at: <bar>" marker — shown
+// in the home view header. Tap → VenueSheet → search Apple Maps and
+// check in to any bar, or check out. When a venue is selected the chip
 // glows whiskey, otherwise it's a discreet "find bars near you" CTA.
 
 private struct VenueChip: View {
@@ -6762,13 +7007,13 @@ private struct VenueSheet: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "mappin.slash")
+            Image(systemName: "magnifyingglass")
                 .font(.system(size: 28))
                 .foregroundStyle(Color.bronze)
-            Text("No featured bars yet")
+            Text("Find your bar")
                 .font(.system(size: 14, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.cream)
-            Text("Featured bars will appear here as Sesh adds them.")
+            Text("Search above to check in to any bar on Apple Maps. Specials attach automatically for venues we know.")
                 .font(.system(size: 11, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(0.6))
                 .multilineTextAlignment(.center)
@@ -8609,6 +8854,10 @@ private struct LiveSeshView: View {
         ) {
             Button("End sesh", role: .destructive) {
                 live.end()
+                // Tear down the lock-screen card alongside the in-app
+                // timeline. Same intent as the END handler upstream:
+                // a stale BAC reading on a locked phone is creepy.
+                LiveActivityController.shared.end()
                 // When embedded, hand control back to the parent so it
                 // can swipe to PLAN. When presented modally, fall back
                 // to environment-driven dismissal.
@@ -8622,6 +8871,226 @@ private struct LiveSeshView: View {
         } message: {
             Text("This clears the timeline. Your regular session is unaffected.")
         }
+        // ---- Lock-screen Live Activity sync ----
+        // The activity is keyed off the user's current BAC, drink count,
+        // and group/solo mode. We re-fire on every change so the
+        // lock-screen + Dynamic Island always reflect the latest snap.
+        // start() is idempotent — calling it on an already-running
+        // activity just updates it, so we don't need to track "is it
+        // started" state here.
+        .onAppear { syncLockScreenActivity() }
+        .onChange(of: liveSnapshotKey) { _, _ in syncLockScreenActivity() }
+        .onChange(of: inGroup) { _, _ in
+            // Switching between solo and group means the heroLabel
+            // ("LIVE SESH" vs "GROUP SESH") needs to change. Easiest
+            // way: tear down and let the next sync rebuild it with
+            // the right attributes.
+            LiveActivityController.shared.end()
+            syncLockScreenActivity()
+        }
+    }
+
+    // MARK: - Live Activity sync
+
+    /// Composite key that flips whenever any field the lock-screen
+    /// activity cares about has changed. Bound to `.onChange` so
+    /// SwiftUI fires our update closure exactly when the lock-screen
+    /// card would render differently.
+    private var liveSnapshotKey: String {
+        let now = Date()
+        let bac = currentBAC(now: now)
+        var key = "\(totalDrinkCount)-\(String(format: "%.4f", bac))-\(startTime?.timeIntervalSince1970 ?? 0)"
+        if inGroup {
+            // Include every member's drink count + bac so the
+            // activity pushes a refresh the moment somebody else's
+            // row would render differently. The poll-driven group
+            // store updates `members` every 3s; this key turns those
+            // changes into a re-publish to the lock screen.
+            let parts = group.members.map { m -> String in
+                let mb = group.liveBAC(for: m.profileId, now: now)
+                let mc = group.totalDrinkCount(for: m.profileId)
+                return "\(m.profileId.uuidString.prefix(8)):\(mc):\(String(format: "%.3f", mb))"
+            }
+            key += "|" + parts.joined(separator: ",")
+        }
+        return key
+    }
+
+    /// Decide whether to start, update, or end the lock-screen activity
+    /// based on the current state. Single source of truth for activity
+    /// lifecycle — the END action handler is the only other place that
+    /// tears it down explicitly (because it has to fire before the
+    /// view disappears).
+    private func syncLockScreenActivity() {
+        let now = Date()
+        // Garbage-collect a stale solo sesh before reading state for
+        // the activity. `endIfStale` is a no-op unless BAC has hit 0
+        // AND the last drink was >12h ago, so this only fires for
+        // genuinely abandoned sessions. Group seshs aren't touched
+        // (group lifecycle lives in the DB via SessionService).
+        if !inGroup {
+            _ = live.endIfStale(profile: profile, now: now)
+        }
+        let bac = currentBAC(now: now)
+        let count = totalDrinkCount
+        let started = startTime ?? now
+        let status = statusFor(bac: bac)
+        let roster = lockScreenRoster(now: now)
+
+        // No drinks AND no started time AND BAC has decayed to zero ⇒
+        // there's nothing to surface. End any leftover activity from a
+        // prior sesh that the user re-entered.
+        if count == 0 && bac == 0 && !inGroup && !live.isActive {
+            LiveActivityController.shared.end()
+            // Wipe the home-screen widget's snapshot too so the widget
+            // flips to its empty state instead of clinging to a stale
+            // BAC from a previous night.
+            WidgetSharedStore.clear()
+            return
+        }
+
+        LiveActivityController.shared.start(
+            bac: bac,
+            drinkCount: count,
+            startedAt: started,
+            inGroup: inGroup,
+            statusRaw: status.rawValue,
+            quickDrinks: lockScreenQuickDrinks,
+            roster: roster,
+            now: now
+        )
+
+        // Mirror the same data into the home-screen widget's shared
+        // store. The widget projects BAC forward from this snapshot
+        // on its own timeline (every 5 min for an hour) so the
+        // number actually ticks down on the home screen without
+        // requiring the app to be open.
+        writeWidgetSnapshot(
+            bac: bac,
+            count: count,
+            started: started,
+            status: status,
+            roster: roster,
+            now: now
+        )
+    }
+
+    /// Translate the in-memory live state into a `WidgetSnapshot` and
+    /// hand it to the App Group store. Called from every
+    /// `syncLockScreenActivity` invocation so the widget always
+    /// reflects what the lock-screen activity reflects, plus
+    /// continues to decay BAC linearly between writes.
+    private func writeWidgetSnapshot(
+        bac: Double,
+        count: Int,
+        started: Date,
+        status: Status,
+        roster: [SeshActivityAttributes.RosterMember],
+        now: Date
+    ) {
+        let hoursToSober = max(0, bac / 0.015)
+        let soberAt = now.addingTimeInterval(hoursToSober * 3600)
+        let widgetRoster: [WidgetSnapshot.Member] = roster
+            .filter { !$0.isMe }   // me is rendered as the headline value
+            .map { m in
+                WidgetSnapshot.Member(
+                    profileId: m.profileId,
+                    name: m.name,
+                    bac: m.bac,
+                    statusRaw: m.statusRaw,
+                    drinkCount: m.drinkCount,
+                    initials: m.initials
+                )
+            }
+        let snap = WidgetSnapshot(
+            snapshotAt: now,
+            hasActiveSesh: true,
+            inGroup: inGroup,
+            meName: profile.name,
+            meBac: max(0, bac),
+            meStatusRaw: status.rawValue,
+            meDrinkCount: count,
+            meStartedAt: started,
+            meSoberAt: soberAt,
+            roster: widgetRoster
+        )
+        WidgetSharedStore.write(snap)
+    }
+
+    /// Up to three of the user's most-recent drinks, projected into
+    /// the wire format the activity carries. Empty in group mode —
+    /// lock-screen logging hits Supabase, which we don't gate on a
+    /// single tap for v1. Empty for a brand-new account too; the
+    /// widget hides the row when this is empty so it doesn't render
+    /// as dead space.
+    private var lockScreenQuickDrinks: [SeshActivityAttributes.QuickDrink] {
+        guard !inGroup else { return [] }
+        return quickAdd.prefix(3).map { opt in
+            SeshActivityAttributes.QuickDrink(
+                name: opt.name,
+                detail: opt.detail,
+                category: opt.category.rawValue,
+                volumeML: opt.volumeML,
+                abv: opt.abv,
+                emoji: opt.category.emoji
+            )
+        }
+    }
+
+    /// Project the group's live roster into the wire format the
+    /// activity carries. Empty in solo mode (the widget hides the
+    /// roster section when empty). Capped at 4 members — sorted by
+    /// BAC descending so the most "interesting" (drunkest) rows
+    /// surface in a large group. The user is always included even
+    /// if they're sober and bottom of the BAC list, so they can
+    /// always find themselves on the card.
+    private func lockScreenRoster(now: Date) -> [SeshActivityAttributes.RosterMember] {
+        guard inGroup else { return [] }
+        let me = profile.id
+        let scored: [(SeshActivityAttributes.RosterMember, Double)] = group.members.map { m in
+            let prof = group.memberProfiles[m.profileId]
+            let name = prof?.name ?? "Member"
+            let bac = group.liveBAC(for: m.profileId, now: now)
+            let status = statusFor(bac: bac)
+            let count = group.totalDrinkCount(for: m.profileId)
+            return (
+                SeshActivityAttributes.RosterMember(
+                    profileId: m.profileId,
+                    name: name,
+                    bac: bac,
+                    statusRaw: status.rawValue,
+                    drinkCount: count,
+                    initials: initialsFor(name: name),
+                    isMe: m.profileId == me
+                ),
+                bac
+            )
+        }
+        // Sort by BAC desc, but pin "me" so the user is always shown
+        // even if a 5+ person group would otherwise truncate them.
+        let myRow = scored.first { $0.0.isMe }
+        let othersSorted = scored
+            .filter { !$0.0.isMe }
+            .sorted { $0.1 > $1.1 }
+        var out: [SeshActivityAttributes.RosterMember] = []
+        if let myRow { out.append(myRow.0) }
+        for (row, _) in othersSorted {
+            if out.count >= 4 { break }
+            out.append(row)
+        }
+        return out
+    }
+
+    /// Cheap 1–2 character initials from a display name. Falls back
+    /// to "?" so the avatar circle is never empty. Used by the
+    /// roster rows on the lock-screen card.
+    private func initialsFor(name: String) -> String {
+        let parts = name
+            .split(whereSeparator: { $0.isWhitespace })
+            .prefix(2)
+        let letters = parts.compactMap { $0.first }
+        let joined = String(letters).uppercased()
+        return joined.isEmpty ? "?" : joined
     }
 
     @ViewBuilder
