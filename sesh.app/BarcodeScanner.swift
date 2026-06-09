@@ -33,7 +33,52 @@ struct ScannedBeverage {
     var abv: Double?
     var source: Source
 
-    enum Source { case ownCatalog, openFoodFacts, unknown }
+    enum Source { case ownCatalog, localCache, openFoodFacts, unknown }
+}
+
+// MARK: - Local (device-only) cache
+
+/// A user's own confirmed barcodes, stored on-device. Lets them re-scan a
+/// can they've already entered and get instant specs even before that
+/// entry has reached 5-user consensus in the shared catalog. Purely local;
+/// never trusted by anyone else.
+enum BeverageLocalCache {
+    private static let key = "sesh.beverageBarcodes.local.v1"
+
+    struct Entry: Codable {
+        var name: String
+        var category: String   // DrinkCategory rawValue
+        var volumeML: Double
+        var abv: Double
+    }
+
+    private static func all() -> [String: Entry] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let dict = try? JSONDecoder().decode([String: Entry].self, from: data)
+        else { return [:] }
+        return dict
+    }
+
+    static func lookup(barcode: String) -> ScannedBeverage? {
+        guard !barcode.isEmpty, let e = all()[barcode] else { return nil }
+        return ScannedBeverage(
+            barcode: barcode,
+            name: e.name,
+            category: DrinkCategory(rawValue: e.category) ?? .beer,
+            volumeML: e.volumeML,
+            abv: e.abv,
+            source: .localCache
+        )
+    }
+
+    static func save(barcode: String, name: String, category: DrinkCategory, volumeML: Double, abv: Double) {
+        guard !barcode.isEmpty else { return }
+        var dict = all()
+        dict[barcode] = Entry(name: name, category: category.rawValue, volumeML: volumeML, abv: abv)
+        if let data = try? JSONEncoder().encode(dict) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
 }
 
 // MARK: - Lookup service
@@ -44,15 +89,38 @@ final class BeverageLookupService: ObservableObject {
     /// Resolve a barcode. Never throws — a total miss just returns an
     /// `.unknown` result carrying the barcode, so the confirm sheet can
     /// open in manual mode.
+    ///
+    /// Tiers, most-trusted first:
+    ///   1. Verified shared catalog (5-user consensus).
+    ///   2. This device's own prior confirmation (instant for the user,
+    ///      even before consensus).
+    ///   3. Open Food Facts.
+    ///   4. Nothing → manual.
     func lookup(barcode: String) async -> ScannedBeverage {
         if let own = await lookupOwnCatalog(barcode: barcode) { return own }
+        if let local = BeverageLocalCache.lookup(barcode: barcode) { return local }
         if let off = await lookupOpenFoodFacts(barcode: barcode) { return off }
         return ScannedBeverage(barcode: barcode, source: .unknown)
     }
 
-    /// Upsert a user-confirmed spec into the shared catalog so the next
-    /// scan of this barcode is instant. Fire-and-forget.
-    func contribute(barcode: String, name: String, category: DrinkCategory, volumeML: Double, abv: Double) async {
+    /// Result of casting a consensus vote.
+    struct SubmitResult { let verified: Bool; let count: Int; let threshold: Int }
+
+    /// Record the user's confirmed spec as a consensus vote AND cache it on
+    /// this device. The spec only lands in the shared `beverage_barcodes`
+    /// catalog once `threshold` distinct users have submitted the same
+    /// content for this barcode — until then it's device-local only.
+    /// Returns the running tally (or nil if the submit failed / barcode
+    /// was empty, e.g. manual entry with no scan).
+    @discardableResult
+    func submit(barcode: String, name: String, category: DrinkCategory, volumeML: Double, abv: Double) async -> SubmitResult? {
+        // Always cache locally first — works offline and regardless of
+        // whether the vote reaches the server.
+        BeverageLocalCache.save(barcode: barcode, name: name, category: category, volumeML: volumeML, abv: abv)
+
+        // Manual entries with no scanned barcode can't be voted on.
+        guard !barcode.isEmpty else { return nil }
+
         struct Params: Encodable {
             let p_barcode: String
             let p_name: String
@@ -60,9 +128,10 @@ final class BeverageLookupService: ObservableObject {
             let p_volume_ml: Double
             let p_abv: Double
         }
+        struct Response: Decodable { let verified: Bool; let count: Int; let threshold: Int }
         do {
-            _ = try await supabase
-                .rpc("upsert_beverage_barcode", params: Params(
+            let resp: Response = try await supabase
+                .rpc("submit_beverage_barcode", params: Params(
                     p_barcode: barcode,
                     p_name: name,
                     p_category: category.rawValue,
@@ -70,10 +139,13 @@ final class BeverageLookupService: ObservableObject {
                     p_abv: abv
                 ))
                 .execute()
+                .value
+            return SubmitResult(verified: resp.verified, count: resp.count, threshold: resp.threshold)
         } catch {
-            // Non-fatal: the drink still logs locally; the catalog just
-            // doesn't learn this entry this time.
-            print("Barcode contribute failed:", error.localizedDescription)
+            // Non-fatal: the drink still logs and the local cache already
+            // holds the spec; the vote just didn't reach the server.
+            print("Barcode submit failed:", error.localizedDescription)
+            return nil
         }
     }
 
@@ -298,10 +370,12 @@ struct BarcodeScanFlow: View {
                 BarcodeConfirmView(
                     beverage: beverage,
                     onLog: { option, edited in
-                        // Persist the confirmed spec to the shared catalog,
-                        // then log the drink.
+                        // Cache locally + cast a consensus vote (the spec
+                        // only joins the shared catalog after 5 distinct
+                        // users agree). Fire-and-forget — the drink logs
+                        // immediately either way.
                         Task {
-                            await lookup.contribute(
+                            await lookup.submit(
                                 barcode: edited.barcode,
                                 name: option.name,
                                 category: option.category,
@@ -436,14 +510,26 @@ private struct BarcodeConfirmView: View {
     }
 
     private var volumeML: Double? { Double(volumeText.replacingOccurrences(of: ",", with: ".")) }
+    /// Parsed ABV percent (0…100), or nil if blank/non-numeric.
+    private var abvPercent: Double? {
+        Double(abvText.replacingOccurrences(of: ",", with: "."))
+    }
+    /// Valid only when 0 < % ≤ 100 — you can't have a drink stronger than
+    /// pure alcohol.
     private var abvFraction: Double? {
-        guard let v = Double(abvText.replacingOccurrences(of: ",", with: ".")) else { return nil }
+        guard let v = abvPercent, v > 0, v <= 100 else { return nil }
         return v / 100.0
+    }
+    /// True when the user typed a number that's out of the 0–100 range, so
+    /// we can show an inline warning rather than a silently-disabled button.
+    private var abvOutOfRange: Bool {
+        guard let v = abvPercent else { return false }
+        return v <= 0 || v > 100
     }
     private var canLog: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty
             && (volumeML ?? 0) > 0
-            && (abvFraction ?? 0) > 0
+            && abvFraction != nil
     }
 
     var body: some View {
@@ -461,17 +547,24 @@ private struct BarcodeConfirmView: View {
                     }
                     categoryField
                     volumeField
-                    field(label: "ALCOHOL %") {
-                        HStack {
-                            TextField("", text: $abvText, prompt: Text("5.0")
-                                .foregroundStyle(Color.cream.opacity(0.4)))
-                                .textFieldStyle(.plain)
-                                .keyboardType(.decimalPad)
-                                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                                .foregroundStyle(Color.cream)
-                            Text("% ABV")
-                                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Color.bronze)
+                    VStack(alignment: .leading, spacing: 6) {
+                        field(label: "ALCOHOL %") {
+                            HStack {
+                                TextField("", text: $abvText, prompt: Text("5.0")
+                                    .foregroundStyle(Color.cream.opacity(0.4)))
+                                    .textFieldStyle(.plain)
+                                    .keyboardType(.decimalPad)
+                                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(Color.cream)
+                                Text("% ABV")
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(Color.bronze)
+                            }
+                        }
+                        if abvOutOfRange {
+                            Text("Alcohol % must be between 0 and 100.")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color(red: 0.85, green: 0.40, blue: 0.34))
                         }
                     }
                     logButton
@@ -511,7 +604,8 @@ private struct BarcodeConfirmView: View {
 
     private var sourceLabel: String {
         switch beverage.source {
-        case .ownCatalog:    return "FROM SESH CATALOG"
+        case .ownCatalog:    return "VERIFIED · SESH CATALOG"
+        case .localCache:    return "SAVED ON THIS DEVICE"
         case .openFoodFacts: return "FROM OPEN FOOD FACTS"
         case .unknown:       return "NEW ENTRY"
         }
