@@ -3564,6 +3564,9 @@ struct RootView: View {
     /// `.onChange(of: auth.state)` and stopped on sign-out so the loop
     /// only runs while there's actually a user to fetch invites for.
     @StateObject private var invites = InvitesService()
+    /// Current user's catalog role (owner / admin / user) + the owner's
+    /// management roster. Refreshed on sign-in.
+    @StateObject private var admin = AdminService()
 
     var body: some View {
         ZStack {
@@ -3575,7 +3578,7 @@ struct RootView: View {
                 AuthView(auth: auth)
                     .transition(.opacity)
             case .signedIn(let profile):
-                SessionView(profile: profile, auth: auth, invites: invites)
+                SessionView(profile: profile, auth: auth, invites: invites, admin: admin)
                     .transition(.opacity)
             }
         }
@@ -3584,6 +3587,7 @@ struct RootView: View {
             switch new {
             case .signedIn:
                 invites.start()
+                Task { await admin.refresh() }
                 // Ask for notification permission (first time) and register
                 // / re-upload the APNs token now that there's a user to key
                 // it to. No-op + graceful if the Push capability isn't on
@@ -4254,6 +4258,8 @@ private struct SessionView: View {
     /// In-app invite inbox, owned by RootView so the polling loop is
     /// scoped to the auth lifecycle rather than this view's lifetime.
     @ObservedObject var invites: InvitesService
+    /// Catalog role + admin management, owned by RootView.
+    @ObservedObject var admin: AdminService
     /// Two independent group stores — one per mode. A user can be in
     /// different groups across PLAN and LIVE, in only one, or in
     /// neither. Each store remembers its own session across launches
@@ -4666,7 +4672,7 @@ private struct SessionView: View {
                 .presentationBackground(Color.ink)
         }
         .sheet(isPresented: $profileOpen) {
-            ProfileSheet(profile: profile, auth: auth)
+            ProfileSheet(profile: profile, auth: auth, admin: admin)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
@@ -5879,6 +5885,7 @@ private struct YouRow: View {
 private struct ProfileSheet: View {
     let profile: Profile
     @ObservedObject var auth: AuthService
+    @ObservedObject var admin: AdminService
     @Environment(\.dismiss) private var dismiss
 
     @State private var name: String
@@ -5891,10 +5898,12 @@ private struct ProfileSheet: View {
 
     @State private var saving = false
     @State private var errorMessage: String?
+    @State private var adminPanelOpen = false
 
-    init(profile: Profile, auth: AuthService) {
+    init(profile: Profile, auth: AuthService, admin: AdminService) {
         self.profile = profile
         self.auth = auth
+        self.admin = admin
         _name = State(initialValue: profile.name)
         _age = State(initialValue: Double(profile.age))
         _sex = State(initialValue: profile.sex)
@@ -6012,6 +6021,46 @@ private struct ProfileSheet: View {
                     .disabled(!dirty || saving)
                     .buttonStyle(PressScaleStyle())
 
+                    // Admin entry — only shown to admins / the owner. Opens
+                    // the catalog-role management panel.
+                    if admin.isAdmin {
+                        Button {
+                            adminPanelOpen = true
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(Color.whiskey)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(admin.isOwner ? "OWNER" : "ADMIN")
+                                        .font(.system(size: 12, weight: .black, design: .monospaced))
+                                        .tracking(2.0)
+                                        .foregroundStyle(Color.cream)
+                                    Text(admin.isOwner
+                                         ? "Add beverages instantly · manage admins"
+                                         : "Add beverages without verification")
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.55))
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(Color.bronze)
+                            }
+                            .padding(.vertical, 14)
+                            .padding(.horizontal, 18)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(Color.whiskey.opacity(0.08))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+
                     Button {
                         Task {
                             try? await auth.signOut()
@@ -6045,6 +6094,181 @@ private struct ProfileSheet: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 28)
                 .padding(.bottom, 40)
+            }
+        }
+        .sheet(isPresented: $adminPanelOpen) {
+            AdminPanelView(admin: admin)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+    }
+}
+
+// MARK: - Admin panel
+
+/// Catalog-role management. Owners get the grant-by-email field + a
+/// demotable roster; plain admins just see their status. All actions are
+/// server-gated to the owner, so the UI here is a convenience, not the
+/// security boundary.
+private struct AdminPanelView: View {
+    @ObservedObject var admin: AdminService
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var email = ""
+    @State private var working = false
+    @State private var toast: String?
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 20) {
+                    header
+                    if admin.isOwner {
+                        grantSection
+                        rosterSection
+                    } else {
+                        Text("You can add beverages to the catalog without waiting for 5-user verification. Only the owner can promote or demote admins.")
+                            .font(.system(size: 13, weight: .regular, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.65))
+                            .lineSpacing(3)
+                    }
+                    Spacer(minLength: 20)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 14)
+                .padding(.bottom, 32)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .task { await admin.loadAdmins() }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(admin.isOwner ? "OWNER" : "ADMIN")
+                .font(.system(size: 11, weight: .black, design: .monospaced))
+                .tracking(2.4)
+                .foregroundStyle(Color.bronze)
+            Text("Catalog roles")
+                .font(.system(size: 26, weight: .black, design: .rounded))
+                .foregroundStyle(Color.cream)
+            if let toast {
+                Text(toast)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.whiskey)
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    private var grantSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("GRANT ADMIN")
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .tracking(2.0)
+                .foregroundStyle(Color.bronze)
+            HStack(spacing: 8) {
+                TextField("", text: $email, prompt: Text("their account email")
+                    .foregroundStyle(Color.cream.opacity(0.4)))
+                    .textFieldStyle(.plain)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.emailAddress)
+                    .autocorrectionDisabled(true)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.inkElev.opacity(0.7))
+                    )
+                Button {
+                    grant()
+                } label: {
+                    Group {
+                        if working {
+                            ProgressView().tint(Color.ink)
+                        } else {
+                            Image(systemName: "plus")
+                                .font(.system(size: 15, weight: .black))
+                        }
+                    }
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 46, height: 46)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.whiskey))
+                }
+                .buttonStyle(PressScaleStyle())
+                .disabled(working || email.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    private var rosterSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("ADMINS")
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .tracking(2.0)
+                .foregroundStyle(Color.bronze)
+            VStack(spacing: 8) {
+                ForEach(admin.admins) { entry in
+                    HStack(spacing: 12) {
+                        AvatarView(urlString: nil, initial: String(entry.name.prefix(1)).uppercased(), size: 34)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(entry.name)
+                                .font(.system(size: 14, weight: .heavy, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                            Text(entry.isOwner ? "Owner" : "Admin")
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Color.cream.opacity(0.5))
+                        }
+                        Spacer(minLength: 0)
+                        if entry.isOwner {
+                            Image(systemName: "crown.fill")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(Color.whiskey)
+                        } else {
+                            Button {
+                                Task { await admin.revoke(userId: entry.userId) }
+                            } label: {
+                                Text("DEMOTE")
+                                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                                    .tracking(1.2)
+                                    .foregroundStyle(Color(red: 0.85, green: 0.40, blue: 0.34))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .overlay(
+                                        Capsule().strokeBorder(Color(red: 0.85, green: 0.40, blue: 0.34).opacity(0.4), lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(PressScaleStyle())
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.inkElev.opacity(0.6))
+                    )
+                }
+            }
+        }
+    }
+
+    private func grant() {
+        let target = email.trimmingCharacters(in: .whitespaces)
+        guard !target.isEmpty else { return }
+        working = true
+        toast = nil
+        Task {
+            let name = await admin.grant(email: target)
+            working = false
+            if let name {
+                toast = "\(name) is now an admin"
+                email = ""
+            } else {
+                toast = "No account found for that email"
             }
         }
     }

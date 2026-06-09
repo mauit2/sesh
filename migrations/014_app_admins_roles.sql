@@ -1,0 +1,11 @@
+-- 014_app_admins_roles.sql
+--
+-- Role system for the beverage-barcode catalog. Roles live in their OWN
+-- table (never on profiles, which is self-editable). All writes go through
+-- owner-only SECURITY DEFINER functions; the table takes no direct writes.
+--   owner -> add directly (bypass 5-user consensus) + grant/demote admins
+--   admin -> add directly (bypass consensus), cannot grant/demote
+--   user  -> votes count toward consensus
+-- See the applied migration for the full body (app_admins table, the
+-- app_admins_select RLS policy, owner bootstrap, grant_admin_by_email,
+-- revoke_admin, and the admin-bypass in submit_beverage_barcode).
