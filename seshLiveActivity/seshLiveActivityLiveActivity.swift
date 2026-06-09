@@ -223,32 +223,50 @@ private struct LockScreenView: View {
                     .offset(x: 60, y: 30)
             }
 
-            VStack(alignment: .leading, spacing: 12) {
-                header
-                bigBAC
-                footer
-
-                // Lock-screen quick-add. One tap = one drink. Solo only —
-                // group mode would need network and isn't safe to gate
-                // on a single tap. The buttons are ~36pt tall so the
-                // total card height stays inside the iOS lock-screen
-                // budget (~160pt before the OS starts trimming).
-                if !state.quickDrinks.isEmpty && !attributes.inGroup {
-                    QuickAddRow(drinks: state.quickDrinks, compact: false)
-                        .padding(.top, 2)
-                }
-
-                // Group roster — one row per member (max 4). Sorted
-                // by BAC desc with the user pinned. Hidden in solo
-                // mode (roster is empty).
-                if !state.roster.isEmpty {
-                    RosterStack(members: state.roster, compact: false)
-                        .padding(.top, 2)
-                }
+            // iOS caps the lock-screen Live Activity height (~160–200pt)
+            // and gives it no scrolling, so the two modes are laid out
+            // differently to make the most of the space:
+            //   • Solo  → big headline BAC + footer (the number IS the
+            //     point).
+            //   • Group → roster-centric: skip the giant duplicate number
+            //     (your BAC is already in your roster row) so every
+            //     member fits without being clipped off the bottom.
+            if attributes.inGroup && !state.roster.isEmpty {
+                groupBody
+            } else {
+                soloBody
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
         }
+    }
+
+    private var soloBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            bigBAC
+            footer
+            if !state.quickDrinks.isEmpty {
+                QuickAddRow(drinks: state.quickDrinks, compact: false)
+                    .padding(.top, 2)
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+    }
+
+    private var groupBody: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            header
+            // Up to 3 members (you + the two drunkest others) so nobody
+            // gets clipped. Compact rows keep the whole card inside the
+            // height budget even with the quick-add row below.
+            RosterStack(members: Array(state.roster.prefix(3)), compact: true)
+            if !state.quickDrinks.isEmpty {
+                QuickAddRow(drinks: state.quickDrinks, compact: true)
+                    .padding(.top, 1)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     private var header: some View {
