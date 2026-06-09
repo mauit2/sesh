@@ -181,7 +181,11 @@ enum Status: String {
 
 // MARK: - Palette
 
-private extension Color {
+// Internal (not fileprivate) so sibling files in the app target — e.g.
+// BarcodeScanner.swift — can use the same palette without duplicating the
+// hex values. The widget extension is a separate module and keeps its own
+// local copy.
+extension Color {
     static let ink     = Color(red: 0.043, green: 0.039, blue: 0.031)
     static let inkElev = Color(red: 0.075, green: 0.067, blue: 0.055)
     static let whiskey = Color(red: 0.910, green: 0.659, blue: 0.290)
@@ -6529,7 +6533,9 @@ private struct SexToggle: View {
     }
 }
 
-private struct PressScaleStyle: ButtonStyle {
+// Internal so sibling files in the app target (e.g. BarcodeScanner.swift)
+// can reuse the same press-feedback button style.
+struct PressScaleStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
@@ -10890,6 +10896,8 @@ private struct LiveMenuSheet: View {
     let onPick: (DrinkOption) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var selectedCategory: DrinkCategory = .beer
+    /// Drives the full-screen barcode scan flow.
+    @State private var scanning = false
 
     private var specialsHeader: String {
         if let n = venueName, !n.isEmpty { return "Specials at \(n)" }
@@ -10903,6 +10911,44 @@ private struct LiveMenuSheet: View {
                     .font(.system(size: 22, weight: .black, design: .rounded))
                     .foregroundStyle(Color.cream)
                     .padding(.top, 14)
+
+                // Scan a can/bottle barcode → resolve specs → confirm →
+                // log. Fastest path for exactly what you're drinking at
+                // home, and more accurate for BAC than a catalog average.
+                Button {
+                    scanning = true
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "barcode.viewfinder")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(Color.ink)
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(Color.whiskey))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Scan a barcode")
+                                .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                            Text("Can or bottle — we'll grab the specs")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.bronze)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.whiskey.opacity(0.10))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(PressScaleStyle())
 
                 if !venueSpecials.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
@@ -11042,6 +11088,15 @@ private struct LiveMenuSheet: View {
             .padding(.bottom, 28)
         }
         .preferredColorScheme(.dark)
+        .fullScreenCover(isPresented: $scanning) {
+            BarcodeScanFlow(
+                onComplete: { option in
+                    scanning = false
+                    onPick(option)
+                },
+                onCancel: { scanning = false }
+            )
+        }
     }
 }
 
