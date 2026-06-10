@@ -9272,6 +9272,24 @@ fileprivate struct TimelineEntry: Identifiable {
     let removable: Bool
 }
 
+/// Identical drinks collapsed into one timeline row with a `– N +`
+/// stepper, so re-adding (e.g. another Carlsberg, scanned or not) is one
+/// tap and doesn't require re-scanning / re-picking.
+fileprivate struct LiveDrinkGroup: Identifiable {
+    let option: DrinkOption
+    let optionName: String
+    let detail: String
+    let isShared: Bool
+    let count: Int
+    /// Most-recent time any drink in this group was logged.
+    let lastAt: Date
+    /// Ids of removable instances, newest-first — `–` peels the latest.
+    let removableIdsNewestFirst: [UUID]
+    /// Stable across re-aggregations: name + shared flag.
+    var id: String { optionName + (isShared ? "|s" : "|p") }
+    var canRemove: Bool { !removableIdsNewestFirst.isEmpty }
+}
+
 /// Identifiable wrapper around a ghost id so we can drive
 /// `.sheet(item:)` with it. SwiftUI requires an `Identifiable` payload
 /// (not an `Optional<UUID>`) — wrapping keeps the call site readable.
@@ -10086,31 +10104,92 @@ private struct LiveSeshView: View {
         }
     }
 
-    private func timelineSection(now: Date) -> some View {
+    /// Collapse the timeline into one entry per (drink, shared-flag),
+    /// newest group first, so each distinct drink gets a `– N +` stepper.
+    private func timelineGroups() -> [LiveDrinkGroup] {
         let entries = timelineEntries()
+        var order: [String] = []
+        var byKey: [String: [TimelineEntry]] = [:]
+        for e in entries {
+            let key = e.optionName + (e.isShared ? "|s" : "|p")
+            if byKey[key] == nil { order.append(key) }
+            byKey[key, default: []].append(e)
+        }
+        let groups: [LiveDrinkGroup] = order.compactMap { key in
+            guard let es = byKey[key], let first = es.first else { return nil }
+            let removable = es
+                .filter { $0.removable }
+                .sorted { $0.consumedAt > $1.consumedAt }
+                .map { $0.id }
+            let last = es.map { $0.consumedAt }.max() ?? first.consumedAt
+            return LiveDrinkGroup(
+                option: first.option,
+                optionName: first.optionName,
+                detail: first.detail,
+                isShared: first.isShared,
+                count: es.count,
+                lastAt: last,
+                removableIdsNewestFirst: removable
+            )
+        }
+        return groups.sorted { $0.lastAt > $1.lastAt }
+    }
+
+    /// Add one more of this exact drink (preserving its shared/personal
+    /// status). One tap re-adds a Carlsberg — scanned or standard —
+    /// without re-scanning or opening the picker.
+    private func addAnother(_ g: LiveDrinkGroup) {
+        recents.record(g.option)
+        if inGroup {
+            let isShared = g.isShared
+            let t: Task<Void, Never> = Task { await group.addDrink(g.option, shared: isShared) }
+            _ = t
+        } else {
+            live.add(g.option)
+        }
+    }
+
+    /// Peel the most recent instance of this drink off the timeline.
+    private func removeOne(_ g: LiveDrinkGroup) {
+        guard let id = g.removableIdsNewestFirst.first else { return }
+        removeDrink(id: id)
+    }
+
+    private func timelineSection(now: Date) -> some View {
+        let groups = timelineGroups()
+        let total = groups.reduce(0) { $0 + $1.count }
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
-                Text(inGroup ? "YOUR TIMELINE" : "YOUR TIMELINE")
+                Text("YOUR TIMELINE")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .tracking(2.4)
                     .foregroundStyle(Color.bronze)
                 Spacer()
-                Text("\(entries.count) \(entries.count == 1 ? "drink" : "drinks")")
+                Text("\(total) \(total == 1 ? "drink" : "drinks")")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .tracking(1.2)
                     .foregroundStyle(Color.cream.opacity(0.55))
             }
 
-            if entries.isEmpty {
+            if groups.isEmpty {
                 emptyTimeline
             } else {
                 VStack(spacing: 8) {
-                    ForEach(entries) { entry in
-                        DrinkTimelineRow(entry: entry, now: now) {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
-                                removeDrink(id: entry.id)
+                    ForEach(groups) { g in
+                        DrinkTimelineRow(
+                            group: g,
+                            now: now,
+                            onAdd: {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                    addAnother(g)
+                                }
+                            },
+                            onRemove: {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                    removeOne(g)
+                                }
                             }
-                        }
+                        )
                     }
                 }
             }
@@ -11091,58 +11170,35 @@ private struct LiveRoastCard: View {
 // MARK: - Drink Timeline Row
 
 private struct DrinkTimelineRow: View {
-    let entry: TimelineEntry
+    let group: LiveDrinkGroup
     let now: Date
+    let onAdd: () -> Void
     let onRemove: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
-            DrinkGlyph(option: entry.option, size: 22)
+            DrinkGlyph(option: group.option, size: 22)
                 .frame(width: 38, height: 38)
                 .background(Circle().fill(Color.smoke))
                 .overlay(Circle().strokeBorder(Color.whiskey.opacity(0.25), lineWidth: 1))
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(entry.optionName)
+                    Text(group.optionName)
                         .font(.system(size: 14, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.cream)
-                    if entry.isShared {
+                        .lineLimit(1)
+                    if group.isShared {
                         sharedPill
                     }
                 }
-                Text(entry.detail)
+                Text("\(group.detail) · last \(lastLabel)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .tracking(0.4)
                     .foregroundStyle(Color.cream.opacity(0.5))
+                    .lineLimit(1)
             }
             Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(entry.consumedAt, format: .dateTime.hour().minute())
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.cream)
-                Text(relativeAgo)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .tracking(0.6)
-                    .foregroundStyle(Color.bronze)
-                    .contentTransition(.numericText())
-            }
-            if entry.removable {
-                Button(action: onRemove) {
-                    Image(systemName: "minus")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color.cream.opacity(0.6))
-                        .frame(width: 26, height: 26)
-                        .background(Circle().fill(Color.cream.opacity(0.06)))
-                        .overlay(Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
-                }
-                .buttonStyle(PressScaleStyle())
-            } else {
-                // Visual placeholder so other-members' rows align with mine.
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Color.cream.opacity(0.25))
-                    .frame(width: 26, height: 26)
-            }
+            stepper
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -11153,9 +11209,52 @@ private struct DrinkTimelineRow: View {
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(
-                    entry.isShared ? Color.whiskey.opacity(0.28) : Color.cream.opacity(0.07),
+                    group.isShared ? Color.whiskey.opacity(0.28) : Color.cream.opacity(0.07),
                     lineWidth: 1
                 )
+        )
+    }
+
+    /// `–  N  +` quantity control. Minus disabled when there's nothing of
+    /// this drink left that the user is allowed to remove.
+    private var stepper: some View {
+        HStack(spacing: 0) {
+            Button(action: onRemove) {
+                Image(systemName: "minus")
+                    .font(.system(size: 12, weight: .black))
+                    .foregroundStyle(group.canRemove ? Color.cream.opacity(0.8) : Color.cream.opacity(0.25))
+                    .frame(width: 34, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(!group.canRemove)
+
+            Text("\(group.count)")
+                .font(.system(size: 15, weight: .black, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .monospacedDigit()
+                .frame(minWidth: 22)
+                .contentTransition(.numericText(value: Double(group.count)))
+
+            Button(action: onAdd) {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .black))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 34, height: 32)
+                    .background(Color.whiskey)
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.cream.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
         )
     }
 
@@ -11174,13 +11273,18 @@ private struct DrinkTimelineRow: View {
         .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.42), lineWidth: 0.8))
     }
 
-    private var relativeAgo: String {
-        let seconds = Int(now.timeIntervalSince(entry.consumedAt))
-        if seconds < 60 { return "JUST NOW" }
+    /// Time of the most recent one of these — "HH:MM" today, or relative
+    /// if it was a while ago.
+    private var lastLabel: String {
+        let seconds = Int(now.timeIntervalSince(group.lastAt))
+        if seconds < 60 { return "just now" }
         let m = seconds / 60
-        if m < 60 { return "\(m)M AGO" }
-        let h = m / 60, mm = m % 60
-        return mm == 0 ? "\(h)H AGO" : "\(h)H \(mm)M AGO"
+        if m < 60 { return "\(m)m ago" }
+        let h = m / 60
+        if h < 12 { return "\(h)h ago" }
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: group.lastAt)
     }
 }
 
