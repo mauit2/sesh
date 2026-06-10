@@ -928,6 +928,9 @@ final class SessionService: ObservableObject {
     /// device-local GhostMembersStore by SessionView while a live group
     /// is active. Empty when there's no session.
     @Published var ghosts: [GhostMember] = []
+    /// True while a guest-roster write is in flight, so a concurrent poll
+    /// doesn't overwrite the optimistic local value with stale server data.
+    private var ghostWriteInFlight = false
     @Published var error: String?
     @Published var busy = false
 
@@ -1488,12 +1491,22 @@ final class SessionService: ObservableObject {
         guard let sid = session?.id else { return }
         ghosts = newGhosts
         session?.ghosts = newGhosts
-        struct GhostUpdate: Encodable { let ghosts: [GhostMember] }
+        // Suppress the poll's ghost-overwrite while this write is in
+        // flight, otherwise a refresh that lands before the write commits
+        // reads the stale server value and wipes the just-added guest.
+        ghostWriteInFlight = true
+        defer { ghostWriteInFlight = false }
+        // Write via a member-authorized RPC, NOT a direct UPDATE — the
+        // sessions row's RLS update policy is host-only, so a non-host
+        // member's direct update would silently fail and their guest
+        // would vanish on the next poll.
+        struct Params: Encodable { let p_session_id: String; let p_ghosts: [GhostMember] }
         do {
             _ = try await supabase
-                .from("sessions")
-                .update(GhostUpdate(ghosts: newGhosts))
-                .eq("id", value: sid.uuidString.lowercased())
+                .rpc("set_session_ghosts", params: Params(
+                    p_session_id: sid.uuidString.lowercased(),
+                    p_ghosts: newGhosts
+                ))
                 .execute()
         } catch {
             // Non-fatal — the local copy already updated and the next
@@ -1574,12 +1587,12 @@ final class SessionService: ObservableObject {
                 }
                 // Pull the shared guest roster from the session row so
                 // every device converges on the same set + their drinks.
-                if ghosts != row.ghosts {
+                // Skip while our own write is in flight, so a poll that
+                // races the write doesn't wipe a just-added guest.
+                if !ghostWriteInFlight, ghosts != row.ghosts {
                     ghosts = row.ghosts
+                    session?.ghosts = row.ghosts
                 }
-                // Keep our cached session snapshot's ghosts current too,
-                // so a later enter()/read sees the live value.
-                session?.ghosts = row.ghosts
             }
 
             // Did I get kicked out of THIS mode (e.g. left from another
