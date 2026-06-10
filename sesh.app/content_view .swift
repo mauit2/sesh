@@ -2560,12 +2560,44 @@ enum LiveRoastBook {
 /// Each call to `record` moves the option to the front of the list and
 /// dedupes, so the order reflects "most recent unique pick first".
 @MainActor
-final class RecentDrinksStore: ObservableObject {
-    /// Option names, newest-first, deduped. Capped at `cap` so the file
-    /// doesn't grow indefinitely — the dock only ever shows the first 3.
-    @Published private(set) var recents: [String] = []
+/// A recent pick, stored in full so a scanned / custom beverage (which
+/// isn't in `DrinkCatalog`) survives — the old name-only store dropped
+/// anything it couldn't find in the catalog. Codable so it round-trips
+/// through UserDefaults and the lock-screen App Intent.
+struct RecentDrink: Codable, Equatable {
+    var name: String
+    var detail: String
+    var category: String   // DrinkCategory rawValue
+    var volumeML: Double
+    var abv: Double
 
-    private let key = "sesh.recentDrinks.v1"
+    init(option: DrinkOption) {
+        name = option.name
+        detail = option.detail
+        category = option.category.rawValue
+        volumeML = option.volumeML
+        abv = option.abv
+    }
+
+    var option: DrinkOption {
+        DrinkOption(
+            category: DrinkCategory(rawValue: category) ?? .beer,
+            name: name,
+            detail: detail,
+            volumeML: volumeML,
+            abv: abv
+        )
+    }
+}
+
+final class RecentDrinksStore: ObservableObject {
+    /// Recent picks, newest-first, deduped by name. Capped so the file
+    /// doesn't grow — the dock only ever shows the first 3.
+    @Published private(set) var recents: [RecentDrink] = []
+
+    /// v2 stores full options (scanned drinks survive); v1 was names only.
+    private let key = LockScreenStorageKeys.recentsV2
+    private let legacyKey = LockScreenStorageKeys.recents
     private let cap = 6
 
     init() {
@@ -2584,33 +2616,42 @@ final class RecentDrinksStore: ObservableObject {
         }
     }
 
-    /// Records a pick. Moves the option to the front of the list, removing
-    /// any prior occurrence so the same drink doesn't take multiple slots.
+    /// Records a pick. Moves the option to the front, removing any prior
+    /// occurrence (by name) so the same drink doesn't take multiple slots.
     func record(_ option: DrinkOption) {
-        var list = recents.filter { $0 != option.name }
-        list.insert(option.name, at: 0)
+        var list = recents.filter { $0.name != option.name }
+        list.insert(RecentDrink(option: option), at: 0)
         if list.count > cap { list = Array(list.prefix(cap)) }
         recents = list
         save()
     }
 
-    /// Resolves the stored option names back to full `DrinkOption`s by
-    /// looking them up in the catalog. Names that no longer exist in the
-    /// catalog (e.g. catalog changed between app versions) are skipped.
+    /// Full `DrinkOption`s, newest-first — including scanned/custom drinks.
     func resolved() -> [DrinkOption] {
-        recents.compactMap { name in
-            DrinkCatalog.allOptions.first(where: { $0.name == name })
-        }
+        recents.map { $0.option }
     }
 
     private func load() {
-        if let arr = UserDefaults.standard.stringArray(forKey: key) {
+        if let data = UserDefaults.standard.data(forKey: key),
+           let arr = try? JSONDecoder().decode([RecentDrink].self, from: data) {
             recents = arr
+            return
+        }
+        // Migrate the old name-only v1 list by resolving against the
+        // catalog (custom/scanned names simply drop, which is fine — they
+        // weren't recoverable from a name anyway).
+        if let names = UserDefaults.standard.stringArray(forKey: legacyKey) {
+            recents = names
+                .compactMap { n in DrinkCatalog.allOptions.first(where: { $0.name == n }) }
+                .map { RecentDrink(option: $0) }
+            if !recents.isEmpty { save() }
         }
     }
 
     private func save() {
-        UserDefaults.standard.set(recents, forKey: key)
+        if let data = try? JSONEncoder().encode(recents) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
     }
 }
 
@@ -9499,6 +9540,11 @@ private struct LiveSeshView: View {
             LiveActivityController.shared.end()
             syncLockScreenActivity()
         }
+        // The lock-screen intent posts this after a quick-add. If the app
+        // is alive, drain the queued group drink + refresh right away.
+        .onReceive(NotificationCenter.default.publisher(for: .liveSeshLockScreenDidAddDrink)) { _ in
+            syncLockScreenActivity()
+        }
     }
 
     // MARK: - Live Activity sync
@@ -9532,8 +9578,42 @@ private struct LiveSeshView: View {
     /// lifecycle — the END action handler is the only other place that
     /// tears it down explicitly (because it has to fire before the
     /// view disappears).
+    /// Insert any drinks the lock-screen intent queued while we couldn't
+    /// reach Supabase (group mode). The card already showed the optimistic
+    /// bump; this makes the add real for the rest of the group + reconciles
+    /// the exact BAC on the next poll.
+    private func drainPendingGroupDrinks() {
+        guard inGroup else { return }
+        guard let data = UserDefaults.standard.data(forKey: LockScreenStorageKeys.pendingGroupDrinks)
+        else { return }
+        struct Pending: Codable {
+            var name: String; var detail: String; var category: String
+            var volumeML: Double; var abv: Double
+        }
+        guard let items = try? JSONDecoder().decode([Pending].self, from: data), !items.isEmpty else {
+            UserDefaults.standard.removeObject(forKey: LockScreenStorageKeys.pendingGroupDrinks)
+            return
+        }
+        // Clear up front so a re-entrant call can't double-insert.
+        UserDefaults.standard.removeObject(forKey: LockScreenStorageKeys.pendingGroupDrinks)
+        for item in items {
+            let opt = DrinkOption(
+                category: DrinkCategory(rawValue: item.category) ?? .beer,
+                name: item.name,
+                detail: item.detail,
+                volumeML: item.volumeML,
+                abv: item.abv
+            )
+            Task { await group.addDrink(opt, shared: false) }
+        }
+    }
+
     private func syncLockScreenActivity() {
         let now = Date()
+        // Tell the lock-screen App Intent which mode it's adding into, and
+        // drain anything it queued while we were backgrounded/locked.
+        UserDefaults.standard.set(inGroup, forKey: LockScreenStorageKeys.liveGroupActive)
+        drainPendingGroupDrinks()
         // Garbage-collect a stale solo sesh before reading state for
         // the activity. `endIfStale` is a no-op unless BAC has hit 0
         // AND the last drink was >12h ago, so this only fires for
@@ -9628,14 +9708,12 @@ private struct LiveSeshView: View {
         WidgetSharedStore.write(snap)
     }
 
-    /// Up to three of the user's most-recent drinks, projected into
-    /// the wire format the activity carries. Empty in group mode —
-    /// lock-screen logging hits Supabase, which we don't gate on a
-    /// single tap for v1. Empty for a brand-new account too; the
-    /// widget hides the row when this is empty so it doesn't render
-    /// as dead space.
+    /// Up to three of the user's most-recent drinks (incl. scanned/custom),
+    /// projected into the wire format the activity carries. Shown in BOTH
+    /// solo and group — in group the App Intent queues the add and the app
+    /// syncs it to the session. Empty for a brand-new account; the widget
+    /// hides the row when this is empty so it doesn't render as dead space.
     private var lockScreenQuickDrinks: [SeshActivityAttributes.QuickDrink] {
-        guard !inGroup else { return [] }
         return quickAdd.prefix(3).map { opt in
             SeshActivityAttributes.QuickDrink(
                 name: opt.name,

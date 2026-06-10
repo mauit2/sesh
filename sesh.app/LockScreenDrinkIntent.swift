@@ -49,12 +49,25 @@ import Foundation
 public enum LockScreenStorageKeys {
     public static let drinks  = "sesh.live.drinks.v1"
     public static let started = "sesh.live.startedAt.v1"
+    /// Legacy name-only recents (migrated away from by RecentDrinksStore).
     public static let recents = "sesh.recentDrinks.v1"
+    /// Full-option recents (JSON-encoded [RecentDrink]) — scanned/custom
+    /// drinks survive here. Written by both the app and this intent.
+    public static let recentsV2 = "sesh.recentDrinks.v2"
     /// Cached profile primitives (weightKg + sex raw). Written by
     /// AuthService when the user signs in; read by `perform()` so we
     /// can run Widmark without booting the SwiftUI hierarchy.
     public static let profileWeightKg = "sesh.profileCache.weightKg"
     public static let profileSexRaw   = "sesh.profileCache.sexRaw"
+    /// True while the user is in a live GROUP. The intent can't reach
+    /// Supabase (this file compiles into the widget extension too), so in
+    /// group mode it queues the add into `pendingGroupDrinks` and the app
+    /// drains it to the session. False ⇒ solo, write straight to the local
+    /// live store.
+    public static let liveGroupActive = "sesh.live.groupActive"
+    /// JSON [StoredRecentDrink] queued by the lock-screen intent in group
+    /// mode, drained by the app into the group session.
+    public static let pendingGroupDrinks = "sesh.live.pendingGroupDrinks"
 }
 
 /// Posted whenever the lock-screen intent has appended a drink. The
@@ -152,6 +165,18 @@ public enum LockScreenDrinkLogger {
     ) async {
         let now = Date()
 
+        // Group mode: this file can't reach Supabase (it also compiles
+        // into the widget extension), so queue the add for the app to
+        // sync to the session, optimistically bump the activity, and
+        // bail out of the solo path.
+        if UserDefaults.standard.bool(forKey: LockScreenStorageKeys.liveGroupActive) {
+            await appendGroupQueued(
+                name: name, detail: detail, category: category,
+                volumeML: volumeML, abv: abv, now: now
+            )
+            return
+        }
+
         // 1) Append to the on-disk drink log. We decode the existing
         //    array, append, re-encode. Same encoder settings as
         //    LiveSeshState (ISO-8601 dates) so the running app reads
@@ -177,14 +202,8 @@ public enum LockScreenDrinkLogger {
             UserDefaults.standard.set(now.timeIntervalSince1970, forKey: LockScreenStorageKeys.started)
         }
 
-        // 3) Move this option to the front of the recents list so the
-        //    next quick-add reflects what the user actually picked,
-        //    just like RecentDrinksStore.record() does in-app.
-        var recents = UserDefaults.standard.stringArray(forKey: LockScreenStorageKeys.recents) ?? []
-        recents.removeAll { $0 == name }
-        recents.insert(name, at: 0)
-        if recents.count > 6 { recents = Array(recents.prefix(6)) }
-        UserDefaults.standard.set(recents, forKey: LockScreenStorageKeys.recents)
+        // 3) Move this option to the front of the recents list.
+        bumpRecents(name: name, detail: detail, category: category, volumeML: volumeML, abv: abv)
 
         // 4) Compute new BAC chronologically over the whole timeline.
         //    Same single-timeline simulation LiveSeshState.bac uses —
@@ -242,6 +261,93 @@ public enum LockScreenDrinkLogger {
                 name: .liveSeshLockScreenDidAddDrink,
                 object: nil
             )
+        }
+    }
+
+    // MARK: - Recents (shared by solo + group paths)
+
+    /// On-disk recents entry. JSON keys match the main app's RecentDrink
+    /// so the app reads/writes the same list.
+    fileprivate struct StoredRecentDrink: Codable {
+        var name: String
+        var detail: String
+        var category: String
+        var volumeML: Double
+        var abv: Double
+    }
+
+    /// Move an option to the front of the v2 recents list (deduped by
+    /// name, capped at 6), so the quick-add tiles reflect what was just
+    /// tapped.
+    fileprivate static func bumpRecents(name: String, detail: String, category: String, volumeML: Double, abv: Double) {
+        var recents: [StoredRecentDrink] = []
+        if let data = UserDefaults.standard.data(forKey: LockScreenStorageKeys.recentsV2),
+           let arr = try? JSONDecoder().decode([StoredRecentDrink].self, from: data) {
+            recents = arr
+        }
+        recents.removeAll { $0.name == name }
+        recents.insert(
+            StoredRecentDrink(name: name, detail: detail, category: category, volumeML: volumeML, abv: abv),
+            at: 0
+        )
+        if recents.count > 6 { recents = Array(recents.prefix(6)) }
+        if let data = try? JSONEncoder().encode(recents) {
+            UserDefaults.standard.set(data, forKey: LockScreenStorageKeys.recentsV2)
+        }
+    }
+
+    // MARK: - Group path (queue + optimistic activity bump)
+
+    /// In a live group the intent can't write to Supabase, so it queues
+    /// the add for the app to sync to the session, optimistically bumps
+    /// the running activity (the lock-screen card shows YOUR BAC, so a
+    /// personal drink just adds its full contribution), and updates the
+    /// recents list. The app drains the queue + reconciles the exact
+    /// group BAC on its next sync.
+    fileprivate static func appendGroupQueued(
+        name: String, detail: String, category: String,
+        volumeML: Double, abv: Double, now: Date
+    ) async {
+        // 1) Queue for the app to insert into the session.
+        var queue: [StoredRecentDrink] = []
+        if let data = UserDefaults.standard.data(forKey: LockScreenStorageKeys.pendingGroupDrinks),
+           let arr = try? JSONDecoder().decode([StoredRecentDrink].self, from: data) {
+            queue = arr
+        }
+        queue.append(StoredRecentDrink(name: name, detail: detail, category: category, volumeML: volumeML, abv: abv))
+        if let data = try? JSONEncoder().encode(queue) {
+            UserDefaults.standard.set(data, forKey: LockScreenStorageKeys.pendingGroupDrinks)
+        }
+
+        // 2) Keep recents fresh.
+        bumpRecents(name: name, detail: detail, category: category, volumeML: volumeML, abv: abv)
+
+        // 3) Optimistically bump the activity. Adding one personal drink
+        //    raises your BAC by (grams / (mass × r)) × 100; the app
+        //    reconciles the precise group value on its next poll.
+        let (weightKg, sexR) = loadCachedBodyParams()
+        let denom = weightKg * 1000 * sexR
+        let grams = volumeML * abv * 0.789
+        let bump = denom > 0 ? (grams / denom) * 100 : 0
+
+        await MainActor.run {
+            guard let activity = Activity<SeshActivityAttributes>.activities.first else { return }
+            let prev = activity.content.state
+            let newBAC = max(0, prev.bac + bump)
+            let hoursToSober = max(0, newBAC / eliminationRate)
+            let soberAt = now.addingTimeInterval(hoursToSober * 3600)
+            let next = SeshActivityAttributes.ContentState(
+                bac: newBAC,
+                drinkCount: prev.drinkCount + 1,
+                soberAt: soberAt,
+                startedAt: prev.startedAt,
+                statusRaw: statusRaw(forBAC: newBAC),
+                lastUpdate: now,
+                quickDrinks: prev.quickDrinks,
+                roster: prev.roster
+            )
+            Task { await activity.update(ActivityContent(state: next, staleDate: nil)) }
+            NotificationCenter.default.post(name: .liveSeshLockScreenDidAddDrink, object: nil)
         }
     }
 
