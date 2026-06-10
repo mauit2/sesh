@@ -1105,12 +1105,19 @@ final class SessionService: ObservableObject {
     /// solo calculator uses (see LiveSeshState.bac for the rationale).
     /// Server-stamped `createdAt` keeps the result identical on every
     /// phone in the group.
+    /// Total heads a shared round is split across — real members PLUS
+    /// manually-added guests. Guests drink too, so a shared "round of
+    /// shots" has to divide by everyone present, not just app users.
+    private var sharedHeadCount: Int {
+        max(members.count + ghosts.count, 1)
+    }
+
     func liveBAC(for profileId: UUID, now: Date = Date()) -> Double {
         guard let profile = memberProfiles[profileId] else { return 0 }
         let bodyGrams = profile.weightKg * 1000
         let denom = bodyGrams * profile.sex.r
         guard denom > 0 else { return 0 }
-        let n = max(members.count, 1)
+        let n = sharedHeadCount
 
         // 1) Project each contributing drink to (timestamp, grams_to_me).
         //    Drinks that aren't mine and aren't shared drop out here.
@@ -1144,6 +1151,37 @@ final class SessionService: ObservableObject {
     /// Uses the constant ~0.015 BAC%/hr metabolism rate.
     func liveHoursUntil(threshold: Double, for profileId: UUID, now: Date = Date()) -> Double {
         max(0, (liveBAC(for: profileId, now: now) - threshold) / 0.015)
+    }
+
+    /// Live BAC for a manually-added guest: their own logged drinks PLUS
+    /// their share of every shared round (split across all heads — members
+    /// + guests). Same chronological Widmark walk the member version uses,
+    /// run against the guest's own body params. Guests were previously
+    /// getting zero from shared rounds.
+    func liveBAC(forGhost ghost: GhostMember, now: Date = Date()) -> Double {
+        let denom = ghost.weightKg * 1000 * ghost.sex.r
+        guard denom > 0 else { return 0 }
+        let n = sharedHeadCount
+
+        var events: [(Date, Double)] = ghost.drinks.map { ($0.consumedAt, $0.grams) }
+        for d in liveDrinks where d.shared {
+            events.append((d.createdAt, d.grams / Double(n)))
+        }
+        events.sort { $0.0 < $1.0 }
+
+        var bac: Double = 0
+        var lastEvent: Date? = nil
+        for (when, grams) in events where when <= now {
+            if let last = lastEvent {
+                bac = max(0, bac - 0.015 * (when.timeIntervalSince(last) / 3600))
+            }
+            bac += (grams / denom) * 100
+            lastEvent = when
+        }
+        if let last = lastEvent {
+            bac = max(0, bac - 0.015 * max(0, now.timeIntervalSince(last) / 3600))
+        }
+        return bac
     }
 
     /// All live drinks attributable to a member, sorted newest-first.
@@ -9849,6 +9887,14 @@ private struct LiveSeshView: View {
             LiveGhostSection(
                 ghosts: ghosts,
                 now: now,
+                bacFor: { ghost in
+                    // In a group, route through SessionService so the
+                    // guest gets their share of shared rounds; solo uses
+                    // the guest's own drinks only.
+                    inGroup
+                        ? group.liveBAC(forGhost: ghost, now: now)
+                        : ghosts.bac(for: ghost, now: now)
+                },
                 onPickDrink: { ghostId in
                     pickingForGhostId = ghostId
                 },
@@ -10641,6 +10687,11 @@ private struct LiveRosterRow: View {
 private struct LiveGhostSection: View {
     @ObservedObject var ghosts: GhostMembersStore
     let now: Date
+    /// Computes a guest's BAC. In a group this routes through
+    /// SessionService so the guest gets their share of shared rounds; in
+    /// solo it's the guest's own drinks. Injected so the section doesn't
+    /// need to know which mode it's in.
+    var bacFor: (GhostMember) -> Double
     var onPickDrink: (UUID) -> Void
     var onAddPerson: () -> Void
 
@@ -10667,7 +10718,7 @@ private struct LiveGhostSection: View {
                     ForEach(ghosts.members) { ghost in
                         LiveGhostRow(
                             ghost: ghost,
-                            bac: ghosts.bac(for: ghost, now: now),
+                            bac: bacFor(ghost),
                             onTap: { onPickDrink(ghost.id) },
                             onUndo: {
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
