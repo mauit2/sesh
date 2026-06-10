@@ -9805,7 +9805,7 @@ private struct LiveSeshView: View {
     private func lockScreenRoster(now: Date) -> [SeshActivityAttributes.RosterMember] {
         guard inGroup else { return [] }
         let me = profile.id
-        let scored: [(SeshActivityAttributes.RosterMember, Double)] = group.members.map { m in
+        var scored: [(SeshActivityAttributes.RosterMember, Double)] = group.members.map { m in
             let prof = group.memberProfiles[m.profileId]
             let name = prof?.name ?? "Member"
             let bac = group.liveBAC(for: m.profileId, now: now)
@@ -9823,6 +9823,25 @@ private struct LiveSeshView: View {
                 ),
                 bac
             )
+        }
+        // Manually-added guests are part of the group too — surface them in
+        // the lock-screen / Dynamic Island roster with their shared-round
+        // share included (group.liveBAC(forGhost:)). Never "me".
+        for ghost in ghosts.members {
+            let bac = group.liveBAC(forGhost: ghost, now: now)
+            let status = statusFor(bac: bac)
+            scored.append((
+                SeshActivityAttributes.RosterMember(
+                    profileId: ghost.id,
+                    name: ghost.name,
+                    bac: bac,
+                    statusRaw: status.rawValue,
+                    drinkCount: ghost.drinks.count,
+                    initials: initialsFor(name: ghost.name),
+                    isMe: false
+                ),
+                bac
+            ))
         }
         // Sort by BAC desc, but pin "me" so the user is always shown
         // even if a 5+ person group would otherwise truncate them.
