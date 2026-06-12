@@ -21,8 +21,7 @@ app. By using the app you agree to the practices described here.
 Sesh App is operated by an individual developer (sole proprietor) enrolled in
 the Apple Developer Program.
 
-**Contact:** mauritz0208@gmail.com
-*(Replace with your preferred public support address before publishing.)*
+**Contact:** contact@seshapp.com
 
 ---
 
@@ -158,4 +157,4 @@ constitutes acceptance of the revised policy.
 
 ## 11. Contact
 
-Questions about this policy or your data? Email **mauritz0208@gmail.com**.
+Questions about this policy or your data? Email **contact@seshapp.com**.
