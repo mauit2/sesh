@@ -1153,6 +1153,20 @@ final class SessionService: ObservableObject {
         max(0, (liveBAC(for: profileId, now: now) - threshold) / 0.015)
     }
 
+    /// The member's live drinks projected to timestamped recap events —
+    /// the same (timestamp, grams-to-me) reduction `liveBAC` runs, plus
+    /// the drink name for the recap's per-stop summaries. Shared rounds
+    /// contribute their per-head share, exactly like the BAC math.
+    func myLiveRecapEvents(for profileId: UUID) -> [RecapEvent] {
+        let n = sharedHeadCount
+        return liveDrinks.compactMap { d in
+            let isMine = d.profileId == profileId && !d.shared
+            guard isMine || d.shared else { return nil }
+            let grams = d.shared ? d.grams / Double(n) : d.grams
+            return RecapEvent(when: d.createdAt, grams: grams, name: d.drinkName)
+        }.sorted { $0.when < $1.when }
+    }
+
     /// Live BAC for a manually-added guest: their own logged drinks PLUS
     /// their share of every shared round (split across all heads — members
     /// + guests). Same chronological Widmark walk the member version uses,
@@ -4368,6 +4382,10 @@ private struct SessionView: View {
     /// store on LiveSeshView would re-init every time the user swiped
     /// back to PLAN and over again).
     @StateObject private var ghosts = GhostMembersStore()
+    /// The night's bar-to-bar journey. Check-ins land here (recorded off
+    /// `venues.currentVenue` changes) and the END flow turns them into
+    /// the animated Night Recap. Cleared when the sesh ends.
+    @StateObject private var journey = NightJourneyStore()
     /// On-device cache of groups the user has been in. Updated whenever a
     /// SessionService refresh lands on a session it's tracking. Surfaces
     /// in GroupSheet's idle view so rejoining a previous group is a tap
@@ -4398,7 +4416,8 @@ private struct SessionView: View {
     @ObservedObject private var push = PushManager.shared
     /// Which page the user is on. Driven by both the segmented switcher
     /// at the top and the swipe gesture on the underlying TabView.
-    @State private var mode: SeshMode = .plan
+    /// Defaults to LIVE so the app opens straight into the live experience.
+    @State private var mode: SeshMode = .live
 
     private let eliminationRate = 0.015
 
@@ -4612,6 +4631,21 @@ private struct SessionView: View {
             invitesSheetOpen = true
             push.openInvites = false
         }
+        // Record every venue check-in AND check-out onto the night's
+        // journey. Both the PLAN and LIVE venue sheets funnel through the
+        // same VenueService, so one observer catches them all. Duplicates
+        // (e.g. the launch-time re-validation of a persisted check-in)
+        // collapse inside the store; stale pre-sesh stops are filtered out
+        // at recap-build time by the 90-minute grace window. Check-outs
+        // stamp the open bar stop so the recap can carve refuel / afters
+        // legs from drinks logged between bars.
+        .onChange(of: venues.currentVenue) { _, venue in
+            if let venue {
+                journey.checkIn(venue)
+            } else {
+                journey.checkOut()
+            }
+        }
         .sheet(isPresented: $invitesSheetOpen) {
             InvitesSheet(
                 invites: invites,
@@ -4680,6 +4714,9 @@ private struct SessionView: View {
             // dead card stops following the user around.
             if live.endIfStale(profile: profile) {
                 LiveActivityController.shared.end()
+                // An abandoned sesh forfeits its recap — clear the route
+                // so last weekend's bars don't replay into the next one.
+                journey.clear()
             }
         }
         // Pull venue + specials catalog on first launch so the chip /
@@ -4913,6 +4950,7 @@ private struct SessionView: View {
             location: location,
             venues: venues,
             ghosts: ghosts,
+            journey: journey,
             profile: profile,
             embedded: true,
             onOpenGroupSheet: { groupSheetScope = .live },
@@ -4927,10 +4965,13 @@ private struct SessionView: View {
                 // child view's confirmation handler does the same on
                 // its path, this one covers parent-driven exits.
                 ghosts.clearAll()
+                // The night's bar journey is scoped to the sesh too — a
+                // leftover route would replay into the next recap.
+                journey.clear()
                 LiveActivityController.shared.end()
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
-                    mode = .plan
-                }
+                // Stay on the LIVE page — it resets to its fresh "ready
+                // when you are" state, which is where the user expects to
+                // land after wrapping a night (not back in PLAN).
             }
         )
     }
@@ -6005,6 +6046,11 @@ private struct ProfileSheet: View {
     /// "promille". Persisted in the App Group so the widget agrees.
     @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
 
+    /// Saved night recaps (loaded from disk on open) + which one is
+    /// being replayed full-screen.
+    @StateObject private var nightHistory = RecapHistoryStore()
+    @State private var replayRecap: NightRecap? = nil
+
     init(profile: Profile, auth: AuthService, admin: AdminService) {
         self.profile = profile
         self.auth = auth
@@ -6104,6 +6150,37 @@ private struct ProfileSheet: View {
                         // immediately rather than at their next scheduled tick.
                         WidgetSharedStore.reload()
                         LiveActivityController.shared.refresh()
+                    }
+
+                    // Saved night recaps — replay any past night (and add
+                    // photos to its stops the morning after). Long-press a
+                    // row to delete.
+                    if !nightHistory.recaps.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("PAST NIGHTS")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .tracking(2)
+                                .foregroundStyle(Color.bronze)
+                            ForEach(nightHistory.recaps.prefix(12)) { night in
+                                Button {
+                                    replayRecap = night
+                                } label: {
+                                    PastNightRow(
+                                        recap: night,
+                                        unit: BACUnitSetting.resolved(mode: bacUnitMode)
+                                    )
+                                }
+                                .buttonStyle(PressScaleStyle())
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        nightHistory.delete(night)
+                                    } label: {
+                                        Label("Delete recap", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.top, 6)
                     }
 
                     if let errorMessage {
@@ -6237,6 +6314,13 @@ private struct ProfileSheet: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
+        }
+        // Replay a saved night. isReplay flips the closing button to a
+        // plain DONE — nothing to tear down on this path.
+        .fullScreenCover(item: $replayRecap) { night in
+            NightRecapView(recap: night, history: nightHistory, isReplay: true) {
+                replayRecap = nil
+            }
         }
     }
 }
@@ -9479,6 +9563,9 @@ private struct LiveSeshView: View {
     /// it survives mode swipes; injected here to render the roster
     /// section and accept new drinks.
     @ObservedObject var ghosts: GhostMembersStore
+    /// The night's recorded bar check-ins. Owned by SessionView (same
+    /// lifetime as ghosts); consumed here at END time to build the recap.
+    @ObservedObject var journey: NightJourneyStore
     let profile: Profile
     /// True when this view is hosted inline as a TabView page (not a
     /// modal). Suppresses the duplicate close header and the "Started…"
@@ -9510,6 +9597,14 @@ private struct LiveSeshView: View {
     /// in solo mode. Persists between taps so a "round of shots" doesn't
     /// require flipping back and forth for each one.
     @State private var shareMode = false
+
+    /// The end-of-night story. Non-nil presents the full-screen recap;
+    /// the actual sesh teardown runs from the recap's Done button so
+    /// nothing is lost if the user swipes around first.
+    @State private var recap: NightRecap?
+    /// Saved nights on disk. The recap is written here the moment it's
+    /// built (END confirm) so even a crash mid-replay keeps the night.
+    @StateObject private var recapHistory = RecapHistoryStore()
 
     @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
     private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
@@ -9616,6 +9711,59 @@ private struct LiveSeshView: View {
         }
     }
 
+    /// Friends a puke break can be pinned on — group members (minus the
+    /// user, who gets the "Mine" option) plus manually-added guests.
+    private var pukeCandidates: [String] {
+        var names: [String] = []
+        if inGroup {
+            for m in group.members where m.profileId != profile.id {
+                if let n = group.memberProfiles[m.profileId]?.name {
+                    names.append(n)
+                }
+            }
+        }
+        names += ghosts.members.map(\.name)
+        return names
+    }
+
+    /// Compose the Night Recap from the journey's check-ins plus the
+    /// user's own timestamped drinks (solo ledger, or in group mode the
+    /// same personal + shared-share projection the live BAC uses).
+    /// Nil when there's nothing worth replaying.
+    private func buildNightRecap(now: Date = Date()) -> NightRecap? {
+        let denom = profile.weightKg * 1000 * profile.sex.r
+        guard denom > 0 else { return nil }
+        let events: [RecapEvent] = inGroup
+            ? group.myLiveRecapEvents(for: profile.id)
+            : live.drinks.map { RecapEvent(when: $0.consumedAt, grams: $0.grams, name: $0.optionName) }
+        return NightRecap.build(
+            journeyStops: journey.stops,
+            events: events,
+            bumpPerGram: 100 / denom,
+            loosePhotos: journey.loosePhotos,
+            endedAt: now
+        )
+    }
+
+    /// The real END teardown — runs either straight from the confirmation
+    /// (no drinks ⇒ no recap) or from the recap's closing button. Clears
+    /// the timeline, the lock-screen activity, and the night's journey,
+    /// then hands control back to the parent (or dismisses the modal).
+    private func finishEndSesh() {
+        live.end()
+        // A stale BAC reading on a locked phone is creepy — tear the
+        // lock-screen card down alongside the in-app timeline.
+        LiveActivityController.shared.end()
+        // Cleared here for the modal path; the embedded path's parent
+        // closure clears it again, which is harmless.
+        journey.clear()
+        if let onExitLiveTimeline {
+            onExitLiveTimeline()
+        } else {
+            dismiss()
+        }
+    }
+
     var body: some View {
         ZStack {
             AtmosphereBackground(accent: Color.whiskey)
@@ -9684,23 +9832,41 @@ private struct LiveSeshView: View {
             titleVisibility: .visible
         ) {
             Button("End sesh", role: .destructive) {
-                live.end()
-                // Tear down the lock-screen card alongside the in-app
-                // timeline. Same intent as the END handler upstream:
-                // a stale BAC reading on a locked phone is creepy.
-                LiveActivityController.shared.end()
-                // When embedded, hand control back to the parent so it
-                // can swipe to PLAN. When presented modally, fall back
-                // to environment-driven dismissal.
-                if let onExitLiveTimeline {
-                    onExitLiveTimeline()
+                // Build the night's story BEFORE tearing anything down —
+                // live.end() clears the drinks the recap is made from.
+                // No drinks ⇒ nothing to recap ⇒ end immediately.
+                if let built = buildNightRecap() {
+                    // Photos staged during the night move into the saved
+                    // recap's directory (filenames ride on the stops, so
+                    // references stay valid).
+                    recapHistory.adoptPhotos(from: journey.photosDirectory, for: built)
+                    // Persist immediately — the night survives even if
+                    // the app dies mid-replay. Photos attach to this
+                    // saved copy.
+                    recapHistory.save(built)
+                    // Defer past the dialog's dismissal animation —
+                    // presenting a cover in the same frame a dialog is
+                    // tearing down gets silently dropped by SwiftUI.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        recap = built
+                    }
                 } else {
-                    dismiss()
+                    finishEndSesh()
                 }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This clears the timeline. Your regular session is unaffected.")
+        }
+        // ---- Night Recap ----
+        // The animated bar-to-bar replay. Presented between the END
+        // confirmation and the actual teardown; the recap's button is
+        // what really ends the sesh.
+        .fullScreenCover(item: $recap) { built in
+            NightRecapView(recap: built, history: recapHistory) {
+                recap = nil
+                finishEndSesh()
+            }
         }
         // ---- Lock-screen Live Activity sync ----
         // The activity is keyed off the user's current BAC, drink count,
@@ -10044,6 +10210,11 @@ private struct LiveSeshView: View {
                 venues: venues,
                 onTap: { venueOpen = true }
             )
+            // Night snaps — every stop so far with its photos (plus the
+            // "between bars" page when not checked in anywhere). Camera or
+            // library, attach to any stop of the night; everything rides
+            // straight into the end-of-night recap.
+            LiveJourneyPhotosSection(journey: journey, pukeCandidates: pukeCandidates)
             liveBACCard(bac: bac, status: status, now: now)
             timeToSoberCard(bac: bac, status: status, now: now)
             if inGroup {

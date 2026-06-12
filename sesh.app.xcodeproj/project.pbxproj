@@ -460,7 +460,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_NSCameraUsageDescription = "sesh uses your camera to scan beverage barcodes and set your profile photo.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "sesh uses your camera to scan beverage barcodes, set your profile photo, and snap pics at your stops during a night out.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "sesh uses your location only while open to find bars near you and surface their drink specials. We never track you in the background.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -497,7 +497,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_NSCameraUsageDescription = "sesh uses your camera to scan beverage barcodes and set your profile photo.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "sesh uses your camera to scan beverage barcodes, set your profile photo, and snap pics at your stops during a night out.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "sesh uses your location only while open to find bars near you and surface their drink specials. We never track you in the background.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
