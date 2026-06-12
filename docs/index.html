@@ -3,206 +3,56 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Privacy Policy — Sesh App</title>
-<meta name="description" content="Privacy Policy for Sesh App — what we collect, why, and your choices." />
+<title>Sesh</title>
+<meta name="description" content="Sesh — a social BAC tracker. Coming soon." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <style>
   :root{
-    --bg:#140f0b;
-    --bg-elev:#1d1610;
-    --cream:#f3e9d8;
-    --cream-dim:#cdbfa8;
-    --whiskey:#e8843c;
-    --bronze:#b3895a;
-    --line:rgba(243,233,216,.10);
-    --measure:42rem;
+    --bg:#140f0b; --cream:#f3e9d8; --cream-dim:#cdbfa8;
+    --whiskey:#e8843c; --bronze:#b3895a; --line:rgba(243,233,216,.10);
   }
   *{box-sizing:border-box;}
-  html{-webkit-text-size-adjust:100%;}
+  html,body{height:100%;}
   body{
     margin:0;
     background:
-      radial-gradient(120% 80% at 85% -10%, rgba(232,132,60,.16), transparent 55%),
+      radial-gradient(120% 90% at 85% -10%, rgba(232,132,60,.18), transparent 55%),
       radial-gradient(90% 70% at -10% 0%, rgba(179,137,90,.10), transparent 50%),
       var(--bg);
     color:var(--cream);
     font-family:"Hanken Grotesk",system-ui,sans-serif;
-    font-size:17px;
-    line-height:1.72;
     -webkit-font-smoothing:antialiased;
+    display:flex;align-items:center;justify-content:center;
   }
-  /* faint grain for depth */
   body::before{
     content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.04;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
-  .wrap{position:relative;z-index:1;max-width:var(--measure);margin:0 auto;padding:72px 24px 96px;}
-  .eyebrow{
-    font-size:12px;font-weight:700;letter-spacing:.34em;text-transform:uppercase;
-    color:var(--bronze);margin:0 0 14px;
-  }
-  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--whiskey);
-    margin-right:9px;vertical-align:middle;box-shadow:0 0 12px rgba(232,132,60,.7);}
-  h1{
-    font-family:"Fraunces",Georgia,serif;font-optical-sizing:auto;
-    font-weight:800;font-size:clamp(2.6rem,7vw,4rem);line-height:1.02;letter-spacing:-.03em;
-    margin:0 0 18px;color:var(--cream);
-  }
-  .dates{color:var(--cream-dim);font-size:14.5px;margin:0 0 30px;}
-  .dates b{color:var(--cream);font-weight:600;}
-  .callout{
-    border-left:3px solid var(--whiskey);
-    background:linear-gradient(90deg,rgba(232,132,60,.10),rgba(232,132,60,.02));
-    padding:16px 20px;border-radius:0 14px 14px 0;margin:0 0 40px;
-    color:var(--cream-dim);font-size:15.5px;
-  }
-  .callout b{color:var(--cream);font-weight:700;}
-  .lede{color:var(--cream-dim);font-size:18px;margin:0 0 40px;}
-  h2{
-    font-family:"Fraunces",Georgia,serif;font-weight:700;
-    font-size:1.5rem;letter-spacing:-.01em;line-height:1.2;
-    margin:54px 0 6px;color:var(--cream);
-    display:flex;align-items:baseline;gap:12px;
-  }
-  h2 .num{
-    font-family:"Hanken Grotesk",sans-serif;font-size:12px;font-weight:700;
-    letter-spacing:.2em;color:var(--whiskey);transform:translateY(-2px);
-  }
-  h3{font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
-    color:var(--bronze);margin:26px 0 4px;}
-  hr{border:none;border-top:1px solid var(--line);margin:18px 0 0;}
-  p{margin:14px 0;}
-  a{color:var(--whiskey);text-decoration:none;border-bottom:1px solid rgba(232,132,60,.35);
-    transition:border-color .15s ease;}
-  a:hover{border-color:var(--whiskey);}
-  ul{margin:14px 0;padding-left:20px;}
-  li{margin:9px 0;}
-  li::marker{color:var(--whiskey);}
-  strong{color:var(--cream);font-weight:600;}
-  .foot{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
-    color:var(--cream-dim);font-size:14px;}
-  .pill{display:inline-block;font-family:"Hanken Grotesk";font-weight:700;font-size:12px;
-    letter-spacing:.18em;text-transform:uppercase;color:var(--bg);background:var(--cream);
-    padding:7px 14px;border-radius:999px;margin-top:8px;}
+  .card{position:relative;z-index:1;text-align:center;padding:40px 28px;max-width:30rem;}
+  .eyebrow{font-size:12px;font-weight:700;letter-spacing:.36em;text-transform:uppercase;color:var(--bronze);margin:0 0 18px;}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--whiskey);margin-right:9px;vertical-align:middle;box-shadow:0 0 12px rgba(232,132,60,.7);}
+  h1{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:clamp(3.4rem,16vw,6rem);line-height:.95;letter-spacing:-.04em;margin:0;color:var(--cream);}
+  h1 em{font-style:italic;color:var(--whiskey);}
+  .tag{color:var(--cream-dim);font-size:18px;margin:18px 0 34px;}
+  .links{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
+  a{font-weight:600;font-size:14px;letter-spacing:.02em;text-decoration:none;color:var(--cream);
+    padding:10px 18px;border-radius:999px;border:1px solid var(--line);
+    transition:border-color .15s ease, color .15s ease, transform .15s ease;}
+  a:hover{border-color:var(--whiskey);color:var(--whiskey);transform:translateY(-1px);}
+  a.mail{color:var(--bronze);border-color:transparent;}
+  a.mail:hover{color:var(--whiskey);}
 </style>
 </head>
 <body>
-  <main class="wrap">
-    <p class="eyebrow"><span class="dot"></span>Sesh App</p>
-    <h1>Privacy&nbsp;Policy.</h1>
-    <p class="dates"><b>Effective:</b> 12 June 2026 &nbsp;·&nbsp; <b>Last updated:</b> 12 June 2026</p>
-
-    <p class="lede">This policy explains what information Sesh collects, why, how it’s used,
-      and the choices you have. Sesh is a social blood-alcohol-content (BAC) estimation
-      and drink-tracking app.</p>
-
-    <div class="callout"><b>Sesh is not a medical, legal, or safety device.</b> BAC values are
-      Widmark-formula <em>estimates</em> based on what you enter, for entertainment and
-      harm-reduction awareness only. Never rely on them to decide whether to drive or operate
-      machinery.</div>
-
-    <h2><span class="num">01</span>Who we are</h2>
-    <p>Sesh App is operated by an individual developer (sole proprietor) enrolled in the Apple
-      Developer Program.</p>
-    <p><strong>Contact:</strong> <a href="mailto:contact@seshapp.xyz">contact@seshapp.xyz</a></p>
-
-    <h2><span class="num">02</span>Information we collect</h2>
-    <p>We only collect what the app needs to function.</p>
-    <h3>Information you provide</h3>
-    <ul>
-      <li><strong>Account details:</strong> your email address, to create and authenticate your account.</li>
-      <li><strong>Profile information:</strong> display name, age, biological sex, and body weight.
-        Sex and weight are required inputs to the Widmark BAC calculation; age confirms you meet the
-        legal drinking age.</li>
-      <li><strong>Optional profile photo (avatar):</strong> if you choose to add one.</li>
-      <li><strong>Drink and session data:</strong> drinks you log (type, volume, ABV, timestamp), live
-        sessions you start or join, and groups and manually added guests you create.</li>
-    </ul>
-    <h3>Information collected with your permission</h3>
-    <ul>
-      <li><strong>Location (while using the app):</strong> used only to find and show nearby bars and
-        venues. Not used for background tracking and never sold.</li>
-      <li><strong>Camera:</strong> used only to scan beverage barcodes. Images are processed on-device
-        for scanning and are not stored or uploaded.</li>
-      <li><strong>Push notification token:</strong> if you enable notifications, a device token is stored
-        so we can send session and group-activity notifications.</li>
-    </ul>
-    <h3>Information collected automatically</h3>
-    <ul>
-      <li><strong>Basic technical data</strong> needed to operate the service (e.g. authentication tokens
-        and timestamps). We do <strong>not</strong> use third-party advertising or analytics/tracking SDKs,
-        and we do <strong>not</strong> use the Apple Advertising Identifier (IDFA).</li>
-    </ul>
-
-    <h2><span class="num">03</span>How we use your information</h2>
-    <ul>
-      <li>create and secure your account and sign you in;</li>
-      <li>calculate and display your estimated BAC and time-to-sober;</li>
-      <li>power live sessions, groups, shared rounds, and the leaderboard/roast features;</li>
-      <li>show nearby venues when you grant location access;</li>
-      <li>look up beverages you scan;</li>
-      <li>send notifications you have opted into;</li>
-      <li>maintain, debug, and improve the app.</li>
-    </ul>
-    <p>We do <strong>not</strong> sell your personal information, and we do <strong>not</strong> use it for
-      third-party advertising.</p>
-
-    <h2><span class="num">04</span>How your information is shared</h2>
-    <ul>
-      <li><strong>With other users you choose to interact with.</strong> In a group session, limited
-        information (display name, avatar, and — within an active session — your estimated BAC and drink
-        count) is visible to other members, consistent with the social features you opt into.</li>
-      <li><strong>With our hosting provider (Supabase).</strong> Account, profile, and session data are
-        stored in a Supabase-hosted database protected by row-level security, processed on our behalf.</li>
-      <li><strong>With Apple.</strong> Push notifications are delivered through Apple Push Notification
-        service (APNs).</li>
-      <li><strong>When required by law,</strong> or to protect the rights, safety, and security of users
-        or the service.</li>
-    </ul>
-
-    <h2><span class="num">05</span>Data retention</h2>
-    <p>We keep account and profile data for as long as your account exists. Session and drink history is
-      retained to provide the app’s history features. You can request deletion of your account and
-      associated personal data at any time; we’ll delete it within a reasonable period, except where
-      retention is required by law.</p>
-
-    <h2><span class="num">06</span>Your rights and choices</h2>
-    <p>Depending on where you live (including under the EU/EEA GDPR and similar laws), you may have the
-      right to access, correct, or delete your data, object to or restrict certain processing, and request
-      a copy of your data.</p>
-    <p>You can change profile details and avatar in the app at any time, and you can revoke camera,
-      location, and notification permissions in your device’s Settings. To exercise any other right,
-      contact us at the email above.</p>
-
-    <h2><span class="num">07</span>Children</h2>
-    <p>Sesh is intended only for users of legal drinking age in their jurisdiction. It is not directed to
-      children, and we do not knowingly collect personal information from anyone under the legal drinking
-      age. If you believe a minor has provided us data, contact us and we will delete it.</p>
-
-    <h2><span class="num">08</span>Security</h2>
-    <p>We use industry-standard measures including encrypted connections (HTTPS/TLS) and database
-      row-level security. No method of transmission or storage is completely secure, but we work to
-      protect your information and limit access to it.</p>
-
-    <h2><span class="num">09</span>International users</h2>
-    <p>Your information may be processed and stored on servers outside your country, including where our
-      hosting provider operates. By using the app you consent to such transfer, processing, and storage
-      consistent with this policy and applicable law.</p>
-
-    <h2><span class="num">10</span>Changes to this policy</h2>
-    <p>We may update this policy from time to time. Material changes will be reflected by updating the
-      “Last updated” date above and, where appropriate, an in-app notice. Continued use after changes take
-      effect constitutes acceptance of the revised policy.</p>
-
-    <h2><span class="num">11</span>Contact</h2>
-    <p>Questions about this policy or your data? Email
-      <a href="mailto:contact@seshapp.xyz">contact@seshapp.xyz</a>.</p>
-
-    <div class="foot">
-      <span class="pill">Sesh App</span>
-      <p>© 2026 Sesh App. Drink responsibly.</p>
+  <main class="card">
+    <p class="eyebrow"><span class="dot"></span>Coming soon</p>
+    <h1>Sesh<em>.</em></h1>
+    <p class="tag">Know your night. A social BAC tracker for the sesh.</p>
+    <div class="links">
+      <a href="/privacy">Privacy Policy</a>
+      <a class="mail" href="mailto:contact@seshapp.xyz">contact@seshapp.xyz</a>
     </div>
   </main>
 </body>
