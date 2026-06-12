@@ -344,7 +344,8 @@ public enum LockScreenDrinkLogger {
                 statusRaw: statusRaw(forBAC: newBAC),
                 lastUpdate: now,
                 quickDrinks: prev.quickDrinks,
-                roster: prev.roster
+                roster: prev.roster,
+                topRoast: prev.topRoast
             )
             Task { await activity.update(ActivityContent(state: next, staleDate: nil)) }
             NotificationCenter.default.post(name: .liveSeshLockScreenDidAddDrink, object: nil)
@@ -417,7 +418,9 @@ public enum LockScreenDrinkLogger {
             startedAt: prev.startedAt,
             statusRaw: statusRaw,
             lastUpdate: now,
-            quickDrinks: prev.quickDrinks
+            quickDrinks: prev.quickDrinks,
+            roster: prev.roster,
+            topRoast: prev.topRoast
         )
         await activity.update(ActivityContent(state: next, staleDate: nil))
     }

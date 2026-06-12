@@ -75,6 +75,7 @@ final class LiveActivityController {
         statusRaw: String,
         quickDrinks: [SeshActivityAttributes.QuickDrink] = [],
         roster: [SeshActivityAttributes.RosterMember] = [],
+        topRoast: String? = nil,
         now: Date = Date()
     ) {
         guard enabled else { return }
@@ -86,6 +87,7 @@ final class LiveActivityController {
             statusRaw: statusRaw,
             quickDrinks: quickDrinks,
             roster: roster,
+            topRoast: topRoast,
             now: now
         )
 
@@ -126,6 +128,7 @@ final class LiveActivityController {
         statusRaw: String,
         quickDrinks: [SeshActivityAttributes.QuickDrink] = [],
         roster: [SeshActivityAttributes.RosterMember] = [],
+        topRoast: String? = nil,
         now: Date = Date()
     ) {
         guard enabled, let activity = activity else { return }
@@ -137,6 +140,7 @@ final class LiveActivityController {
             statusRaw: statusRaw,
             quickDrinks: quickDrinks,
             roster: roster,
+            topRoast: topRoast,
             now: now
         )
         Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
@@ -169,6 +173,16 @@ final class LiveActivityController {
         }
     }
 
+    /// Re-push the current state so the Live Activity views re-render
+    /// without otherwise changing anything — used when a display
+    /// preference (e.g. the BAC unit) changes mid-sesh. No-op if there's
+    /// no running activity.
+    func refresh() {
+        guard enabled, let activity = activity else { return }
+        let state = activity.content.state
+        Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
+    }
+
     // MARK: - Helpers
 
     private func makeState(
@@ -178,6 +192,7 @@ final class LiveActivityController {
         statusRaw: String,
         quickDrinks: [SeshActivityAttributes.QuickDrink],
         roster: [SeshActivityAttributes.RosterMember],
+        topRoast: String? = nil,
         now: Date
     ) -> SeshActivityAttributes.ContentState {
         let hoursToSober = max(0, bac / eliminationRate)
@@ -190,7 +205,8 @@ final class LiveActivityController {
             statusRaw: statusRaw,
             lastUpdate: now,
             quickDrinks: quickDrinks,
-            roster: roster
+            roster: roster,
+            topRoast: topRoast
         )
     }
 }

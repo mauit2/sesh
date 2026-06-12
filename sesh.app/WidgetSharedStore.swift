@@ -73,8 +73,16 @@ public struct WidgetSnapshot: Codable {
 
     /// Group members (excluding me) at snapshot time. Empty when
     /// `inGroup` is false. Limited to a small N at write time so the
-    /// snapshot file stays trivially small.
+    /// snapshot file stays trivially small. Still carried so the widget
+    /// can pick the drunkest member; only that one row is rendered now.
     public var roster: [Member]
+
+    /// A short, funny one-liner about the drunkest group member (the
+    /// `roster` row with the highest BAC). Computed app-side via the
+    /// roast book — the widget extension can't see that code — and shown
+    /// next to the leader instead of a full roster list. Nil when solo
+    /// or when there are no other members yet.
+    public var topRoast: String?
 
     public struct Member: Codable, Hashable, Identifiable {
         public var profileId: UUID
@@ -113,7 +121,8 @@ public struct WidgetSnapshot: Codable {
         meDrinkCount: Int,
         meStartedAt: Date?,
         meSoberAt: Date,
-        roster: [Member]
+        roster: [Member],
+        topRoast: String? = nil
     ) {
         self.snapshotAt = snapshotAt
         self.hasActiveSesh = hasActiveSesh
@@ -125,6 +134,7 @@ public struct WidgetSnapshot: Codable {
         self.meStartedAt = meStartedAt
         self.meSoberAt = meSoberAt
         self.roster = roster
+        self.topRoast = topRoast
     }
 
     /// Empty state — written by the app on sign-out / when no sesh is
@@ -197,5 +207,152 @@ public enum WidgetSharedStore {
     /// when an active sesh auto-ends.
     public static func clear() {
         write(.empty())
+    }
+
+    /// Nudge the widget to re-render without changing the snapshot —
+    /// used when a display preference (e.g. the BAC unit) changes so the
+    /// home-screen widget reformats immediately.
+    public static func reload() {
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadAllTimelines()
+        #endif
+    }
+}
+
+// MARK: - BAC display unit
+
+/// How a raw Widmark BAC value (always stored in %-by-volume, e.g.
+/// `0.082`) is rendered to the user. The two conventions in common use:
+///
+///   • `.percent`  — "0.082 %BAC" (US, UK, Ireland, much of the
+///                   Commonwealth).
+///   • `.promille` — "0.82 ‰" (Scandinavia + most of continental
+///                   Europe). Promille is exactly ten times the percent
+///                   value, so the conversion is a pure ×10 with one
+///                   fewer decimal place.
+///
+/// Both the app and the widget extension format BAC, so this type lives
+/// in the shared store and is the single source of truth for the maths
+/// and the symbol.
+public enum BACUnit: String, Codable, Hashable {
+    case percent
+    case promille
+
+    /// The raw %-scale value scaled into the display unit.
+    public func scaled(_ bac: Double) -> Double {
+        switch self {
+        case .percent:  return bac
+        case .promille: return bac * 10
+        }
+    }
+
+    /// Decimal places. Promille uses one fewer than percent because the
+    /// ×10 shifts the point — `0.082%` ↔ `0.82‰` carry the same precision.
+    public var decimals: Int {
+        switch self {
+        case .percent:  return 3
+        case .promille: return 2
+        }
+    }
+
+    /// The numeric portion only, e.g. "0.082" or "0.82". Clamped at 0.
+    public func formatted(_ bac: Double) -> String {
+        String(format: "%.\(decimals)f", scaled(max(0, bac)))
+    }
+
+    /// Compact rendering for fixed threshold labels (drive limits). Strips
+    /// trailing zeros so 0.02% reads "0.02" and the same limit in promille
+    /// reads "0.2". Not clamped — thresholds are always positive.
+    public func formattedLimit(_ bac: Double) -> String {
+        var s = String(format: "%.\(decimals)f", scaled(bac))
+        if s.contains(".") {
+            while s.hasSuffix("0") { s.removeLast() }
+            if s.hasSuffix(".") { s.removeLast() }
+        }
+        return s
+    }
+
+    /// Label shown beneath/around the big number, e.g. the "%BAC" caption.
+    public var caption: String {
+        switch self {
+        case .percent:  return "%BAC"
+        case .promille: return "‰ BAC"
+        }
+    }
+
+    /// Bare unit symbol for inline use after a number.
+    public var symbol: String {
+        switch self {
+        case .percent:  return "%"
+        case .promille: return "‰"
+        }
+    }
+}
+
+/// Persisted display-unit preference. Stored in the App Group so the
+/// widget extension reads the same value the app writes. The stored
+/// string is one of "auto" / "percent" / "promille"; "auto" resolves
+/// from the device region at render time.
+public enum BACUnitSetting {
+    /// UserDefaults key for the stored mode string.
+    public static let key = "sesh.bac.unitMode.v1"
+
+    /// Shared store so app + widget agree. Falls back to `.standard` if
+    /// the App Group can't be opened (same degradation as the snapshot).
+    public static let store: UserDefaults =
+        UserDefaults(suiteName: AppGroupID.value) ?? .standard
+
+    /// Regions that conventionally express BAC in promille (or g/L, which
+    /// is numerically identical). Everything not listed defaults to
+    /// percent. Users can always override in Settings.
+    private static let promilleRegions: Set<String> = [
+        // Nordics
+        "SE", "NO", "DK", "FI", "IS",
+        // DACH + neighbours
+        "DE", "AT", "CH", "LI",
+        // Benelux
+        "NL", "BE", "LU",
+        // Central / Eastern / SE Europe
+        "PL", "CZ", "SK", "HU", "SI", "HR", "RS", "BA", "ME", "MK",
+        "AL", "BG", "RO", "MD",
+        // Baltics
+        "EE", "LV", "LT",
+        // Southern Europe (g/L, shown as promille)
+        "FR", "IT", "ES", "PT", "GR",
+        // Other promille jurisdictions
+        "RU", "UA", "BY", "TR",
+    ]
+
+    /// Region-based default when the mode is "auto".
+    public static func autoUnit(regionCode: String?) -> BACUnit {
+        guard let code = regionCode?.uppercased(),
+              promilleRegions.contains(code) else { return .percent }
+        return .promille
+    }
+
+    /// Resolve a stored mode string into a concrete unit. Unknown / nil /
+    /// "auto" all fall back to the region-derived default.
+    public static func resolved(mode: String?) -> BACUnit {
+        switch mode {
+        case "percent":  return .percent
+        case "promille": return .promille
+        default:
+            if #available(iOS 16, *) {
+                return autoUnit(regionCode: Locale.current.region?.identifier)
+            } else {
+                return autoUnit(regionCode: Locale.current.regionCode)
+            }
+        }
+    }
+
+    /// The currently-stored mode string ("auto" if unset).
+    public static func currentMode() -> String {
+        store.string(forKey: key) ?? "auto"
+    }
+
+    /// The resolved unit right now — used by the widget extension, which
+    /// reads it fresh on every timeline render.
+    public static func current() -> BACUnit {
+        resolved(mode: currentMode())
     }
 }

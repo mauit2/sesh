@@ -5044,6 +5044,9 @@ private struct BACReadout: View {
     let hoursUntilEULimit: Double
     let hoursUntilUSLimit: Double
 
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .firstTextBaseline) {
@@ -5057,7 +5060,7 @@ private struct BACReadout: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(String(format: "%.3f", bac))
+                    Text(bacUnit.formatted(bac))
                         .font(.system(size: 68, weight: .black, design: .rounded))
                         .tracking(-2.2)
                         .foregroundStyle(
@@ -5072,7 +5075,7 @@ private struct BACReadout: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
 
-                    Text("%BAC")
+                    Text(bacUnit.caption)
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .tracking(2)
                         .foregroundStyle(Color.bronze)
@@ -5140,6 +5143,9 @@ private struct TimeToSoberRow: View {
     let hoursUntilUSLimit: Double
     let accent: Color
 
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
     private var soberETA: Date {
         Date().addingTimeInterval(hoursUntilSober * 3600)
     }
@@ -5173,7 +5179,7 @@ private struct TimeToSoberRow: View {
                     .monospacedDigit()
                     .contentTransition(.numericText(value: hoursUntilSober))
                 if hoursUntilSober > 0 {
-                    Text("until 0.000")
+                    Text("until \(bacUnit.formatted(0))")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .tracking(1.4)
                         .foregroundStyle(Color.bronze)
@@ -5184,14 +5190,14 @@ private struct TimeToSoberRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if hoursUntilEULimit > 0 {
                         milestoneRow(
-                            label: "EU LIMIT (0.02)",
+                            label: "EU LIMIT (\(bacUnit.formattedLimit(0.02))\(bacUnit.symbol))",
                             hours: hoursUntilEULimit,
                             tint: accent.opacity(0.9)
                         )
                     }
                     if hoursUntilUSLimit > 0 {
                         milestoneRow(
-                            label: "US LIMIT (0.08)",
+                            label: "US LIMIT (\(bacUnit.formattedLimit(0.08))\(bacUnit.symbol))",
                             hours: hoursUntilUSLimit,
                             tint: accent.opacity(0.7)
                         )
@@ -5276,6 +5282,9 @@ private struct BACScale: View {
     let status: Status
     private let maxDisplay: Double = 0.20
 
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
@@ -5307,8 +5316,8 @@ private struct BACScale: View {
                     .position(x: max(2, CGFloat(pct) * w / 2), y: trackY)
                     .shadow(color: status.color.opacity(0.6), radius: 6)
 
-                LimitTick(x: CGFloat(p02) * w, label: "0.02", sub: "EU LIMIT")
-                LimitTick(x: CGFloat(p08) * w, label: "0.08", sub: "US LIMIT")
+                LimitTick(x: CGFloat(p02) * w, label: bacUnit.formattedLimit(0.02), sub: "EU LIMIT")
+                LimitTick(x: CGFloat(p08) * w, label: bacUnit.formattedLimit(0.08), sub: "US LIMIT")
 
                 Circle()
                     .fill(Color.cream)
@@ -5992,6 +6001,10 @@ private struct ProfileSheet: View {
     @State private var errorMessage: String?
     @State private var adminPanelOpen = false
 
+    /// BAC display unit — "auto" (region default), "percent", or
+    /// "promille". Persisted in the App Group so the widget agrees.
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+
     init(profile: Profile, auth: AuthService, admin: AdminService) {
         self.profile = profile
         self.auth = auth
@@ -6009,6 +6022,21 @@ private struct ProfileSheet: View {
             || weightKg != profile.weightKg
             || newAvatarData != nil
             || avatarRemoved
+    }
+
+    /// Helper line under the BAC-units toggle explaining the current
+    /// choice — and, for Auto, which unit the device region resolves to.
+    private var bacUnitCaption: String {
+        switch bacUnitMode {
+        case "percent":
+            return "Always shown as percent — e.g. 0.080 %BAC."
+        case "promille":
+            return "Always shown in promille — e.g. 0.80 ‰."
+        default:
+            let resolved = BACUnitSetting.resolved(mode: "auto")
+            let example = resolved == .promille ? "0.80 ‰" : "0.080 %BAC"
+            return "Matches your region — currently \(example)."
+        }
     }
 
     var body: some View {
@@ -6060,6 +6088,22 @@ private struct ProfileSheet: View {
                             SexToggle(sex: $sex, accent: .whiskey)
                         }
                         LoungeNumberField(label: "WEIGHT", value: $weightKg, range: 40...160, step: 1, unit: "kg")
+                        LoungePickerField(label: "BAC UNITS") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                BACUnitToggle(mode: $bacUnitMode, accent: .whiskey)
+                                Text(bacUnitCaption)
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.55))
+                                    .padding(.horizontal, 4)
+                            }
+                        }
+                    }
+                    .onChange(of: bacUnitMode) { _ in
+                        // Push the new unit out to the home-screen widget and
+                        // any running Live Activity so they re-render in % / ‰
+                        // immediately rather than at their next scheduled tick.
+                        WidgetSharedStore.reload()
+                        LiveActivityController.shared.refresh()
                     }
 
                     if let errorMessage {
@@ -6849,6 +6893,60 @@ private struct SexToggle: View {
     }
 }
 
+/// Three-way segmented control for the BAC display unit. Mirrors
+/// `SexToggle`'s styling. Bound to the stored mode string so the choice
+/// persists in the App Group and the widget picks it up.
+private struct BACUnitToggle: View {
+    @Binding var mode: String
+    let accent: Color
+
+    private struct Opt: Identifiable {
+        let id: String
+        let label: String
+    }
+    private let options = [
+        Opt(id: "auto", label: "Auto"),
+        Opt(id: "percent", label: "%"),
+        Opt(id: "promille", label: "‰"),
+    ]
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(options) { option in
+                Button {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                        mode = option.id
+                    }
+                } label: {
+                    Text(option.label.uppercased())
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .tracking(2.2)
+                        .foregroundStyle(mode == option.id ? Color.ink : Color.cream.opacity(0.7))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            ZStack {
+                                if mode == option.id {
+                                    Capsule().fill(Color.cream)
+                                        .shadow(color: accent.opacity(0.5), radius: 12)
+                                } else {
+                                    Capsule().fill(Color.cream.opacity(0.04))
+                                }
+                            }
+                        )
+                        .overlay(
+                            Capsule().strokeBorder(
+                                Color.cream.opacity(mode == option.id ? 0 : 0.08),
+                                lineWidth: 1
+                            )
+                        )
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+        }
+    }
+}
+
 // Internal so sibling files in the app target (e.g. BarcodeScanner.swift)
 // can reuse the same press-feedback button style.
 struct PressScaleStyle: ButtonStyle {
@@ -6863,6 +6961,9 @@ struct PressScaleStyle: ButtonStyle {
 // MARK: - Disclaimer
 
 private struct Disclaimer: View {
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Rectangle()
@@ -6870,7 +6971,7 @@ private struct Disclaimer: View {
                 .frame(width: 2)
                 .frame(maxHeight: .infinity)
 
-            Text("Widmark estimate based on drink volume, ABV, body weight and time. Legal limits vary: 0.02 in much of the EU, 0.08 in the US & UK. Not a legal or medical reference. Never use to decide whether to drive.")
+            Text("Widmark estimate based on drink volume, ABV, body weight and time. Legal limits vary: \(bacUnit.formattedLimit(0.02))\(bacUnit.symbol) in much of the EU, \(bacUnit.formattedLimit(0.08))\(bacUnit.symbol) in the US & UK. Not a legal or medical reference. Never use to decide whether to drive.")
                 .font(.system(size: 11, weight: .regular))
                 .lineSpacing(4)
                 .foregroundStyle(Color.bronze)
@@ -7822,6 +7923,9 @@ private struct MemberRow: View {
         String(name.prefix(1)).uppercased()
     }
 
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(urlString: profile?.avatarURL, initial: initial, size: 36)
@@ -7882,7 +7986,7 @@ private struct MemberRow: View {
             // shouldn't leak into the host's roster view.
             if isSelf {
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text(String(format: "%.3f", bac))
+                    Text(bacUnit.formatted(bac))
                         .font(.system(size: 16, weight: .black, design: .rounded))
                         .foregroundStyle(Color.cream)
                         .contentTransition(.numericText(value: bac))
@@ -9057,6 +9161,9 @@ private struct LiveSeshBar: View {
     private var groupLive: Bool { group.isActive && group.hasLiveActivity }
     private var inGroup: Bool { group.isActive }
 
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             content(now: context.date)
@@ -9147,7 +9254,7 @@ private struct LiveSeshBar: View {
                             .shadow(color: Color.whiskey.opacity(0.8), radius: 4)
                     }
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(String(format: "%.3f", bac))
+                        Text(bacUnit.formatted(bac))
                             .font(.system(size: 18, weight: .heavy, design: .rounded))
                             .italic()
                             .foregroundStyle(Color.cream)
@@ -9268,7 +9375,7 @@ private struct LiveSeshBar: View {
                             .shadow(color: Color.whiskey.opacity(0.8), radius: 4)
                     }
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(String(format: "%.3f", bac))
+                        Text(bacUnit.formatted(bac))
                             .font(.system(size: 18, weight: .heavy, design: .rounded))
                             .italic()
                             .foregroundStyle(Color.cream)
@@ -9403,6 +9510,9 @@ private struct LiveSeshView: View {
     /// in solo mode. Persists between taps so a "round of shots" doesn't
     /// require flipping back and forth for each one.
     @State private var shareMode = false
+
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
 
     private var inGroup: Bool { group.isActive }
 
@@ -9696,6 +9806,11 @@ private struct LiveSeshView: View {
         let started = startTime ?? now
         let status = statusFor(bac: bac)
         let roster = lockScreenRoster(now: now)
+        // Funny one-liner about the drunkest *other* member, computed here
+        // (the roast book lives in the app target, invisible to the widget
+        // extension) and threaded through both the Live Activity state and
+        // the widget snapshot.
+        let topRoast = topRoastLine(roster: roster)
 
         // No drinks AND no started time AND BAC has decayed to zero ⇒
         // there's nothing to surface. End any leftover activity from a
@@ -9717,6 +9832,7 @@ private struct LiveSeshView: View {
             statusRaw: status.rawValue,
             quickDrinks: lockScreenQuickDrinks,
             roster: roster,
+            topRoast: topRoast,
             now: now
         )
 
@@ -9731,6 +9847,7 @@ private struct LiveSeshView: View {
             started: started,
             status: status,
             roster: roster,
+            topRoast: topRoast,
             now: now
         )
     }
@@ -9746,6 +9863,7 @@ private struct LiveSeshView: View {
         started: Date,
         status: Status,
         roster: [SeshActivityAttributes.RosterMember],
+        topRoast: String?,
         now: Date
     ) {
         let hoursToSober = max(0, bac / 0.015)
@@ -9772,7 +9890,8 @@ private struct LiveSeshView: View {
             meDrinkCount: count,
             meStartedAt: started,
             meSoberAt: soberAt,
-            roster: widgetRoster
+            roster: widgetRoster,
+            topRoast: topRoast
         )
         WidgetSharedStore.write(snap)
     }
@@ -9856,6 +9975,37 @@ private struct LiveSeshView: View {
             out.append(row)
         }
         return out
+    }
+
+    /// A short, funny one-liner about the drunkest *other* member in the
+    /// roster — the headline the widget + Dynamic Island show beside the
+    /// leader. Picks the highest-BAC non-me row (guests included, since
+    /// they're in the roster), then pulls a line from the same roast book
+    /// the in-app leaderboard uses, keyed by that person's BAC tier and
+    /// rotated by their drink count so it changes as the night goes on.
+    /// Returns nil when solo, no other members yet, or nobody has really
+    /// started — the widget then just shows the BAC without a quip.
+    private func topRoastLine(roster: [SeshActivityAttributes.RosterMember]) -> String? {
+        guard inGroup else { return nil }
+        guard let top = roster
+            .filter({ !$0.isMe })
+            .max(by: { $0.bac < $1.bac })
+        else { return nil }
+        // Rotate within the tier by how many drinks they've had, so the
+        // same person doesn't get the identical line all night.
+        let seed = top.drinkCount
+        // Below the buzzed threshold there's nothing to roast — use the
+        // group "warmup" tone instead of punching down at a sober person.
+        if top.bac < 0.02 {
+            return LiveRoastBook.warmup(seed: seed).headline
+        }
+        let firstName = top.name
+            .split(whereSeparator: { $0.isWhitespace })
+            .first
+            .map(String.init) ?? top.name
+        return LiveRoastBook
+            .roast(subject: .name(firstName), bac: top.bac, seed: seed)
+            .headline
     }
 
     /// Cheap 1–2 character initials from a display name. Falls back
@@ -10020,7 +10170,7 @@ private struct LiveSeshView: View {
                 StatusPill(status: status)
             }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(String(format: "%.3f", bac))
+                Text(bacUnit.formatted(bac))
                     .font(.system(size: 76, weight: .black, design: .rounded))
                     .tracking(-2.5)
                     .foregroundStyle(
@@ -10034,7 +10184,7 @@ private struct LiveSeshView: View {
                     .contentTransition(.numericText(value: bac))
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
-                Text("%BAC")
+                Text(bacUnit.caption)
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .tracking(2)
                     .foregroundStyle(Color.bronze)
@@ -10096,7 +10246,7 @@ private struct LiveSeshView: View {
                     .monospacedDigit()
                     .contentTransition(.numericText(value: hoursSober))
                 if hoursSober > 0 {
-                    Text("to 0.000")
+                    Text("to \(bacUnit.formatted(0))")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .tracking(1.2)
                         .foregroundStyle(Color.bronze)
@@ -10105,10 +10255,10 @@ private struct LiveSeshView: View {
             if hoursEU > 0 || hoursUS > 0 {
                 VStack(spacing: 4) {
                     if hoursEU > 0 {
-                        limitRow(label: "EU LIMIT (0.02)", hours: hoursEU, tint: status.color.opacity(0.95))
+                        limitRow(label: "EU LIMIT (\(bacUnit.formattedLimit(0.02))\(bacUnit.symbol))", hours: hoursEU, tint: status.color.opacity(0.95))
                     }
                     if hoursUS > 0 {
-                        limitRow(label: "US LIMIT (0.08)", hours: hoursUS, tint: status.color.opacity(0.7))
+                        limitRow(label: "US LIMIT (\(bacUnit.formattedLimit(0.08))\(bacUnit.symbol))", hours: hoursUS, tint: status.color.opacity(0.7))
                     }
                 }
                 .padding(.top, 2)
@@ -10592,6 +10742,9 @@ private struct LiveRosterRow: View {
     let rank: Int
     let isLeader: Bool
 
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
     private var status: Status {
         switch row.bac {
         case ..<0.02: return .sober
@@ -10665,7 +10818,7 @@ private struct LiveRosterRow: View {
             Spacer(minLength: 8)
 
             VStack(alignment: .trailing, spacing: 2) {
-                Text(String(format: "%.3f", row.bac))
+                Text(bacUnit.formatted(row.bac))
                     .font(.system(size: 16, weight: .black, design: .rounded))
                     .foregroundStyle(Color.cream)
                     .monospacedDigit()
@@ -10836,6 +10989,9 @@ private struct LiveGhostRow: View {
     private var initial: String { String(ghost.name.prefix(1)).uppercased() }
     private var drinkCount: Int { ghost.drinks.count }
 
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
     var body: some View {
         HStack(spacing: 12) {
             Button(action: onTap) {
@@ -10885,7 +11041,7 @@ private struct LiveGhostRow: View {
                     Spacer(minLength: 8)
 
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text(String(format: "%.3f", bac))
+                        Text(bacUnit.formatted(bac))
                             .font(.system(size: 16, weight: .black, design: .rounded))
                             .foregroundStyle(Color.cream)
                             .monospacedDigit()
@@ -11155,6 +11311,9 @@ private struct LiveRoastCard: View {
     let profile: Profile
     let now: Date
 
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
     private struct Leader {
         let name: String
         let bac: Double
@@ -11206,7 +11365,7 @@ private struct LiveRoastCard: View {
                     .foregroundStyle(Color.bronze)
                 Spacer()
                 if let lead = leader, lead.bac >= 0.02 {
-                    Text("LEADER · \(String(format: "%.3f", lead.bac))")
+                    Text("LEADER · \(bacUnit.formatted(lead.bac))\(bacUnit.symbol)")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .tracking(1.2)
                         .foregroundStyle(Color.whiskey)

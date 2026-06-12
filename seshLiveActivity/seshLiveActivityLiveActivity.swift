@@ -99,7 +99,7 @@ struct seshLiveActivityLiveActivity: Widget {
                     .frame(width: 8, height: 8)
                     .shadow(color: Color.seshWhiskey.opacity(0.7), radius: 4)
             } compactTrailing: {
-                Text(String(format: "%.3f", context.state.bac))
+                Text(BACUnitSetting.current().formatted(context.state.bac))
                     .font(.system(size: 13, weight: .heavy, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(WidgetStatus(raw: context.state.statusRaw).color)
@@ -124,7 +124,7 @@ struct seshLiveActivityLiveActivity: Widget {
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .tracking(2.0)
                 .foregroundStyle(Color.seshBronze)
-            Text(String(format: "%.3f", state.bac))
+            Text(BACUnitSetting.current().formatted(state.bac))
                 .font(.system(size: 28, weight: .black, design: .rounded))
                 .foregroundStyle(status.color)
                 .monospacedDigit()
@@ -194,8 +194,12 @@ struct seshLiveActivityLiveActivity: Widget {
             if !state.quickDrinks.isEmpty && !attributes.inGroup {
                 QuickAddRow(drinks: state.quickDrinks, compact: true)
             }
-            if !state.roster.isEmpty {
-                RosterStack(members: state.roster, compact: true)
+            // Group mode: surface the single drunkest member ("MVP") with
+            // a funny one-liner instead of a truncated roster list.
+            if let leader = state.roster
+                .filter({ !$0.isMe })
+                .max(by: { $0.bac < $1.bac }) {
+                LeaderRoastRow(leader: leader, roast: state.topRoast)
             }
         }
     }
@@ -261,13 +265,13 @@ private struct LockScreenView: View {
 
     private var bigBAC: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(String(format: "%.3f", state.bac))
+            Text(BACUnitSetting.current().formatted(state.bac))
                 .font(.system(size: 44, weight: .black, design: .rounded))
                 .tracking(-1.5)
                 .foregroundStyle(Color.seshCream)
                 .monospacedDigit()
                 .contentTransition(.numericText(value: state.bac))
-            Text("%BAC")
+            Text(BACUnitSetting.current().caption)
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .tracking(1.8)
                 .foregroundStyle(Color.seshBronze)
@@ -315,7 +319,7 @@ private struct LockScreenView: View {
                         .tracking(0.6)
                         .foregroundStyle(status.color)
                         .monospacedDigit()
-                    Text("TO 0.000")
+                    Text("TO \(BACUnitSetting.current().formatted(0))")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .tracking(1.2)
                         .foregroundStyle(Color.seshBronze)
@@ -412,6 +416,56 @@ private struct QuickAddRow: View {
 /// padding + text size for the smaller DI region. Pinning the user (the
 /// `isMe` row) is done at projection time in the app; this view just
 /// renders in order.
+/// The drunkest non-me member of the group plus a funny one-liner. Shown
+/// in the Dynamic Island expanded view in place of the old full roster
+/// list — it surfaces the single most "interesting" person and a quip
+/// rather than truncating a large group to the first few rows.
+private struct LeaderRoastRow: View {
+    let leader: SeshActivityAttributes.RosterMember
+    let roast: String?
+
+    private var status: WidgetStatus { WidgetStatus(raw: leader.statusRaw) }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Text("🥇")
+                .font(.system(size: 16))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(leader.name)
+                        .font(.system(size: 12, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.seshCream)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(BACUnitSetting.current().formatted(leader.bac))
+                        .font(.system(size: 13, weight: .heavy, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(status.color)
+                }
+                if let roast, !roast.isEmpty {
+                    Text(roast)
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .italic()
+                        .foregroundStyle(Color.seshCream.opacity(0.72))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.seshWhiskey.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.seshWhiskey.opacity(0.3), lineWidth: 1)
+        )
+    }
+}
+
 private struct RosterStack: View {
     let members: [SeshActivityAttributes.RosterMember]
     let compact: Bool
@@ -466,7 +520,7 @@ private struct RosterRow: View {
                 }
             }
             Spacer(minLength: 4)
-            Text(String(format: "%.3f", member.bac))
+            Text(BACUnitSetting.current().formatted(member.bac))
                 .font(.system(size: compact ? 13 : 15, weight: .heavy, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(status.color)

@@ -187,6 +187,26 @@ private struct SeshHomeWidgetView: View {
     let entry: SeshWidgetEntry
     @Environment(\.widgetFamily) private var family
 
+    /// Display unit, resolved fresh each render from the shared setting.
+    /// The widget reloads its timeline whenever the app changes the unit,
+    /// so reading it here keeps % / ‰ in sync with the rest of the app.
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var unit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
+    /// Relative "time until sober" derived from the projected BAC at the
+    /// standard 0.015%/hr elimination rate — easier to parse at a glance
+    /// than an absolute clock time. Decays correctly across timeline
+    /// entries because it reads the already-projected BAC.
+    private func clearInLabel(bac: Double) -> String {
+        let totalMinutes = Int((bac / 0.015 * 60).rounded())
+        guard totalMinutes > 0 else { return "Clear now" }
+        let h = totalMinutes / 60
+        let m = totalMinutes % 60
+        if h > 0 && m > 0 { return "Clear in \(h)h \(m)m" }
+        if h > 0 { return "Clear in \(h)h" }
+        return "Clear in \(m)m"
+    }
+
     var body: some View {
         if let snap = entry.snapshot, snap.hasActiveSesh {
             content(for: snap)
@@ -221,12 +241,12 @@ private struct SeshHomeWidgetView: View {
                 Spacer()
             }
             Spacer(minLength: 0)
-            Text(String(format: "%.3f", entry.projectedMeBac))
+            Text(unit.formatted(entry.projectedMeBac))
                 .font(.system(size: 38, weight: .black, design: .rounded))
                 .tracking(-1.4)
                 .foregroundStyle(Color.seshCream)
                 .monospacedDigit()
-            Text("%BAC")
+            Text(unit.caption)
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .tracking(1.8)
                 .foregroundStyle(Color.seshBronze)
@@ -258,12 +278,12 @@ private struct SeshHomeWidgetView: View {
                         .tracking(2.0)
                         .foregroundStyle(Color.seshWhiskey)
                 }
-                Text(String(format: "%.3f", entry.projectedMeBac))
+                Text(unit.formatted(entry.projectedMeBac))
                     .font(.system(size: 34, weight: .black, design: .rounded))
                     .tracking(-1.4)
                     .foregroundStyle(Color.seshCream)
                     .monospacedDigit()
-                Text("%BAC")
+                Text(unit.caption)
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .tracking(1.6)
                     .foregroundStyle(Color.seshBronze)
@@ -276,7 +296,7 @@ private struct SeshHomeWidgetView: View {
                     .background(Capsule().fill(status.color))
                 Spacer(minLength: 0)
                 if entry.projectedMeBac > 0 {
-                    Text("Clear by \(snap.meSoberAt, format: .dateTime.hour().minute())")
+                    Text(clearInLabel(bac: entry.projectedMeBac))
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .tracking(0.8)
                         .foregroundStyle(Color.seshBronze)
@@ -326,36 +346,54 @@ private struct SeshHomeWidgetView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Right column in group mode: instead of a truncated member list
+    /// (which only ever fit ~3 of a large group), surface the single
+    /// drunkest member — the "MVP" — with a funny one-liner. The
+    /// snapshot roster excludes "me" and is sorted BAC-descending, so
+    /// `.first` is the leader. The roast text is computed app-side.
     @ViewBuilder
     private func rosterColumn(snap: WidgetSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("GROUP")
-                .font(.system(size: 9, weight: .black, design: .monospaced))
-                .tracking(1.8)
-                .foregroundStyle(Color.seshBronze)
-            // Up to 3 other members so the right column fits without
-            // clipping. Roster from snapshot is already sorted.
-            ForEach(snap.roster.prefix(3)) { m in
-                let bac = entry.projectedRosterBac[m.profileId] ?? m.bac
-                let mStatus = HomeWidgetStatus(bac: bac)
+        if let leader = snap.roster.first {
+            let bac = entry.projectedRosterBac[leader.profileId] ?? leader.bac
+            let mStatus = HomeWidgetStatus(bac: bac)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("GROUP MVP")
+                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                    .tracking(1.8)
+                    .foregroundStyle(Color.seshBronze)
+                HStack(spacing: 5) {
+                    Text("🥇")
+                        .font(.system(size: 12))
+                    Text(leader.name)
+                        .font(.system(size: 13, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.seshCream)
+                        .lineLimit(1)
+                }
                 HStack(spacing: 5) {
                     Circle()
                         .fill(mStatus.color)
                         .frame(width: 5, height: 5)
-                    Text(m.name)
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.seshCream)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    Text(String(format: "%.3f", bac))
-                        .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    Text(unit.formatted(bac))
+                        .font(.system(size: 13, weight: .black, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(mStatus.color)
+                    Text(unit.caption)
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .tracking(1.0)
+                        .foregroundStyle(Color.seshBronze)
                 }
+                if let roast = snap.topRoast, !roast.isEmpty {
+                    Text(roast)
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .italic()
+                        .foregroundStyle(Color.seshCream.opacity(0.78))
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Empty state

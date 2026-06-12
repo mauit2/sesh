@@ -143,8 +143,16 @@ public struct SeshActivityAttributes: ActivityAttributes {
         /// roster row on the lock-screen card + Dynamic Island
         /// expanded view. Empty when solo. The 4-cap keeps the card
         /// under iOS's height budget; larger groups truncate to the
-        /// drunkest 4 so the most "relevant" rows surface.
+        /// drunkest 4 so the most "relevant" rows surface. Still carried
+        /// so the Dynamic Island can pick the drunkest member; only that
+        /// single leader row is rendered now.
         public var roster: [RosterMember]
+
+        /// A short, funny one-liner about the drunkest *other* member
+        /// (highest-BAC non-me row). Computed app-side via the roast book
+        /// and threaded through here because the widget extension can't
+        /// see that code. Nil when solo or no other members yet.
+        public var topRoast: String?
 
         public init(
             bac: Double,
@@ -154,7 +162,8 @@ public struct SeshActivityAttributes: ActivityAttributes {
             statusRaw: String,
             lastUpdate: Date,
             quickDrinks: [QuickDrink] = [],
-            roster: [RosterMember] = []
+            roster: [RosterMember] = [],
+            topRoast: String? = nil
         ) {
             self.bac = bac
             self.drinkCount = drinkCount
@@ -164,6 +173,7 @@ public struct SeshActivityAttributes: ActivityAttributes {
             self.lastUpdate = lastUpdate
             self.quickDrinks = quickDrinks
             self.roster = roster
+            self.topRoast = topRoast
         }
     }
 
