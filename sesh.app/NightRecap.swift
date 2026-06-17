@@ -1986,6 +1986,10 @@ struct LiveJourneyPhotosSection: View {
     /// the "shared with group" hint and whether the owner broadcasts a
     /// loose spot.
     var inFollowingGroup: Bool = false
+    /// A live group is running (regardless of follow state) — drives the
+    /// "just you" tag on personal food/puke markers so it's clear they
+    /// aren't shared with the group.
+    var inGroup: Bool = false
     /// Fired when the CURRENT-moment loose spot changes, so the owner can
     /// broadcast it to the group (no-op when solo / broken away).
     var onLooseSpotChanged: (LooseSpot?) -> Void = { _ in }
@@ -2035,15 +2039,18 @@ struct LiveJourneyPhotosSection: View {
     /// not at a bar.
     private var pages: [PagerPage] {
         var result: [PagerPage] = []
-        if journey.hasCheckedInSomewhere,
-           !journey.preGamePhotos.isEmpty || journey.preGameSpot != nil {
-            result.append(.preGameHistory)
+        if journey.hasCheckedInSomewhere {
+            if !journey.preGamePhotos.isEmpty || journey.preGameSpot != nil {
+                result.append(.preGameHistory)
+            }
+            for i in journey.stops.indices { result.append(.stop(i)) }
+        } else {
+            // Pre-gaming (before the first check-in): the pre-game page
+            // leads, then any food/puke markers dropped during it — so a
+            // marker never sits before pre-game.
+            result.append(.looseNow)
+            for i in journey.stops.indices { result.append(.stop(i)) }
         }
-        for i in journey.stops.indices { result.append(.stop(i)) }
-        // The live "loose" page is only the pre-game moment (before the
-        // first check-in). After that, between-bars moments are real
-        // `.between` stops in the list above.
-        if !journey.hasCheckedInSomewhere { result.append(.looseNow) }
         return result
     }
 
@@ -2537,6 +2544,17 @@ struct LiveJourneyPhotosSection: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Capsule().fill(Color.bronze))
+                } else if inGroup && (stop.kind == .food || stop.kind == .puke) {
+                    // Markers are personal — make it clear they aren't the
+                    // group's shared check-in.
+                    Text("JUST YOU")
+                        .font(.system(size: 8, weight: .black, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(Color.cream.opacity(0.7))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.cream.opacity(0.08)))
+                        .overlay(Capsule().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
                 }
                 Spacer()
                 // Reorder this stop in the journey (display only — its

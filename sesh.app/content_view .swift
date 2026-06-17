@@ -11045,6 +11045,7 @@ private struct LiveSeshView: View {
                 },
                 userCoordinate: location.location?.coordinate,
                 inFollowingGroup: inGroup && group.followingGroupVenue,
+                inGroup: inGroup,
                 onLooseSpotChanged: { spot in
                     // Share the pre-game / between location with the group
                     // when you're following it; otherwise it stays local.
