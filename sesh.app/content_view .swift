@@ -362,6 +362,13 @@ struct SeshSession: Codable, Identifiable, Equatable, Hashable {
     /// the same guest roster + their drinks. Defaults to [] for legacy
     /// rows / environments that haven't run the migration.
     var ghosts: [GhostMember]
+    /// The group's shared current venue (migration 016). Set when a member
+    /// checks the whole group in; nil = the group is checked out. Members
+    /// who are "following the group" adopt it. Default nil for legacy rows.
+    var liveVenue: Venue? = nil
+    /// The group's shared pre-game / between-bars location (migration 017),
+    /// adopted by following members. nil = none.
+    var liveLooseSpot: LooseSpot? = nil
     enum CodingKeys: String, CodingKey {
         case id
         case hostId = "host_id"
@@ -371,6 +378,8 @@ struct SeshSession: Codable, Identifiable, Equatable, Hashable {
         case activePlan = "active_plan"
         case activeLive = "active_live"
         case ghosts
+        case liveVenue = "live_venue"
+        case liveLooseSpot = "live_loose_spot"
     }
     init(
         id: UUID,
@@ -401,6 +410,8 @@ struct SeshSession: Codable, Identifiable, Equatable, Hashable {
         self.activePlan = (try c.decodeIfPresent(Bool.self, forKey: .activePlan)) ?? true
         self.activeLive = (try c.decodeIfPresent(Bool.self, forKey: .activeLive)) ?? true
         self.ghosts = (try c.decodeIfPresent([GhostMember].self, forKey: .ghosts)) ?? []
+        self.liveVenue = try c.decodeIfPresent(Venue.self, forKey: .liveVenue)
+        self.liveLooseSpot = try c.decodeIfPresent(LooseSpot.self, forKey: .liveLooseSpot)
     }
 }
 
@@ -931,6 +942,17 @@ final class SessionService: ObservableObject {
     /// True while a guest-roster write is in flight, so a concurrent poll
     /// doesn't overwrite the optimistic local value with stale server data.
     private var ghostWriteInFlight = false
+    /// The group's shared current venue (synced from `session.live_venue`).
+    /// nil = the group is checked out.
+    @Published var liveVenue: Venue? = nil
+    /// Whether THIS device follows the group's location. Local + per-device:
+    /// true (default) ⇒ adopt group check-ins; false ⇒ "broke away", manage
+    /// my own venue. Reset to true on join.
+    @Published var followingGroupVenue = true
+    private var liveVenueWriteInFlight = false
+    /// The group's shared pre-game / between location (synced).
+    @Published var liveLooseSpot: LooseSpot? = nil
+    private var liveLooseSpotWriteInFlight = false
     @Published var error: String?
     @Published var busy = false
 
@@ -1158,13 +1180,111 @@ final class SessionService: ObservableObject {
     /// the drink name for the recap's per-stop summaries. Shared rounds
     /// contribute their per-head share, exactly like the BAC math.
     func myLiveRecapEvents(for profileId: UUID) -> [RecapEvent] {
-        let n = sharedHeadCount
-        return liveDrinks.compactMap { d in
+        myLiveRecapEvents(
+            from: drinks, memberCount: members.count, ghostCount: ghosts.count, for: profileId
+        )
+    }
+
+    /// Same projection from EXPLICIT inputs — used when a live group sesh
+    /// is detected as ended mid-poll, before the freshly-fetched roster
+    /// has been assigned to `self` (so `members`/`drinks` aren't current).
+    func myLiveRecapEvents(
+        from sourceDrinks: [SessionDrink],
+        memberCount: Int,
+        ghostCount: Int,
+        for profileId: UUID
+    ) -> [RecapEvent] {
+        let n = max(memberCount + ghostCount, 1)
+        return sourceDrinks.filter { $0.live }.compactMap { d in
             let isMine = d.profileId == profileId && !d.shared
             guard isMine || d.shared else { return nil }
             let grams = d.shared ? d.grams / Double(n) : d.grams
             return RecapEvent(when: d.createdAt, grams: grams, name: d.drinkName)
         }.sorted { $0.when < $1.when }
+    }
+
+    /// Handoff for the auto-recap: set to the user's projected events the
+    /// instant a LIVE group sesh ends (host ended, self left, or kicked),
+    /// just before `clearLocal` wipes the roster. SessionView observes
+    /// this, builds + presents the recap, then resets it to nil. Only
+    /// ever non-empty for the live-scope store.
+    @Published var endedLiveEvents: [RecapEvent]? = nil
+    /// The squad's per-member stats captured at the same instant, for the
+    /// group recap's leaderboard. Nil for a solo sesh / single member.
+    @Published var endedGroupLeaderboard: [GroupMemberStat]? = nil
+
+    /// Snapshot my events before a live-end clears them. No-op for the
+    /// plan store, or when I logged nothing worth replaying.
+    private func captureLiveEnd(
+        drinks sourceDrinks: [SessionDrink],
+        members memberList: [SessionMember],
+        ghosts ghostList: [GhostMember]
+    ) {
+        guard scopeLive, let uid = myId else { return }
+        let memberCount = memberList.count
+        let ghostCount = ghostList.count
+        let events = myLiveRecapEvents(
+            from: sourceDrinks, memberCount: memberCount, ghostCount: ghostCount, for: uid
+        )
+        if !events.isEmpty { endedLiveEvents = events }
+
+        // The squad leaderboard — each member's peak BAC + drink count, for
+        // the group recap. Only meaningful with 2+ heads.
+        var board: [GroupMemberStat] = []
+        for m in memberList {
+            guard let p = memberProfiles[m.profileId] else { continue }
+            let denom = p.weightKg * 1000 * p.sex.r
+            guard denom > 0 else { continue }
+            let evs = myLiveRecapEvents(
+                from: sourceDrinks, memberCount: memberCount, ghostCount: ghostCount, for: m.profileId
+            )
+            board.append(GroupMemberStat(
+                name: p.name,
+                drinkCount: evs.count,
+                peakBAC: Self.peakBAC(of: evs, bumpPerGram: 100 / denom),
+                isMe: m.profileId == uid
+            ))
+        }
+        for g in ghostList {
+            let denom = g.weightKg * 1000 * g.sex.r
+            guard denom > 0 else { continue }
+            let evs = ghostRecapEvents(g, sharedDrinks: sourceDrinks, headCount: max(memberCount + ghostCount, 1))
+            board.append(GroupMemberStat(
+                name: g.name,
+                drinkCount: evs.count,
+                peakBAC: Self.peakBAC(of: evs, bumpPerGram: 100 / denom),
+                isMe: false
+            ))
+        }
+        if board.count >= 2 {
+            endedGroupLeaderboard = board.sorted { $0.peakBAC > $1.peakBAC }
+        }
+    }
+
+    /// Peak of a chronological Widmark walk over the given events.
+    private static func peakBAC(of events: [RecapEvent], bumpPerGram: Double) -> Double {
+        let sorted = events.sorted { $0.when < $1.when }
+        var bac = 0.0, peak = 0.0
+        var last: Date? = nil
+        for e in sorted {
+            if let l = last { bac = max(0, bac - 0.015 * (e.when.timeIntervalSince(l) / 3600)) }
+            bac += e.grams * bumpPerGram
+            last = e.when
+            peak = max(peak, bac)
+        }
+        return peak
+    }
+
+    /// A guest's recap events — their own logged drinks + their per-head
+    /// share of shared rounds.
+    private func ghostRecapEvents(_ ghost: GhostMember, sharedDrinks: [SessionDrink], headCount n: Int) -> [RecapEvent] {
+        var evs: [RecapEvent] = ghost.drinks.map {
+            RecapEvent(when: $0.consumedAt, grams: $0.volumeML * $0.abv * 0.789, name: $0.optionName)
+        }
+        for d in sharedDrinks where d.shared && d.live {
+            evs.append(RecapEvent(when: d.createdAt, grams: d.grams / Double(n), name: d.drinkName))
+        }
+        return evs.sorted { $0.when < $1.when }
     }
 
     /// Live BAC for a manually-added guest: their own logged drinks PLUS
@@ -1414,6 +1534,8 @@ final class SessionService: ObservableObject {
             // Swallow — same semantics as the previous `try?`. We
             // still go idle locally; the user can retry next session.
         }
+        // Leaving a live group ends my night → hand off the recap.
+        captureLiveEnd(drinks: drinks, members: members, ghosts: ghosts)
         clearLocal()
     }
 
@@ -1444,6 +1566,8 @@ final class SessionService: ObservableObject {
         } catch {
             // Swallow — same semantics as the previous `try?`.
         }
+        // Host ending a live group ends everyone's night → recap for me too.
+        captureLiveEnd(drinks: drinks, members: members, ghosts: ghosts)
         clearLocal()
     }
 
@@ -1566,9 +1690,76 @@ final class SessionService: ObservableObject {
         }
     }
 
+    /// Broadcast a group check-in/out — sets the session's shared venue so
+    /// every following member adopts it. `nil` = check the group out.
+    /// Member-authorized RPC (sessions' RLS update is host-only).
+    func setGroupVenue(_ venue: Venue?) async {
+        guard let sid = session?.id else { return }
+        liveVenue = venue
+        session?.liveVenue = venue
+        liveVenueWriteInFlight = true
+        defer { liveVenueWriteInFlight = false }
+        // Explicit encode (not encodeIfPresent) so a checkout sends an
+        // actual JSON `null` instead of omitting the param — PostgREST
+        // would otherwise reject the call as missing a required argument.
+        struct Params: Encodable {
+            let p_session_id: String
+            let p_venue: Venue?
+            enum CodingKeys: String, CodingKey { case p_session_id, p_venue }
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(p_session_id, forKey: .p_session_id)
+                try c.encode(p_venue, forKey: .p_venue)
+            }
+        }
+        do {
+            _ = try await supabase
+                .rpc("set_session_live_venue", params: Params(
+                    p_session_id: sid.uuidString.lowercased(),
+                    p_venue: venue
+                ))
+                .execute()
+        } catch {
+            // Non-fatal — local copy updated; the next write re-converges.
+        }
+    }
+
+    /// Broadcast a group pre-game/between location (or nil to clear) so
+    /// following members adopt it. Mirrors `setGroupVenue`.
+    func setGroupLooseSpot(_ spot: LooseSpot?) async {
+        guard let sid = session?.id else { return }
+        liveLooseSpot = spot
+        session?.liveLooseSpot = spot
+        liveLooseSpotWriteInFlight = true
+        defer { liveLooseSpotWriteInFlight = false }
+        struct Params: Encodable {
+            let p_session_id: String
+            let p_spot: LooseSpot?
+            enum CodingKeys: String, CodingKey { case p_session_id, p_spot }
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(p_session_id, forKey: .p_session_id)
+                try c.encode(p_spot, forKey: .p_spot)
+            }
+        }
+        do {
+            _ = try await supabase
+                .rpc("set_session_live_loose_spot", params: Params(
+                    p_session_id: sid.uuidString.lowercased(), p_spot: spot
+                ))
+                .execute()
+        } catch {
+            // Non-fatal — local copy updated; next write re-converges.
+        }
+    }
+
     private func clearLocal() {
         stopPolling()
         session = nil; members = []; memberProfiles = [:]; drinks = []; ghosts = []
+        liveVenue = nil; liveLooseSpot = nil; followingGroupVenue = true
+        // Note: endedGroupLeaderboard/endedLiveEvents are intentionally NOT
+        // cleared here — clearLocal runs right after capture on group end,
+        // and SessionView consumes them on the next tick.
         persistSessionID(nil)
     }
 
@@ -1634,6 +1825,10 @@ final class SessionService: ObservableObject {
                 .value {
                 let endedForMyMode = scopeLive ? !row.activeLive : !row.activePlan
                 if endedForMyMode || row.active == false {
+                    // Capture my night for the auto-recap from the freshly
+                    // fetched data (self.drinks/members aren't assigned on
+                    // a launch poll yet); row.ghosts is the live guest set.
+                    captureLiveEnd(drinks: ds, members: ms, ghosts: row.ghosts)
                     clearLocal()
                     return
                 }
@@ -1645,6 +1840,16 @@ final class SessionService: ObservableObject {
                     ghosts = row.ghosts
                     session?.ghosts = row.ghosts
                 }
+                // Pull the group's shared venue so following members adopt
+                // it. Skip while our own write is mid-flight.
+                if !liveVenueWriteInFlight, liveVenue != row.liveVenue {
+                    liveVenue = row.liveVenue
+                    session?.liveVenue = row.liveVenue
+                }
+                if !liveLooseSpotWriteInFlight, liveLooseSpot != row.liveLooseSpot {
+                    liveLooseSpot = row.liveLooseSpot
+                    session?.liveLooseSpot = row.liveLooseSpot
+                }
             }
 
             // Did I get kicked out of THIS mode (e.g. left from another
@@ -1653,6 +1858,7 @@ final class SessionService: ObservableObject {
             // `in_<scope>` flag. We already pulled the filtered list
             // above, so a missing self-row in `ms` means I'm out.
             if let uid = myId, !ms.contains(where: { $0.profileId == uid }) {
+                captureLiveEnd(drinks: ds, members: ms, ghosts: ghosts)
                 clearLocal()
                 return
             }
@@ -1811,7 +2017,37 @@ struct MapKitVenueResult: Identifiable, Hashable {
     /// the arithmetic in the view.
     let distance: CLLocationDistance?
 
+    /// The backing map item — used to render a selectable map marker.
+    /// Nil for results synthesised from a tapped built-in POI (those
+    /// already render as the map's own feature).
+    let mapItem: MKMapItem?
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    // Identity is the stable `id` — two results for the same place dedupe
+    // even if MapKit handed back different `MKMapItem` instances.
+    static func == (a: MapKitVenueResult, b: MapKitVenueResult) -> Bool { a.id == b.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+
+    /// Build from a coordinate + name — used when the user taps one of
+    /// the map's built-in bar POIs (we only have its title + location).
+    init(name: String, coordinate: CLLocationCoordinate2D, origin: CLLocation?) {
+        self.id = "\(coordinate.latitude),\(coordinate.longitude)|\(name)"
+        self.name = name
+        self.address = nil
+        self.city = nil
+        self.lat = coordinate.latitude
+        self.lon = coordinate.longitude
+        self.mapItem = nil
+        self.distance = origin.map {
+            CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude).distance(from: $0)
+        }
+    }
+
     init(mapItem: MKMapItem, from origin: CLLocation?) {
+        self.mapItem = mapItem
         // iOS 26+ APIs: `location` for coordinates, `address` for the
         // short street line, `addressRepresentations` for structured
         // city/region. Replaces the deprecated `placemark` accessors.
@@ -1915,7 +2151,12 @@ final class MapKitVenueSearch: ObservableObject {
                     return
                 }
                 let items = response?.mapItems ?? []
-                self.results = items.map { MapKitVenueResult(mapItem: $0, from: origin) }
+                let mapped = items.map { MapKitVenueResult(mapItem: $0, from: origin) }
+                // Closest first when we know where the user is — so two
+                // bars sharing a name surface the nearer one at the top.
+                self.results = origin == nil ? mapped : mapped.sorted {
+                    ($0.distance ?? .greatestFiniteMagnitude) < ($1.distance ?? .greatestFiniteMagnitude)
+                }
             }
         }
     }
@@ -2715,6 +2956,57 @@ final class RecentDrinksStore: ObservableObject {
 
     private func save() {
         if let data = try? JSONEncoder().encode(recents) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+}
+
+/// The user's saved drinks library — scanned cans/bottles (and any pick
+/// they explicitly keep) that should be reusable forever, not just while
+/// they're still "recent". Device-local, newest-first, deduped by name.
+/// Reuses `RecentDrink` for storage since it captures the full spec.
+@MainActor
+final class SavedDrinksStore: ObservableObject {
+    @Published private(set) var items: [RecentDrink] = []
+
+    private let key = "sesh.savedDrinks.v1"
+
+    init() { load() }
+
+    /// Full `DrinkOption`s, newest-first.
+    var drinks: [DrinkOption] { items.map(\.option) }
+
+    func isSaved(_ option: DrinkOption) -> Bool {
+        items.contains { $0.name == option.name }
+    }
+
+    /// Save (or refresh) a drink. Moves it to the front so the most
+    /// recently saved spec wins if the same name is scanned again.
+    func save(_ option: DrinkOption) {
+        var list = items.filter { $0.name != option.name }
+        list.insert(RecentDrink(option: option), at: 0)
+        items = list
+        persist()
+    }
+
+    func remove(_ option: DrinkOption) {
+        items.removeAll { $0.name == option.name }
+        persist()
+    }
+
+    func toggle(_ option: DrinkOption) {
+        isSaved(option) ? remove(option) : save(option)
+    }
+
+    private func load() {
+        if let data = UserDefaults.standard.data(forKey: key),
+           let arr = try? JSONDecoder().decode([RecentDrink].self, from: data) {
+            items = arr
+        }
+    }
+
+    private func persist() {
+        if let data = try? JSONEncoder().encode(items) {
             UserDefaults.standard.set(data, forKey: key)
         }
     }
@@ -4386,6 +4678,13 @@ private struct SessionView: View {
     /// `venues.currentVenue` changes) and the END flow turns them into
     /// the animated Night Recap. Cleared when the sesh ends.
     @StateObject private var journey = NightJourneyStore()
+    /// Saved nights — used to persist + auto-present a recap when a sesh
+    /// is found to have wound down while the app was closed.
+    @StateObject private var recapHistory = RecapHistoryStore()
+    /// Set when an abandoned-but-loggable sesh is garbage-collected on
+    /// launch — presents the recap the user would have seen had they hit
+    /// END themselves.
+    @State private var autoRecap: NightRecap? = nil
     /// On-device cache of groups the user has been in. Updated whenever a
     /// SessionService refresh lands on a session it's tracking. Surfaces
     /// in GroupSheet's idle view so rejoining a previous group is a tap
@@ -4496,6 +4795,40 @@ private struct SessionView: View {
     private var vibe: VibeMessage {
         let msgs = status.messages
         return msgs[max(0, order.count) % msgs.count]
+    }
+
+    /// Build the recap for a sesh that wound down while the app was closed
+    /// (solo: auto-ended by `endIfStale`; group: detected ended on poll).
+    /// Mirrors LiveSeshView's build, but ends the night at the last thing
+    /// that actually happened (last drink / check-in / photo) rather than
+    /// "now" — which could be the next afternoon and would wildly inflate
+    /// the duration.
+    private func buildAutoRecap(events: [RecapEvent]) -> NightRecap? {
+        let denom = profile.weightKg * 1000 * profile.sex.r
+        guard denom > 0, !events.isEmpty else { return nil }
+        var endedAt = events.map(\.when).max() ?? Date()
+        if let a = journey.stops.map(\.arrivedAt).max() { endedAt = max(endedAt, a) }
+        if let d = journey.stops.compactMap(\.departedAt).max() { endedAt = max(endedAt, d) }
+        if let p = journey.loosePhotos.map(\.takenAt).max() { endedAt = max(endedAt, p) }
+        return NightRecap.build(
+            journeyStops: journey.stops,
+            events: events,
+            bumpPerGram: 100 / denom,
+            loosePhotos: journey.loosePhotos,
+            looseSpots: journey.looseSpots,
+            endedAt: endedAt
+        )
+    }
+
+    /// Save + surface an auto-built recap (shared by the solo and group
+    /// paths). Adopts staged photos, persists, presents, clears the route.
+    private func presentAutoRecap(_ built: NightRecap) {
+        recapHistory.adoptPhotos(from: journey.photosDirectory, for: built)
+        recapHistory.save(built)
+        autoRecap = built
+        journey.clear()
+        // The sesh is over — reset the venue chip to "tap to check in".
+        venues.currentVenue = nil
     }
 
     private func addLocal(_ option: DrinkOption) {
@@ -4643,7 +4976,34 @@ private struct SessionView: View {
             if let venue {
                 journey.checkIn(venue)
             } else {
-                journey.checkOut()
+                // Checkout drops a "between bars" stop (with location when
+                // available) you can swipe to, photograph, and reorder.
+                journey.checkOut(coordinate: location.location?.coordinate)
+            }
+        }
+        // Group check-in: when a member moves the whole group, every
+        // FOLLOWING member's local venue adopts it (which then records the
+        // journey check-in/out through the observer above). Members who
+        // broke away ignore it.
+        .onChange(of: liveGroup.liveVenue) { _, groupVenue in
+            guard liveGroup.isActive, liveGroup.followingGroupVenue else { return }
+            if venues.currentVenue?.id != groupVenue?.id {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                    venues.currentVenue = groupVenue
+                }
+            }
+        }
+        // Same for the group's pre-game / between location — following
+        // members adopt it VERBATIM (keeping its timestamp, so a group
+        // pre-game spot files onto pre-game, not "between bars"). The
+        // already-have-this-id guard stops it re-adopting every poll.
+        .onChange(of: liveGroup.liveLooseSpot) { _, spot in
+            guard liveGroup.isActive, liveGroup.followingGroupVenue else { return }
+            if let spot {
+                guard !journey.looseSpots.contains(where: { $0.id == spot.id }) else { return }
+                journey.adoptLooseSpot(spot)
+            } else {
+                journey.clearCurrentLooseSpot()
             }
         }
         .sheet(isPresented: $invitesSheetOpen) {
@@ -4712,11 +5072,24 @@ private struct SessionView: View {
             // biologically wound down get cleaned up. If we did end
             // it, also tear down the lock-screen activity so the
             // dead card stops following the user around.
+            // Snapshot the drinks BEFORE endIfStale wipes them — they're
+            // what the recap is built from.
+            let staleDrinks = live.drinks
             if live.endIfStale(profile: profile) {
                 LiveActivityController.shared.end()
-                // An abandoned sesh forfeits its recap — clear the route
-                // so last weekend's bars don't replay into the next one.
-                journey.clear()
+                // The user never got to hit END, so build the recap they'd
+                // have seen and surface it automatically on this launch.
+                // Saved to Past nights either way (the cover lets them keep
+                // or discard, same as a normal END).
+                let events = staleDrinks.map {
+                    RecapEvent(when: $0.consumedAt, grams: $0.grams, name: $0.optionName)
+                }
+                if let built = buildAutoRecap(events: events) {
+                    presentAutoRecap(built)
+                } else {
+                    // Nothing to recap — still clear the abandoned route.
+                    journey.clear()
+                }
             }
         }
         // Pull venue + specials catalog on first launch so the chip /
@@ -4724,6 +5097,29 @@ private struct SessionView: View {
         // an empty DB just means "Featured" stays empty and the user
         // discovers their bar via the search field.
         .task { await venues.refresh() }
+        // Auto-recap for a sesh that wound down while the app was closed.
+        // autoEnd: already ended (nothing to tear down) but still offers
+        // save-or-discard, same as a normal END.
+        .fullScreenCover(item: $autoRecap) { built in
+            NightRecapView(recap: built, history: recapHistory, mode: .autoEnd) {
+                autoRecap = nil
+            }
+        }
+        // Group auto-recap: SessionService hands off my projected events
+        // the instant a live group sesh ends (host ended / I left / poll
+        // detected it on launch). Build + present the same way as solo.
+        .onChange(of: liveGroup.endedLiveEvents) { _, events in
+            guard let events, !events.isEmpty else { return }
+            let board = liveGroup.endedGroupLeaderboard
+            liveGroup.endedLiveEvents = nil
+            liveGroup.endedGroupLeaderboard = nil
+            if var built = buildAutoRecap(events: events) {
+                // Group sesh → carry the squad leaderboard so the recap's
+                // overview shows everyone's night, not just mine.
+                built.groupLeaderboard = board
+                presentAutoRecap(built)
+            }
+        }
         // When the plan members list refreshes (entry or 3s poll), pull
         // my synced duration from the DB into the local slider so the
         // slider position matches what other phones see.
@@ -4822,7 +5218,7 @@ private struct SessionView: View {
                 .presentationBackground(Color.ink)
         }
         .sheet(isPresented: $venueOpen) {
-            VenueSheet(location: location, venues: venues)
+            VenueSheet(location: location, venues: venues, group: liveGroup)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
@@ -6315,10 +6711,9 @@ private struct ProfileSheet: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
-        // Replay a saved night. isReplay flips the closing button to a
-        // plain DONE — nothing to tear down on this path.
+        // Replay a saved night — closing button is a plain DONE.
         .fullScreenCover(item: $replayRecap) { night in
-            NightRecapView(recap: night, history: nightHistory, isReplay: true) {
+            NightRecapView(recap: night, history: nightHistory, mode: .replay) {
                 replayRecap = nil
             }
         }
@@ -7439,10 +7834,39 @@ private struct VenueChip: View {
 private struct VenueSheet: View {
     @ObservedObject var location: LocationService
     @ObservedObject var venues: VenueService
+    /// The live group, when one is running — enables "check in the whole
+    /// group" so not everyone has to check in. nil ⇒ solo (no group UI).
+    @ObservedObject var group: SessionService
     @StateObject private var search = MapKitVenueSearch()
     @State private var query: String = ""
     @State private var checkInInFlight: String? = nil
+    /// "Move the whole group" vs "just me" for this check-in. Defaults to
+    /// the group when one is active.
+    @State private var applyToGroup = true
     @Environment(\.dismiss) private var dismiss
+
+    /// True when a live group is running — gates all the group-check-in UI.
+    private var inLiveGroup: Bool { group.isActive }
+    /// Map camera + the tapped bar. Selecting any bar (our search pins OR
+    /// the map's own built-in POIs) recenters to show it alongside the
+    /// user and surfaces a check-in card.
+    @State private var camera: MapCameraPosition = .userLocation(fallback: .automatic)
+    @State private var mapSelection: MapSelection<MKMapItem>?
+    @State private var selectedVenue: SelectedVenue? = nil
+
+    /// A bar the user tapped on the map. `result`/`venue` are set when the
+    /// pin maps back to a known place; otherwise it's a built-in POI we
+    /// check into by name + coordinate.
+    private struct SelectedVenue: Equatable {
+        let name: String
+        let lat: Double
+        let lon: Double
+        let result: MapKitVenueResult?
+        let venue: Venue?
+        var coordinate: CLLocationCoordinate2D {
+            CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
+    }
 
     /// Featured/curated venues only. MapKit-tier rows that the user has
     /// previously checked into are omitted here — they surface via search,
@@ -7487,17 +7911,25 @@ private struct VenueSheet: View {
 
                     permissionStripe
 
+                    groupCheckInBar
+
                     if venues.currentVenue != nil {
                         Button {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                venues.currentVenue = nil
+                            Task {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    venues.currentVenue = nil
+                                }
+                                if inLiveGroup {
+                                    if applyToGroup { await group.setGroupVenue(nil) }
+                                    else { group.followingGroupVenue = false }
+                                }
+                                dismiss()
                             }
-                            dismiss()
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "xmark.circle.fill")
                                     .font(.system(size: 13, weight: .bold))
-                                Text("CHECK OUT")
+                                Text(inLiveGroup && applyToGroup ? "CHECK GROUP OUT" : "CHECK OUT")
                                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                                     .tracking(2.0)
                             }
@@ -7511,6 +7943,8 @@ private struct VenueSheet: View {
                     }
 
                     searchField
+
+                    venueMapSection
 
                     if !trimmedQuery.isEmpty {
                         searchSection
@@ -7530,6 +7964,29 @@ private struct VenueSheet: View {
             await venues.refresh()
             location.requestAccess()
         }
+        // Default the toggle to whatever the user is currently doing —
+        // following ⇒ "whole group", broken away ⇒ "just me".
+        .onAppear { applyToGroup = group.followingGroupVenue }
+        // New search hits → drop any stale selection and frame the pins
+        // (plus the user) so "where am I / where's the bar" is answered.
+        .onChange(of: search.results) { _, _ in
+            mapSelection = nil
+            selectedVenue = nil
+            if let region = regionFittingAllPins() {
+                withAnimation(.easeInOut(duration: 0.5)) { camera = .region(region) }
+            }
+        }
+        // Tapping a bar on the map (our pin or a built-in POI) → resolve
+        // it and recenter to show it alongside the user.
+        .onChange(of: mapSelection) { _, sel in
+            let resolved = resolveSelection(sel)
+            selectedVenue = resolved
+            if let resolved {
+                withAnimation(.easeInOut(duration: 0.5)) {
+                    camera = .region(regionFitting(coordinate: resolved.coordinate))
+                }
+            }
+        }
         // Debounced re-search: 300ms after the user stops typing. .task(id:)
         // cancels the previous Task whenever `query` changes, so the sleep
         // gets thrown away and only the latest keystroke runs MKLocalSearch.
@@ -7543,6 +8000,226 @@ private struct VenueSheet: View {
             if Task.isCancelled { return }
             search.search(query: snapshot, origin: location.location)
         }
+    }
+
+    /// The map + a check-in card for the tapped bar. Shows your live
+    /// location (blue dot), your search-result pins, and the map's own
+    /// bar POIs — tap any of them to pick a venue visually.
+    private var venueMapSection: some View {
+        VStack(spacing: 10) {
+            Map(position: $camera, selection: $mapSelection) {
+                UserAnnotation()
+                // Search-result pins — selectable (Marker(item:) feeds the
+                // MapSelection binding).
+                ForEach(search.results) { result in
+                    if let item = result.mapItem {
+                        Marker(result.name, systemImage: "wineglass.fill", coordinate: result.coordinate)
+                            .tint(venues.currentVenue?.externalId == result.id ? Color.green : Color.whiskey)
+                            .tag(MapSelection(item))
+                    }
+                }
+                // The active check-in, always highlighted green.
+                if let cur = venues.currentVenue {
+                    Marker(cur.name, systemImage: "checkmark", coordinate:
+                        CLLocationCoordinate2D(latitude: cur.lat, longitude: cur.lon))
+                        .tint(Color.green)
+                }
+            }
+            .mapStyle(.standard(pointsOfInterest: .including([.nightlife, .restaurant, .brewery, .winery])))
+            .mapControls {
+                MapUserLocationButton()
+                MapCompass()
+            }
+            .frame(height: 240)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
+            )
+
+            if let selected = selectedVenue {
+                selectedPinCard(selected)
+            } else {
+                Text("Tap any bar on the map to check in there.")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .tracking(0.4)
+                    .foregroundStyle(Color.cream.opacity(0.45))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    /// Resolve a map tap into a venue. Our own pins arrive as `.value`
+    /// (the tagged MKMapItem); the map's built-in POIs arrive as
+    /// `.feature` (title + coordinate only).
+    private func resolveSelection(_ sel: MapSelection<MKMapItem>?) -> SelectedVenue? {
+        guard let sel else { return nil }
+        if let item = sel.value {
+            if let r = search.results.first(where: { $0.mapItem == item }) {
+                return SelectedVenue(name: r.name, lat: r.lat, lon: r.lon, result: r, venue: nil)
+            }
+            let c = item.location.coordinate
+            return SelectedVenue(name: item.name ?? "Bar", lat: c.latitude, lon: c.longitude, result: nil, venue: nil)
+        }
+        if let feature = sel.feature {
+            let c = feature.coordinate
+            return SelectedVenue(name: feature.title ?? "Bar", lat: c.latitude, lon: c.longitude, result: nil, venue: nil)
+        }
+        return nil
+    }
+
+    private func isCurrent(_ sel: SelectedVenue) -> Bool {
+        if let r = sel.result { return venues.currentVenue?.externalId == r.id }
+        if let v = sel.venue { return venues.currentVenue?.id == v.id }
+        return false
+    }
+
+    private func selectedPinCard(_ sel: SelectedVenue) -> some View {
+        let current = isCurrent(sel)
+        return HStack(spacing: 12) {
+            Image(systemName: "mappin.circle.fill")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(current ? Color.green : Color.whiskey)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(sel.name)
+                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .lineLimit(1)
+                if let d = distanceLabel(metres: distanceTo(sel.coordinate)) {
+                    Text(d)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.cream.opacity(0.55))
+                }
+            }
+            Spacer(minLength: 8)
+            Button {
+                Task { await checkIn(sel) }
+            } label: {
+                Text(current ? "CHECKED IN" : (checkInInFlight != nil ? "…" : "CHECK IN"))
+                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(current ? Color.cream.opacity(0.5) : Color.ink)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(Capsule().fill(current ? Color.cream.opacity(0.08) : Color.whiskey))
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(current || checkInInFlight != nil)
+
+            // ✕ — drop this pick and choose another bar.
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { clearSelection() }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.cream.opacity(0.5))
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(Color.cream.opacity(0.06)))
+            }
+            .buttonStyle(PressScaleStyle())
+            .accessibilityLabel("Clear selection")
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.cream.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1)
+        )
+    }
+
+    private func distanceTo(_ coordinate: CLLocationCoordinate2D) -> CLLocationDistance? {
+        guard let origin = location.location else { return nil }
+        return CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude).distance(from: origin)
+    }
+
+    /// Check in from a map tap — known search result / curated venue go
+    /// through their own paths; a tapped built-in POI becomes a synthetic
+    /// MapKit result so it writes through the same check-in pipeline.
+    @MainActor
+    private func checkIn(_ sel: SelectedVenue) async {
+        if let result = sel.result {
+            await performCheckIn(result)
+        } else if let venue = sel.venue {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                venues.currentVenue = venue
+            }
+            await broadcastCheckIn()
+            dismiss()
+        } else {
+            await performCheckIn(MapKitVenueResult(
+                name: sel.name, coordinate: sel.coordinate, origin: location.location
+            ))
+        }
+    }
+
+    /// Select a search-result row → highlight it on the map + show the
+    /// confirm card (no check-in yet). Routing through `mapSelection`
+    /// lets the existing onChange recenter + resolve.
+    private func selectResult(_ result: MapKitVenueResult) {
+        if let item = result.mapItem {
+            mapSelection = MapSelection(item)
+        } else {
+            selectedVenue = SelectedVenue(
+                name: result.name, lat: result.lat, lon: result.lon, result: result, venue: nil
+            )
+            withAnimation(.easeInOut(duration: 0.5)) {
+                camera = .region(regionFitting(coordinate: result.coordinate))
+            }
+        }
+    }
+
+    /// Select a curated venue row → preview on the map + confirm card.
+    private func selectVenue(_ venue: Venue) {
+        mapSelection = nil
+        let coord = CLLocationCoordinate2D(latitude: venue.lat, longitude: venue.lon)
+        selectedVenue = SelectedVenue(
+            name: venue.name, lat: venue.lat, lon: venue.lon, result: nil, venue: venue
+        )
+        withAnimation(.easeInOut(duration: 0.5)) {
+            camera = .region(regionFitting(coordinate: coord))
+        }
+    }
+
+    /// Clear the current preview — the card's ✕, "pick another bar".
+    private func clearSelection() {
+        mapSelection = nil
+        selectedVenue = nil
+    }
+
+    /// Region containing a coordinate and (when known) the user, so both
+    /// are on screen.
+    private func regionFitting(coordinate: CLLocationCoordinate2D) -> MKCoordinateRegion {
+        var coords = [coordinate]
+        if let loc = location.location { coords.append(loc.coordinate) }
+        return region(around: coords) ?? MKCoordinateRegion(
+            center: coordinate, latitudinalMeters: 600, longitudinalMeters: 600
+        )
+    }
+
+    private func regionFittingAllPins() -> MKCoordinateRegion? {
+        var coords = search.results.map(\.coordinate)
+        if let loc = location.location { coords.append(loc.coordinate) }
+        return region(around: coords)
+    }
+
+    private func region(around coords: [CLLocationCoordinate2D]) -> MKCoordinateRegion? {
+        guard !coords.isEmpty else { return nil }
+        let lats = coords.map(\.latitude)
+        let lons = coords.map(\.longitude)
+        let minLat = lats.min()!, maxLat = lats.max()!
+        let minLon = lons.min()!, maxLon = lons.max()!
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2
+        )
+        let span = MKCoordinateSpan(
+            latitudeDelta: max((maxLat - minLat) * 1.6, 0.006),
+            longitudeDelta: max((maxLon - minLon) * 1.6, 0.006)
+        )
+        return MKCoordinateRegion(center: center, span: span)
     }
 
     private var searchField: some View {
@@ -7595,11 +8272,10 @@ private struct VenueSheet: View {
                         distance: distanceLabel(for: venue),
                         specialsCount: venues.specials(for: venue).count,
                         isCurrent: venues.currentVenue?.id == venue.id
+                            || selectedVenue?.venue?.id == venue.id
                     ) {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                            venues.currentVenue = venue
-                        }
-                        dismiss()
+                        // Preview on the map first; confirm from the card.
+                        selectVenue(venue)
                     }
                 }
             }
@@ -7636,8 +8312,11 @@ private struct VenueSheet: View {
                         distance: distanceLabel(metres: result.distance),
                         isPending: checkInInFlight == result.id,
                         isCurrent: venues.currentVenue?.externalId == result.id
+                            || selectedVenue?.result?.id == result.id
                     ) {
-                        Task { await performCheckIn(result) }
+                        // Preview on the map first — don't check in yet.
+                        // Confirm (or pick another) from the card.
+                        selectResult(result)
                     }
                 }
             }
@@ -7648,8 +8327,139 @@ private struct VenueSheet: View {
     private func performCheckIn(_ result: MapKitVenueResult) async {
         checkInInFlight = result.id
         await venues.checkIn(mapKitResult: result)
+        await broadcastCheckIn()
         checkInInFlight = nil
         dismiss()
+    }
+
+    /// After a local check-in, propagate it to the group (or peel off).
+    /// No-op when solo.
+    private func broadcastCheckIn() async {
+        guard inLiveGroup else { return }
+        if applyToGroup {
+            group.followingGroupVenue = true
+            await group.setGroupVenue(venues.currentVenue)
+        } else {
+            // "Just me" → stop following so the group's moves don't pull
+            // me along.
+            group.followingGroupVenue = false
+        }
+    }
+
+    /// Group check-in controls — "whole group vs just me" + a rejoin
+    /// affordance once you've broken away. Only shown in a live group.
+    @ViewBuilder
+    private var groupCheckInBar: some View {
+        if inLiveGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 9, weight: .black))
+                        .foregroundStyle(Color.whiskey)
+                    Text("CHECK IN APPLIES TO")
+                        .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                        .tracking(2.0)
+                        .foregroundStyle(Color.whiskey)
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: 8) {
+                    groupSegment(title: "WHOLE GROUP", icon: "person.2.fill", active: applyToGroup) {
+                        applyToGroup = true
+                    }
+                    groupSegment(title: "JUST ME", icon: "person.fill", active: !applyToGroup) {
+                        applyToGroup = false
+                    }
+                }
+                if !group.followingGroupVenue {
+                    // Prominent rejoin — you've peeled off, big tap target
+                    // to snap back to wherever the group is now.
+                    Button {
+                        group.followingGroupVenue = true
+                        applyToGroup = true
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                            venues.currentVenue = group.liveVenue
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.triangle.merge")
+                                .font(.system(size: 15, weight: .black))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("REJOIN THE GROUP")
+                                    .font(.system(size: 13, weight: .black, design: .monospaced))
+                                    .tracking(1.6)
+                                if let lv = group.liveVenue {
+                                    Text("They're at \(lv.name)")
+                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                        .opacity(0.85)
+                                        .lineLimit(1)
+                                } else {
+                                    Text("You're on your own right now")
+                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                        .opacity(0.85)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .bold))
+                        }
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.whiskey)
+                        )
+                        .shadow(color: Color.whiskey.opacity(0.4), radius: 12, y: 4)
+                    }
+                    .buttonStyle(PressScaleStyle())
+                } else if let lv = group.liveVenue {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Color.whiskey)
+                        Text("Following the group · \(lv.name)")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.7))
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.whiskey.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.whiskey.opacity(0.25), lineWidth: 1)
+            )
+        }
+    }
+
+    private func groupSegment(title: String, icon: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { action() }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .bold))
+                Text(title)
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(1.2)
+            }
+            .foregroundStyle(active ? Color.ink : Color.cream.opacity(0.7))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(
+                Capsule().fill(active ? Color.whiskey : Color.cream.opacity(0.05))
+            )
+            .overlay(
+                Capsule().strokeBorder(Color.cream.opacity(active ? 0 : 0.1), lineWidth: 1)
+            )
+        }
+        .buttonStyle(PressScaleStyle())
     }
 
     private func sectionHeader(_ title: String, caption: String) -> some View {
@@ -9605,6 +10415,8 @@ private struct LiveSeshView: View {
     /// Saved nights on disk. The recap is written here the moment it's
     /// built (END confirm) so even a crash mid-replay keeps the night.
     @StateObject private var recapHistory = RecapHistoryStore()
+    /// Saved-drinks library — scanned units the user keeps for reuse.
+    @StateObject private var savedDrinks = SavedDrinksStore()
 
     @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
     private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
@@ -9741,6 +10553,7 @@ private struct LiveSeshView: View {
             events: events,
             bumpPerGram: 100 / denom,
             loosePhotos: journey.loosePhotos,
+            looseSpots: journey.looseSpots,
             endedAt: now
         )
     }
@@ -9754,6 +10567,9 @@ private struct LiveSeshView: View {
         // A stale BAC reading on a locked phone is creepy — tear the
         // lock-screen card down alongside the in-app timeline.
         LiveActivityController.shared.end()
+        // The night's over — leave the venue chip showing "tap to check
+        // in", not last night's bar.
+        venues.currentVenue = nil
         // Cleared here for the modal path; the embedded path's parent
         // closure clears it again, which is harmless.
         journey.clear()
@@ -9781,6 +10597,7 @@ private struct LiveSeshView: View {
             LiveMenuSheet(
                 venueSpecials: venues.currentSpecialsAsOptions(),
                 venueName: venues.currentVenue?.name,
+                saved: savedDrinks,
                 onPick: { option in
                     logDrink(option)
                     menuOpen = false
@@ -9791,7 +10608,7 @@ private struct LiveSeshView: View {
             .presentationBackground(Color.ink)
         }
         .sheet(isPresented: $venueOpen) {
-            VenueSheet(location: location, venues: venues)
+            VenueSheet(location: location, venues: venues, group: group)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
@@ -9807,6 +10624,7 @@ private struct LiveSeshView: View {
             LiveMenuSheet(
                 venueSpecials: venues.currentSpecialsAsOptions(),
                 venueName: venues.currentVenue?.name,
+                saved: savedDrinks,
                 onPick: { option in
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
                         ghosts.addDrink(option, to: target.id)
@@ -10214,7 +11032,27 @@ private struct LiveSeshView: View {
             // "between bars" page when not checked in anywhere). Camera or
             // library, attach to any stop of the night; everything rides
             // straight into the end-of-night recap.
-            LiveJourneyPhotosSection(journey: journey, pukeCandidates: pukeCandidates)
+            LiveJourneyPhotosSection(
+                journey: journey,
+                pukeCandidates: pukeCandidates,
+                onRemoveStop: { stop in
+                    // Removing the bar you're currently at also checks you
+                    // out, so the chip + roster stop showing it.
+                    if stop.kind == .bar, venues.currentVenue?.id == stop.venueId {
+                        venues.currentVenue = nil
+                    }
+                    journey.removeStop(stop.id)
+                },
+                userCoordinate: location.location?.coordinate,
+                inFollowingGroup: inGroup && group.followingGroupVenue,
+                onLooseSpotChanged: { spot in
+                    // Share the pre-game / between location with the group
+                    // when you're following it; otherwise it stays local.
+                    if inGroup, group.followingGroupVenue {
+                        Task { await group.setGroupLooseSpot(spot) }
+                    }
+                }
+            )
             liveBACCard(bac: bac, status: status, now: now)
             timeToSoberCard(bac: bac, status: status, now: now)
             if inGroup {
@@ -10578,6 +11416,12 @@ private struct LiveSeshView: View {
                         DrinkTimelineRow(
                             group: g,
                             now: now,
+                            isSaved: savedDrinks.isSaved(g.option),
+                            onToggleSave: {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                                    savedDrinks.toggle(g.option)
+                                }
+                            },
                             onAdd: {
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
                                     addAnother(g)
@@ -11585,6 +12429,9 @@ private struct LiveRoastCard: View {
 private struct DrinkTimelineRow: View {
     let group: LiveDrinkGroup
     let now: Date
+    /// Whether this drink is in the user's saved library, + the toggle.
+    let isSaved: Bool
+    let onToggleSave: () -> Void
     let onAdd: () -> Void
     let onRemove: () -> Void
 
@@ -11604,13 +12451,14 @@ private struct DrinkTimelineRow: View {
                         sharedPill
                     }
                 }
-                Text("\(group.detail) · last \(lastLabel)")
+                Text(group.detail)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .tracking(0.4)
                     .foregroundStyle(Color.cream.opacity(0.5))
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
+            bookmarkButton
             stepper
         }
         .padding(.horizontal, 12)
@@ -11626,6 +12474,21 @@ private struct DrinkTimelineRow: View {
                     lineWidth: 1
                 )
         )
+    }
+
+    /// Save this drink to "My Drinks" straight from the timeline — handy
+    /// for a manually-picked or scanned drink you decide to keep after
+    /// logging it. Filled = saved (tap to remove).
+    private var bookmarkButton: some View {
+        Button(action: onToggleSave) {
+            Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(isSaved ? Color.whiskey : Color.cream.opacity(0.4))
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleStyle())
+        .accessibilityLabel(isSaved ? "Remove from my drinks" : "Save to my drinks")
     }
 
     /// `–  N  +` quantity control. Minus disabled when there's nothing of
@@ -11688,17 +12551,6 @@ private struct DrinkTimelineRow: View {
 
     /// Time of the most recent one of these — "HH:MM" today, or relative
     /// if it was a while ago.
-    private var lastLabel: String {
-        let seconds = Int(now.timeIntervalSince(group.lastAt))
-        if seconds < 60 { return "just now" }
-        let m = seconds / 60
-        if m < 60 { return "\(m)m ago" }
-        let h = m / 60
-        if h < 12 { return "\(h)h ago" }
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        return f.string(from: group.lastAt)
-    }
 }
 
 // MARK: - Live Menu Sheet (catalog picker, no quantity steppers)
@@ -11712,6 +12564,9 @@ private struct LiveMenuSheet: View {
     /// the regular catalog rows below.
     var venueSpecials: [DrinkOption] = []
     var venueName: String? = nil
+    /// The user's saved-drinks library. Scanned units auto-save here; the
+    /// "My drinks" section lets them be re-logged without re-scanning.
+    @ObservedObject var saved: SavedDrinksStore
     let onPick: (DrinkOption) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var selectedCategory: DrinkCategory = .beer
@@ -11721,6 +12576,73 @@ private struct LiveMenuSheet: View {
     private var specialsHeader: String {
         if let n = venueName, !n.isEmpty { return "Specials at \(n)" }
         return "Specials"
+    }
+
+    /// One row in a category list. `isSaved` rows are the user's own
+    /// scanned / manually-entered drinks — they carry a filled bookmark
+    /// that un-saves them. Built-in catalog rows have no bookmark.
+    private func catalogRow(_ option: DrinkOption, isSaved: Bool) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                onPick(option)
+            } label: {
+                HStack(spacing: 12) {
+                    DrinkGlyph(option: option, size: 24)
+                        .frame(width: 40, height: 40)
+                        .background(Circle().fill(Color.smoke))
+                        .overlay(Circle().strokeBorder(
+                            (isSaved ? Color.whiskey.opacity(0.4) : Color.whiskey.opacity(0.25)),
+                            lineWidth: 1
+                        ))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(option.name)
+                            .font(.system(size: 15, weight: isSaved ? .heavy : .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .lineLimit(1)
+                        Text(option.detail)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .tracking(0.4)
+                            .foregroundStyle(Color.cream.opacity(0.5))
+                    }
+                    Spacer()
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(Color.whiskey))
+                }
+            }
+            .buttonStyle(PressScaleStyle())
+
+            if isSaved {
+                Button {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                        saved.remove(option)
+                    }
+                } label: {
+                    Image(systemName: "bookmark.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.whiskey)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(Color.cream.opacity(0.05)))
+                }
+                .buttonStyle(PressScaleStyle())
+                .accessibilityLabel("Remove from my drinks")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.cream.opacity(isSaved ? 0.05 : 0.035))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(
+                    (isSaved ? Color.whiskey.opacity(0.25) : Color.cream.opacity(0.07)),
+                    lineWidth: 1
+                )
+        )
     }
 
     var body: some View {
@@ -11861,43 +12783,31 @@ private struct LiveMenuSheet: View {
                 .padding(.horizontal, -22)
 
                 VStack(spacing: 8) {
+                    // Built-in catalog drinks first…
                     ForEach(DrinkCatalog.options(for: selectedCategory), id: \.name) { option in
-                        Button {
-                            onPick(option)
-                        } label: {
-                            HStack(spacing: 12) {
-                                DrinkGlyph(option: option, size: 24)
-                                    .frame(width: 40, height: 40)
-                                    .background(Circle().fill(Color.smoke))
-                                    .overlay(Circle().strokeBorder(Color.whiskey.opacity(0.25), lineWidth: 1))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(option.name)
-                                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(Color.cream)
-                                    Text(option.detail)
-                                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                        .tracking(0.4)
-                                        .foregroundStyle(Color.cream.opacity(0.5))
-                                }
-                                Spacer()
-                                Image(systemName: "plus")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundStyle(Color.ink)
-                                    .frame(width: 30, height: 30)
-                                    .background(Circle().fill(Color.whiskey))
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .fill(Color.cream.opacity(0.035))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .strokeBorder(Color.cream.opacity(0.07), lineWidth: 1)
-                            )
+                        catalogRow(option, isSaved: false)
+                    }
+                    // …then the user's own saved scanned / manual drinks for
+                    // this category, under a clear header. Filled bookmark
+                    // un-saves them.
+                    let savedHere = saved.drinks.filter { $0.category == selectedCategory }
+                    if !savedHere.isEmpty {
+                        HStack(spacing: 8) {
+                            Image(systemName: "bookmark.fill")
+                                .font(.system(size: 9, weight: .black))
+                                .foregroundStyle(Color.whiskey)
+                            Text("SAVED DRINKS")
+                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                .tracking(2.4)
+                                .foregroundStyle(Color.whiskey)
+                            Rectangle()
+                                .fill(Color.whiskey.opacity(0.25))
+                                .frame(height: 1)
                         }
-                        .buttonStyle(PressScaleStyle())
+                        .padding(.top, 10)
+                        ForEach(savedHere, id: \.name) { option in
+                            catalogRow(option, isSaved: true)
+                        }
                     }
                 }
 
@@ -11909,8 +12819,12 @@ private struct LiveMenuSheet: View {
         .preferredColorScheme(.dark)
         .fullScreenCover(isPresented: $scanning) {
             BarcodeScanFlow(
-                onComplete: { option in
+                onComplete: { option, save in
                     scanning = false
+                    // The confirm sheet's "ADD & SAVE" path sets save —
+                    // keep it in My Drinks so the can never needs
+                    // re-scanning. "JUST ADD" logs it once and forgets.
+                    if save { saved.save(option) }
                     onPick(option)
                 },
                 onCancel: { scanning = false }

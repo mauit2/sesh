@@ -343,7 +343,9 @@ struct BarcodeCameraView: UIViewControllerRepresentable {
 /// to the caller (which logs it like any catalog pick). `onCancel`
 /// dismisses with nothing.
 struct BarcodeScanFlow: View {
-    let onComplete: (DrinkOption) -> Void
+    /// (option, saveToMyDrinks) — the caller logs the drink and saves it
+    /// to the user's library when the flag is set.
+    let onComplete: (DrinkOption, Bool) -> Void
     let onCancel: () -> Void
 
     @StateObject private var lookup = BeverageLookupService()
@@ -369,7 +371,7 @@ struct BarcodeScanFlow: View {
             case .confirm(let beverage):
                 BarcodeConfirmView(
                     beverage: beverage,
-                    onLog: { option, edited in
+                    onLog: { option, edited, save in
                         // Cache locally + cast a consensus vote (the spec
                         // only joins the shared catalog after 5 distinct
                         // users agree). Fire-and-forget — the drink logs
@@ -383,7 +385,7 @@ struct BarcodeScanFlow: View {
                                 abv: option.abv
                             )
                         }
-                        onComplete(option)
+                        onComplete(option, save)
                     },
                     onCancel: onCancel
                 )
@@ -485,9 +487,10 @@ struct BarcodeScanFlow: View {
 /// lookup; the user can fix anything (ABV especially, since it drives BAC).
 private struct BarcodeConfirmView: View {
     let beverage: ScannedBeverage
-    /// (option, sourceBeverage) — the caller logs the option and we use the
-    /// barcode for the catalog contribution.
-    let onLog: (DrinkOption, ScannedBeverage) -> Void
+    /// (option, sourceBeverage, saveToMyDrinks) — the caller logs the
+    /// option, uses the barcode for the catalog contribution, and keeps
+    /// the drink in the user's saved library when the flag is true.
+    let onLog: (DrinkOption, ScannedBeverage, Bool) -> Void
     let onCancel: () -> Void
 
     @State private var name: String
@@ -498,7 +501,7 @@ private struct BarcodeConfirmView: View {
     private let volumePresets: [Double] = [330, 440, 500, 568, 750]
 
     init(beverage: ScannedBeverage,
-         onLog: @escaping (DrinkOption, ScannedBeverage) -> Void,
+         onLog: @escaping (DrinkOption, ScannedBeverage, Bool) -> Void,
          onCancel: @escaping () -> Void) {
         self.beverage = beverage
         self.onLog = onLog
@@ -670,22 +673,34 @@ private struct BarcodeConfirmView: View {
         }
     }
 
+    /// Build the finished option from the current fields. Nil when the
+    /// inputs aren't valid yet (guards both buttons).
+    private func buildOption() -> DrinkOption? {
+        guard let vol = volumeML, let abv = abvFraction else { return nil }
+        let clean = name.trimmingCharacters(in: .whitespaces)
+        return DrinkOption(
+            category: category,
+            name: clean,
+            detail: "\(Int(vol)) ml · \(abvText)%",
+            volumeML: vol,
+            abv: abv
+        )
+    }
+
+    /// Two paths out of the confirm sheet: keep the drink in My Drinks
+    /// for next time, or just log it this once.
     private var logButton: some View {
-        Button {
-            guard let vol = volumeML, let abv = abvFraction else { return }
-            let clean = name.trimmingCharacters(in: .whitespaces)
-            let option = DrinkOption(
-                category: category,
-                name: clean,
-                detail: "\(Int(vol)) ml · \(abvText)%",
-                volumeML: vol,
-                abv: abv
-            )
-            onLog(option, beverage)
-        } label: {
-            Text("LOG THIS DRINK")
-                .font(.system(size: 13, weight: .black, design: .monospaced))
-                .tracking(1.4)
+        VStack(spacing: 10) {
+            Button {
+                if let option = buildOption() { onLog(option, beverage, true) }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "bookmark.fill")
+                        .font(.system(size: 12, weight: .bold))
+                    Text("ADD & SAVE TO MY DRINKS")
+                        .font(.system(size: 13, weight: .black, design: .monospaced))
+                        .tracking(1.2)
+                }
                 .foregroundStyle(Color.ink)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
@@ -694,9 +709,31 @@ private struct BarcodeConfirmView: View {
                         .fill(canLog ? Color.whiskey : Color.cream.opacity(0.12))
                 )
                 .shadow(color: canLog ? Color.whiskey.opacity(0.4) : .clear, radius: 14, y: 6)
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(!canLog)
+
+            Button {
+                if let option = buildOption() { onLog(option, beverage, false) }
+            } label: {
+                Text("JUST ADD DRINK")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(canLog ? Color.cream.opacity(0.85) : Color.cream.opacity(0.3))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.cream.opacity(0.05))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.cream.opacity(0.15), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(!canLog)
         }
-        .buttonStyle(PressScaleStyle())
-        .disabled(!canLog)
         .padding(.top, 6)
     }
 

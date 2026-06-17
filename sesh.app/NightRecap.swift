@@ -41,6 +41,10 @@ enum JourneyStopKind: String, Codable {
     case bar
     case food
     case puke
+    /// A "between bars" stop, auto-created on checkout — carries its own
+    /// transit photos + (optional) location and is reorderable like any
+    /// stop. Becomes the recap's refuel/afters leg.
+    case between
 }
 
 /// One recorded entry on the night's route.
@@ -49,9 +53,10 @@ struct SeshStop: Codable, Identifiable, Equatable {
     let venueId: UUID
     let kind: JourneyStopKind
     let name: String
-    /// nil for markers (food/puke) — they get cards but no map pin.
-    let lat: Double?
-    let lon: Double?
+    /// nil for markers (food/puke) until a location is added. Mutable so a
+    /// between/marker stop can be located after the fact.
+    var lat: Double?
+    var lon: Double?
     let arrivedAt: Date
     /// Set when the user taps CHECK OUT. Lets the recap carve "between
     /// bars" (refuel) and "after last bar" (afters) legs out of the night.
@@ -112,13 +117,146 @@ struct LooseTake: Codable, Equatable {
     let takenAt: Date
 }
 
+/// A spot marked while NOT at a bar — the pre-game (before the first
+/// check-in) or a between-bars/afters stop. Optional + opt-in. Stores the
+/// EXACT coordinate (these are often a home), kept on-device only; the
+/// UI warns before capturing and offers name-only. The timestamp files it
+/// onto the right narrative leg at recap time, just like loose photos.
+struct LooseSpot: Codable, Equatable, Hashable, Identifiable {
+    let id: UUID
+    var name: String?
+    var lat: Double?
+    var lon: Double?
+    let at: Date
+    var coordinate: CLLocationCoordinate2D? {
+        guard let lat, let lon else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+    var hasLocation: Bool { lat != nil && lon != nil }
+}
+
 @MainActor
 final class NightJourneyStore: ObservableObject {
     @Published private(set) var stops: [SeshStop] = []
     @Published private(set) var loosePhotos: [LooseTake] = []
+    @Published private(set) var looseSpots: [LooseSpot] = []
 
     private let key = "sesh.nightJourney.v1"
     private let looseKey = "sesh.nightJourney.loose.v1"
+    private let looseSpotsKey = "sesh.nightJourney.looseSpots.v1"
+
+    /// Start of the current loose window — the last checkout (between bars
+    /// / afters), or the dawn of time when no bar has been visited yet
+    /// (pre-game). Used to scope "the spot for right now".
+    private var currentWindowStart: Date {
+        stops.last(where: { $0.kind == .bar })?.departedAt ?? .distantPast
+    }
+
+    /// The loose spot for the moment the user is in (pre-game, or the gap
+    /// since their last checkout).
+    var currentLooseSpot: LooseSpot? {
+        looseSpots.last { $0.at >= currentWindowStart }
+    }
+
+    /// Loose photos belonging to the CURRENT loose moment only — pre-game
+    /// (before any bar) or the gap since the last checkout. Scoping by the
+    /// window keeps pre-game shots from resurfacing on a later between-bars
+    /// page: each moment shows only its own photos.
+    var currentWindowLoosePhotos: [LooseTake] {
+        let start = currentWindowStart
+        return loosePhotos.filter { $0.takenAt >= start }
+    }
+
+    /// When the first bar check-in happened (nil while still pre-gaming).
+    var firstBarArrival: Date? {
+        stops.first(where: { $0.kind == .bar })?.arrivedAt
+    }
+
+    /// Photos taken before the first check-in — the pre-game's own set,
+    /// viewable on its dedicated page even after you've moved on to a bar.
+    var preGamePhotos: [LooseTake] {
+        let cutoff = firstBarArrival
+        return loosePhotos.filter { cutoff == nil || $0.takenAt < cutoff! }
+    }
+
+    /// The pre-game's marked spot (latest before the first check-in).
+    var preGameSpot: LooseSpot? {
+        let cutoff = firstBarArrival
+        return looseSpots.last { cutoff == nil || $0.at < cutoff! }
+    }
+
+    /// True once a bar has been visited — i.e. pre-game is now history.
+    var hasCheckedInSomewhere: Bool { firstBarArrival != nil }
+
+    /// Set (or replace) the loose spot for the current window. The exact
+    /// coordinate is stored as-is — these stay on-device, and (once recap
+    /// sharing exists) the user chooses per-share whether to include them.
+    func setCurrentLooseSpot(name: String?, rawCoordinate: CLLocationCoordinate2D?) {
+        let start = currentWindowStart
+        looseSpots.removeAll { $0.at >= start }
+        let trimmed = name?.trimmingCharacters(in: .whitespaces)
+        looseSpots.append(LooseSpot(
+            id: UUID(),
+            name: (trimmed?.isEmpty == false) ? trimmed : nil,
+            lat: rawCoordinate?.latitude,
+            lon: rawCoordinate?.longitude,
+            at: Date()
+        ))
+        saveLooseSpots()
+    }
+
+    func clearCurrentLooseSpot() {
+        let start = currentWindowStart
+        looseSpots.removeAll { $0.at >= start }
+        saveLooseSpots()
+    }
+
+    /// Adopt a loose spot broadcast by the group — inserted VERBATIM so its
+    /// original timestamp files it onto the right leg (a group pre-game
+    /// spot stays pre-game, not "between bars"). Replaces whatever spot the
+    /// follower had in that same window.
+    func adoptLooseSpot(_ spot: LooseSpot) {
+        // The window containing spot.at is bounded by the bar checkout just
+        // before it and the next bar arrival after it.
+        let windowStart = stops
+            .filter { $0.kind == .bar }
+            .compactMap(\.departedAt)
+            .filter { $0 <= spot.at }
+            .max() ?? .distantPast
+        let windowEnd = stops
+            .filter { $0.kind == .bar && $0.arrivedAt > spot.at }
+            .map(\.arrivedAt)
+            .min() ?? .distantFuture
+        looseSpots.removeAll {
+            $0.id == spot.id || ($0.at >= windowStart && $0.at < windowEnd)
+        }
+        looseSpots.append(spot)
+        saveLooseSpots()
+    }
+
+    /// Set/replace the PRE-GAME spot specifically — used to add a location
+    /// to pre-game after you've already moved on to a bar. Stamped just
+    /// before the first check-in so it files into the pre-game leg.
+    func setPreGameSpot(name: String?, rawCoordinate: CLLocationCoordinate2D?) {
+        let cutoff = firstBarArrival
+        looseSpots.removeAll { cutoff == nil || $0.at < cutoff! }
+        let trimmed = name?.trimmingCharacters(in: .whitespaces)
+        let at = cutoff.map { $0.addingTimeInterval(-1) } ?? Date()
+        looseSpots.append(LooseSpot(
+            id: UUID(),
+            name: (trimmed?.isEmpty == false) ? trimmed : nil,
+            lat: rawCoordinate?.latitude,
+            lon: rawCoordinate?.longitude,
+            at: at
+        ))
+        saveLooseSpots()
+    }
+
+    func clearPreGameSpot() {
+        let cutoff = firstBarArrival
+        looseSpots.removeAll { cutoff == nil || $0.at < cutoff! }
+        saveLooseSpots()
+    }
 
     /// Staging area for photos snapped during the night, before a recap
     /// (and its id) exists. At END time `RecapHistoryStore.adoptPhotos`
@@ -210,28 +348,46 @@ final class NightJourneyStore: ObservableObject {
     }
 
     /// Record leaving the current bar (the venue sheet's CHECK OUT, or
-    /// the chip being cleared). Stamps the open bar stop so the recap
-    /// can carve refuel / afters legs from the time that follows.
-    func checkOut(at date: Date = Date()) {
+    /// the chip being cleared). Stamps the open bar stop and drops a
+    /// "between bars" stop so the in-between moment is a real, navigable,
+    /// reorderable page (photos attach to it) — not just something that
+    /// appears in the recap. `coordinate` (when location is on) puts it on
+    /// the map. No-op when there's no bar to leave.
+    func checkOut(at date: Date = Date(), coordinate: CLLocationCoordinate2D? = nil) {
         guard let i = stops.lastIndex(where: { $0.kind == .bar && $0.departedAt == nil })
         else { return }
         stops[i].departedAt = date
+        stops.append(SeshStop(
+            id: UUID(),
+            venueId: UUID(),
+            kind: .between,
+            name: "Between bars",
+            lat: coordinate?.latitude,
+            lon: coordinate?.longitude,
+            arrivedAt: date
+        ))
         save()
     }
 
     /// Drop a food / puke marker at the current moment. Markers are
     /// photo-carrying cards on the recap, not drink windows. `named`
     /// overrides the default title — used to pin a puke break on a
-    /// specific group member ("Alex's puke break").
-    func addMarker(kind: JourneyStopKind, named name: String? = nil, at date: Date = Date()) {
+    /// specific group member ("Alex's puke break"). `coordinate` (when
+    /// location is on) places it on the recap map.
+    func addMarker(
+        kind: JourneyStopKind,
+        named name: String? = nil,
+        at date: Date = Date(),
+        coordinate: CLLocationCoordinate2D? = nil
+    ) {
         guard kind != .bar else { return }
         stops.append(SeshStop(
             id: UUID(),
             venueId: UUID(),   // markers aren't venues; unique id keeps dedupe away
             kind: kind,
             name: name ?? (kind == .food ? "Food stop" : "Puke break"),
-            lat: nil,
-            lon: nil,
+            lat: coordinate?.latitude,
+            lon: coordinate?.longitude,
             arrivedAt: date
         ))
         save()
@@ -242,6 +398,40 @@ final class NightJourneyStore: ObservableObject {
     func removeMarker(_ stopId: UUID) {
         guard let i = stops.firstIndex(where: { $0.id == stopId }),
               stops[i].kind != .bar else { return }
+        removeStopAt(i)
+    }
+
+    /// Remove ANY stop — including a bar check-in added by mistake. Drops
+    /// its photos and the stop itself. The caller is responsible for any
+    /// related check-out (clearing `currentVenue`) when removing the bar
+    /// the user is currently at.
+    func removeStop(_ stopId: UUID) {
+        guard let i = stops.firstIndex(where: { $0.id == stopId }) else { return }
+        removeStopAt(i)
+    }
+
+    /// Add (or clear) a location on a non-bar stop — between-bars, food, or
+    /// puke — after the fact. Bars get their location from check-in.
+    func setStopLocation(_ stopId: UUID, coordinate: CLLocationCoordinate2D?) {
+        guard let i = stops.firstIndex(where: { $0.id == stopId }), stops[i].kind != .bar
+        else { return }
+        stops[i].lat = coordinate?.latitude
+        stops[i].lon = coordinate?.longitude
+        save()
+    }
+
+    /// Swap a stop with its neighbour in the journey order. Purely a
+    /// display reorder — timestamps (and therefore each bar's drinks/BAC)
+    /// are untouched; only the sequence shown on the pager + recap changes.
+    func moveStop(_ stopId: UUID, by offset: Int) {
+        guard let i = stops.firstIndex(where: { $0.id == stopId }) else { return }
+        let j = i + offset
+        guard j >= 0, j < stops.count else { return }
+        stops.swapAt(i, j)
+        save()
+    }
+
+    private func removeStopAt(_ i: Int) {
         for filename in stops[i].photoFilenames {
             try? FileManager.default.removeItem(
                 at: photosDirectory.appendingPathComponent(filename)
@@ -254,7 +444,9 @@ final class NightJourneyStore: ObservableObject {
     func clear() {
         stops = []
         loosePhotos = []
+        looseSpots = []
         save()
+        saveLooseSpots()
         // Wipe any staged photos that never made it into a recap (the
         // adopted ones were already MOVED out, so this only catches
         // leftovers from abandoned seshs).
@@ -273,6 +465,9 @@ final class NightJourneyStore: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: looseKey) {
             loosePhotos = (try? dec.decode([LooseTake].self, from: data)) ?? []
         }
+        if let data = UserDefaults.standard.data(forKey: looseSpotsKey) {
+            looseSpots = (try? dec.decode([LooseSpot].self, from: data)) ?? []
+        }
     }
 
     private func save() {
@@ -285,6 +480,14 @@ final class NightJourneyStore: ObservableObject {
             UserDefaults.standard.set(data, forKey: looseKey)
         }
     }
+
+    private func saveLooseSpots() {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        if let data = try? enc.encode(looseSpots) {
+            UserDefaults.standard.set(data, forKey: looseSpotsKey)
+        }
+    }
 }
 
 // MARK: - Recap model
@@ -292,7 +495,7 @@ final class NightJourneyStore: ObservableObject {
 /// One timestamped drink event attributed to the user — already reduced
 /// to "grams of ethanol to me" so solo drinks and group shared-round
 /// shares flow through the same math.
-struct RecapEvent: Codable {
+struct RecapEvent: Codable, Equatable {
     let when: Date
     let grams: Double
     let name: String
@@ -387,6 +590,15 @@ struct RecapStop: Codable, Identifiable {
     }
 }
 
+/// One member's line on the group recap leaderboard.
+struct GroupMemberStat: Codable, Hashable, Identifiable {
+    let name: String
+    let drinkCount: Int
+    let peakBAC: Double
+    let isMe: Bool
+    var id: String { name }
+}
+
 /// The whole computed story, built once at END time. Codable so it can
 /// be saved and replayed from "Past nights".
 struct NightRecap: Codable, Identifiable {
@@ -397,6 +609,9 @@ struct NightRecap: Codable, Identifiable {
     let totalDrinks: Int
     let peakBAC: Double
     let peakAt: Date
+    /// Non-nil when this was a group sesh — the squad's per-member stats,
+    /// drunkest first. Drives the group section on the overview.
+    var groupLeaderboard: [GroupMemberStat]? = nil
     /// Straight-line meters between consecutive located stops. 0 when
     /// fewer than two stops had coordinates.
     let crawlMeters: Double
@@ -419,23 +634,38 @@ struct NightRecap: Codable, Identifiable {
         events rawEvents: [RecapEvent],
         bumpPerGram: Double,
         loosePhotos: [LooseTake] = [],
+        looseSpots: [LooseSpot] = [],
         endedAt: Date = Date()
     ) -> NightRecap? {
         let events = rawEvents.sorted { $0.when < $1.when }
         guard let firstEvent = events.first, bumpPerGram > 0 else { return nil }
 
         let graceStart = firstEvent.when.addingTimeInterval(-90 * 60)
+        // Kept in JOURNEY (display) order — the user can reorder stops, and
+        // the recap cards/map follow that order. Drink windows below are
+        // computed from a time-sorted copy so each bar keeps its own drinks
+        // regardless of where it's been moved.
         let nightStops = journeyStops
             .filter { $0.arrivedAt >= graceStart && $0.arrivedAt <= endedAt }
+        let barsByTime = nightStops
+            .filter { $0.kind == .bar }
             .sorted { $0.arrivedAt < $1.arrivedAt }
         let looseTakes = loosePhotos
             .filter { $0.takenAt >= graceStart && $0.takenAt <= endedAt }
             .sorted { $0.takenAt < $1.takenAt }
+        let nightSpots = looseSpots
+            .filter { $0.at >= graceStart && $0.at <= endedAt }
+            .sorted { $0.at < $1.at }
 
+        // The night starts at the earliest thing that happened — drink,
+        // check-in, photo, OR a marked spot. Without the spot here, a
+        // location set before the first drink would fall outside every
+        // window and silently vanish from the recap.
         let startedAt = min(
             firstEvent.when,
-            nightStops.first?.arrivedAt ?? firstEvent.when,
-            looseTakes.first?.takenAt ?? firstEvent.when
+            barsByTime.first?.arrivedAt ?? firstEvent.when,
+            looseTakes.first?.takenAt ?? firstEvent.when,
+            nightSpots.first?.at ?? firstEvent.when
         )
 
         // BAC at an arbitrary time + the night's peak. Peak can only occur
@@ -473,60 +703,89 @@ struct NightRecap: Codable, Identifiable {
             let from: Date
             let to: Date
             let isWindow: Bool   // false for instant markers
+            var lat: Double? = nil   // explicit coord (pre-game spot)
+            var lon: Double? = nil
         }
-        let bars = nightStops.filter { $0.kind == .bar }
-        let markers = nightStops.filter { $0.kind != .bar }
         var legs: [Leg] = []
 
-        // A gap becomes a leg if it has anything to show — a drink OR a
-        // loose photo taken during it.
+        // The latest loose spot whose timestamp lands in a window — its
+        // location + name decorate that narrative leg. The final window is
+        // inclusive of `to` so a spot marked at the very end still lands.
+        func spotIn(_ from: Date, _ to: Date) -> LooseSpot? {
+            nightSpots.last { $0.at >= from && $0.at <= to }
+        }
+        // A gap becomes a leg if it has anything to show — a drink, a
+        // loose photo, OR a marked location.
         func hasContent(from: Date, to: Date) -> Bool {
             events.contains(where: { $0.when >= from && $0.when < to })
                 || looseTakes.contains(where: { $0.takenAt >= from && $0.takenAt < to })
+                || spotIn(from, to) != nil
+        }
+        // Next bar AFTER this one IN TIME — windows always follow the
+        // clock, so a bar keeps its own drinks even if it's been moved.
+        func nextBarArrival(after bar: SeshStop) -> Date? {
+            barsByTime.first { $0.arrivedAt > bar.arrivedAt }?.arrivedAt
         }
 
-        if let firstBar = bars.first, hasContent(from: startedAt, to: firstBar.arrivedAt) {
+        // Leading leg: pre-game (before the earliest bar by time), or — if
+        // no bars at all — a single "the night" card covering everything.
+        if let firstBar = barsByTime.first {
+            if hasContent(from: startedAt, to: firstBar.arrivedAt) {
+                let spot = spotIn(startedAt, firstBar.arrivedAt)
+                legs.append(Leg(
+                    kind: .preGame, stop: nil,
+                    name: spot?.name ?? "Pre-game",
+                    from: startedAt, to: firstBar.arrivedAt, isWindow: true,
+                    lat: spot?.lat, lon: spot?.lon
+                ))
+            }
+        } else {
+            let spot = spotIn(startedAt, endedAt)
             legs.append(Leg(
-                kind: .preGame, stop: nil, name: "Pre-game",
-                from: startedAt, to: firstBar.arrivedAt, isWindow: true
+                kind: .preGame, stop: nil,
+                name: spot?.name ?? "The night",
+                from: startedAt, to: endedAt, isWindow: true,
+                lat: spot?.lat, lon: spot?.lon
             ))
         }
-        for (i, bar) in bars.enumerated() {
-            let nextArrival = i + 1 < bars.count ? bars[i + 1].arrivedAt : nil
-            // Residency ends at checkout, but never past the next bar
-            // (forgot to check out) or the end of the sesh.
-            let windowEnd = min(bar.departedAt ?? endedAt, nextArrival ?? endedAt, endedAt)
-            legs.append(Leg(
-                kind: .bar, stop: bar, name: bar.name,
-                from: bar.arrivedAt, to: windowEnd, isWindow: true
-            ))
-            // The gap after this bar — a leg if anything happened there.
-            let gapEnd = nextArrival ?? endedAt
-            if windowEnd < gapEnd, hasContent(from: windowEnd, to: gapEnd) {
-                let isLast = nextArrival == nil
+        // Walk stops in DISPLAY order. Bars carry a time-computed window;
+        // `.between` stops become refuel/afters legs (their own photos +
+        // location, drinks from the gap that follows); food/puke are
+        // instants.
+        for s in nightStops {
+            switch s.kind {
+            case .bar:
+                let nextArrival = nextBarArrival(after: s)
+                let windowEnd = min(s.departedAt ?? endedAt, nextArrival ?? endedAt, endedAt)
                 legs.append(Leg(
-                    kind: isLast ? .afters : .refuel,
-                    stop: nil,
-                    name: isLast ? "Afters" : "Refuel break",
-                    from: windowEnd, to: gapEnd, isWindow: true
+                    kind: .bar, stop: s, name: s.name,
+                    from: s.arrivedAt, to: windowEnd, isWindow: true
+                ))
+            case .between:
+                // Gap runs from checkout to the next bar (by time), or END.
+                let nextArrival = barsByTime.first { $0.arrivedAt > s.arrivedAt }?.arrivedAt
+                let gapEnd = max(nextArrival ?? endedAt, s.arrivedAt)
+                let isLast = nextArrival == nil
+                // Keep it only if something actually happened — a drink or
+                // its own photos. An auto-captured coordinate alone (just a
+                // checkout) isn't worth a card.
+                if hasContent(from: s.arrivedAt, to: gapEnd) || !s.photoFilenames.isEmpty {
+                    legs.append(Leg(
+                        kind: isLast ? .afters : .refuel,
+                        stop: s,
+                        name: isLast ? "Afters" : "Refuel break",
+                        from: s.arrivedAt, to: gapEnd, isWindow: true
+                    ))
+                }
+            case .food, .puke:
+                legs.append(Leg(
+                    kind: s.kind == .food ? .food : .puke,
+                    stop: s, name: s.name,
+                    from: s.arrivedAt, to: s.arrivedAt, isWindow: false
                 ))
             }
         }
-        if bars.isEmpty {
-            // No check-ins at all — one card covering the whole night.
-            legs.append(Leg(
-                kind: .preGame, stop: nil, name: "The night",
-                from: startedAt, to: endedAt, isWindow: true
-            ))
-        }
-        for m in markers {
-            legs.append(Leg(
-                kind: m.kind == .food ? .food : .puke,
-                stop: m, name: m.name,
-                from: m.arrivedAt, to: m.arrivedAt, isWindow: false
-            ))
-        }
-        legs.sort { $0.from < $1.from }
+        // No time-sort — assembly order IS the display order the user set.
 
         let stops: [RecapStop] = legs.map { leg in
             let here = leg.isWindow
@@ -562,8 +821,8 @@ struct NightRecap: Codable, Identifiable {
             return RecapStop(
                 id: UUID(),
                 kind: leg.kind,
-                lat: leg.stop?.lat,
-                lon: leg.stop?.lon,
+                lat: leg.stop?.lat ?? leg.lat,
+                lon: leg.stop?.lon ?? leg.lon,
                 name: leg.name,
                 arrivedAt: leg.from,
                 departedAt: leg.to,
@@ -935,6 +1194,11 @@ struct StopPhotoStrip: View {
     let onDeletePhoto: (Int) -> Void
     let onSchnap: () -> Void
     let onLibrary: () -> Void
+    /// When false, the SCHNAP/LIBRARY buttons are hidden — used on a
+    /// historical page (e.g. pre-game after you've checked in) where a new
+    /// photo would be mis-stamped into the wrong moment. View + delete
+    /// stay available.
+    var allowAdd: Bool = true
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -955,10 +1219,17 @@ struct StopPhotoStrip: View {
                     }
                 }
 
-                if CameraCaptureView.isAvailable {
-                    addButton(icon: "camera.fill", label: "SCHNAP", action: onSchnap)
+                if allowAdd {
+                    if CameraCaptureView.isAvailable {
+                        addButton(icon: "camera.fill", label: "SCHNAP", action: onSchnap)
+                    }
+                    addButton(icon: "photo.on.rectangle", label: "LIBRARY", action: onLibrary)
+                } else if photoURLs.isEmpty {
+                    Text("No pre-game photos")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.4))
+                        .frame(height: 54)
                 }
-                addButton(icon: "photo.on.rectangle", label: "LIBRARY", action: onLibrary)
             }
         }
     }
@@ -998,24 +1269,35 @@ struct StopPhotoStrip: View {
 /// and forth freely — touching it pauses the auto-advance. Serves both
 /// the live END flow and replaying a saved night (`isReplay`).
 struct NightRecapView: View {
+    /// How this recap was reached — drives the closing buttons.
+    enum Mode {
+        /// Ending a live sesh now: SAVE & END / END WITHOUT SAVING.
+        case liveEnd
+        /// A sesh that wound down while away (stale / group end): same
+        /// save-or-discard choice, but nothing to tear down.
+        case autoEnd
+        /// Replaying a saved night: just DONE.
+        case replay
+    }
+
     @ObservedObject var history: RecapHistoryStore
     /// Local working copy — photo additions update it in place (the
     /// store persists them and hands back the updated value).
     @State private var recap: NightRecap
-    let isReplay: Bool
-    /// Called from the closing button. The live END presenter performs
-    /// the actual sesh teardown here; replay just dismisses.
+    let mode: Mode
+    /// Called from the closing button. The live END presenter performs the
+    /// actual sesh teardown here; auto/replay just dismiss.
     let onFinish: () -> Void
 
     init(
         recap: NightRecap,
         history: RecapHistoryStore,
-        isReplay: Bool = false,
+        mode: Mode = .liveEnd,
         onFinish: @escaping () -> Void
     ) {
         _recap = State(initialValue: recap)
         self.history = history
-        self.isReplay = isReplay
+        self.mode = mode
         self.onFinish = onFinish
     }
 
@@ -1136,6 +1418,14 @@ struct NightRecapView: View {
                                 .shadow(color: Color.whiskey.opacity(0.6), radius: 8)
                             if stop.isPeak {
                                 Text("🔥").font(.system(size: 12))
+                            } else if stop.kind == .preGame {
+                                Text("🏠").font(.system(size: 12))
+                            } else if stop.kind == .food {
+                                Text("🍔").font(.system(size: 12))
+                            } else if stop.kind == .puke {
+                                Text("🤮").font(.system(size: 12))
+                            } else if stop.kind == .refuel || stop.kind == .afters {
+                                Text("📍").font(.system(size: 12))
                             } else {
                                 Text("\(i + 1)")
                                     .font(.system(size: 12, weight: .black, design: .rounded))
@@ -1534,7 +1824,12 @@ struct NightRecapView: View {
                 }
             }
 
-            if isReplay {
+            if let board = recap.groupLeaderboard, !board.isEmpty {
+                squadLeaderboard(board)
+            }
+
+            switch mode {
+            case .replay:
                 Button {
                     onFinish()
                 } label: {
@@ -1547,16 +1842,15 @@ struct NightRecapView: View {
                         .background(Capsule().fill(Color.cream))
                 }
                 .buttonStyle(PressScaleStyle())
-            } else {
-                // The night is already on disk (saved at END-confirm so a
-                // crash can't lose it) — "save" keeps it in Past nights,
-                // the quieter option deletes it (photos included) on the
-                // way out.
+            case .liveEnd, .autoEnd:
+                // The night is already on disk (saved up front so a crash
+                // can't lose it) — "save" keeps it in Past nights, the
+                // quieter option deletes it (photos included) on the way out.
                 VStack(spacing: 10) {
                     Button {
                         onFinish()
                     } label: {
-                        Text("SAVE RECAP & END SESH")
+                        Text(mode == .liveEnd ? "SAVE RECAP & END SESH" : "SAVE RECAP")
                             .font(.system(size: 13, weight: .black, design: .monospaced))
                             .tracking(2.0)
                             .foregroundStyle(Color.ink)
@@ -1570,7 +1864,7 @@ struct NightRecapView: View {
                         history.delete(recap)
                         onFinish()
                     } label: {
-                        Text("END WITHOUT SAVING")
+                        Text(mode == .liveEnd ? "END WITHOUT SAVING" : "DISCARD RECAP")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .tracking(1.8)
                             .foregroundStyle(Color.cream.opacity(0.65))
@@ -1590,6 +1884,43 @@ struct NightRecapView: View {
             insertion: .move(edge: .bottom).combined(with: .opacity),
             removal: .opacity.combined(with: .scale(scale: 0.96))
         ))
+    }
+
+    /// The group recap's squad table — drunkest first, MVP crowned, you
+    /// highlighted. Shown on the overview when this was a group sesh.
+    private func squadLeaderboard(_ board: [GroupMemberStat]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "person.3.fill")
+                    .font(.system(size: 10, weight: .black))
+                    .foregroundStyle(Color.whiskey)
+                Text("THE SQUAD")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(2.2)
+                    .foregroundStyle(Color.whiskey)
+                Rectangle().fill(Color.whiskey.opacity(0.25)).frame(height: 1)
+            }
+            ForEach(Array(board.enumerated()), id: \.element.id) { i, m in
+                HStack(spacing: 10) {
+                    Text(i == 0 ? "👑" : "\(i + 1)")
+                        .font(.system(size: 12, weight: .black, design: .rounded))
+                        .frame(width: 20)
+                    Text(m.isMe ? "\(m.name) (you)" : m.name)
+                        .font(.system(size: 13, weight: m.isMe ? .heavy : .semibold, design: .rounded))
+                        .foregroundStyle(m.isMe ? Color.whiskey : Color.cream)
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    Text("\(m.drinkCount) \(m.drinkCount == 1 ? "drink" : "drinks")")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                    Text("\(unit.formatted(m.peakBAC))\(unit.symbol)")
+                        .font(.system(size: 12, weight: .heavy, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(i == 0 ? Color.whiskey : Color.cream.opacity(0.85))
+                }
+            }
+        }
+        .padding(.top, 2)
     }
 
     private func stat(value: String, label: String, tint: Color = .cream) -> some View {
@@ -1645,11 +1976,34 @@ struct LiveJourneyPhotosSection: View {
     /// puke break"). Empty in a solo sesh with no guests — the 🤮 button
     /// then marks the user's own without asking.
     var pukeCandidates: [String] = []
+    /// Remove a stop the user added by mistake. Routed up so the owner can
+    /// also check out of `currentVenue` when it's the bar being removed.
+    var onRemoveStop: (SeshStop) -> Void = { _ in }
+    /// Current device coordinate, stored exactly as the marked spot. Nil
+    /// when location is off; the "use my location" option then hides.
+    var userCoordinate: CLLocationCoordinate2D? = nil
+    /// Whether a live group is running + this device follows it — drives
+    /// the "shared with group" hint and whether the owner broadcasts a
+    /// loose spot.
+    var inFollowingGroup: Bool = false
+    /// Fired when the CURRENT-moment loose spot changes, so the owner can
+    /// broadcast it to the group (no-op when solo / broken away).
+    var onLooseSpotChanged: (LooseSpot?) -> Void = { _ in }
 
     /// Which page is showing. Follows new stops automatically (jumps to
     /// the newest) until the user swipes elsewhere.
     @State private var page = 0
     @State private var pukePickerOpen = false
+    /// A bar stop pending a remove confirmation (markers remove instantly).
+    @State private var pendingRemoval: SeshStop? = nil
+    // Loose-spot (pre-game / between-bars location) flows. `spotTarget`
+    // says whether the dialog edits the CURRENT moment or pre-game
+    // (revisited from its history page to add a location after the fact).
+    private enum SpotTarget { case current, preGame }
+    @State private var spotTarget: SpotTarget = .current
+    @State private var spotOptionsOpen = false
+    @State private var spotNaming = false
+    @State private var spotNameText = ""
 
     // Photo flows — target id kept separate from picker presentation so
     // the dismissal can't clear it before the selection lands.
@@ -1664,12 +2018,43 @@ struct LiveJourneyPhotosSection: View {
     private static let looseTargetId = UUID()
 
     /// True while the user is checked in at a bar. When false the pager
-    /// grows an extra "in-between" page that collects loose photos.
+    /// grows the current "in-between" page that collects loose photos.
     private var checkedIn: Bool {
         journey.stops.last(where: { $0.kind == .bar && $0.departedAt == nil }) != nil
     }
-    private var showLoosePage: Bool { !checkedIn }
-    private var pageCount: Int { journey.stops.count + (showLoosePage ? 1 : 0) }
+
+    private enum PagerPage: Hashable {
+        case preGameHistory   // revisit pre-game after moving on to a bar
+        case stop(Int)        // index into journey.stops
+        case looseNow         // the live "right now, between places" page
+    }
+
+    /// Ordered pager pages. A dedicated pre-game page is kept up front once
+    /// you've checked into a bar (so you can swipe back to its photos), the
+    /// stops follow, and the live between-places page trails when you're
+    /// not at a bar.
+    private var pages: [PagerPage] {
+        var result: [PagerPage] = []
+        if journey.hasCheckedInSomewhere,
+           !journey.preGamePhotos.isEmpty || journey.preGameSpot != nil {
+            result.append(.preGameHistory)
+        }
+        for i in journey.stops.indices { result.append(.stop(i)) }
+        // The live "loose" page is only the pre-game moment (before the
+        // first check-in). After that, between-bars moments are real
+        // `.between` stops in the list above.
+        if !journey.hasCheckedInSomewhere { result.append(.looseNow) }
+        return result
+    }
+
+    private func isTall(_ pg: PagerPage) -> Bool {
+        // Bars are compact; pre-game, loose, and non-bar stops (between /
+        // food / puke) carry an extra location row, so they need more room.
+        if case .stop(let i) = pg {
+            return i < journey.stops.count && journey.stops[i].kind != .bar
+        }
+        return true
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1682,38 +2067,37 @@ struct LiveJourneyPhotosSection: View {
                     .tracking(2.4)
                     .foregroundStyle(Color.bronze)
                 Spacer()
-                // Drop a marker on the night — shows up in the pager
-                // and the recap, photos attachable like any stop.
-                markerButton("🍔") { journey.addMarker(kind: .food) }
+                // Drop a marker on the night — shows up in the pager and
+                // the recap (on the map too, when location is on), photos
+                // attachable like any stop.
+                markerButton("🍔") { journey.addMarker(kind: .food, coordinate: userCoordinate) }
                 markerButton("🤮") {
                     if pukeCandidates.isEmpty {
-                        journey.addMarker(kind: .puke)
+                        journey.addMarker(kind: .puke, coordinate: userCoordinate)
                     } else {
                         pukePickerOpen = true
                     }
                 }
             }
 
-            // One page per stop (+ the in-between page when not checked
-            // in anywhere) — swipe, or use the chevrons.
+            // Swipe (or chevrons) between pre-game, each stop, and the
+            // live between-places page.
+            let pages = pages
             TabView(selection: $page) {
-                ForEach(Array(journey.stops.enumerated()), id: \.element.id) { i, stop in
-                    stopPage(stop, isCurrent: i == journey.stops.count - 1)
-                        .tag(i)
-                }
-                if showLoosePage {
-                    loosePage.tag(journey.stops.count)
+                ForEach(Array(pages.enumerated()), id: \.offset) { i, pg in
+                    pageContent(pg).tag(i)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: 112)
+            // Pre-game + loose pages carry an extra location row → taller.
+            .frame(height: (page < pages.count && isTall(pages[page])) ? 150 : 112)
             .animation(.spring(response: 0.45, dampingFraction: 0.85), value: page)
 
-            if pageCount > 1 {
+            if pages.count > 1 {
                 HStack(spacing: 10) {
                     pagerChevron("chevron.left", enabled: page > 0) { page -= 1 }
                     HStack(spacing: 5) {
-                        ForEach(0..<pageCount, id: \.self) { i in
+                        ForEach(0..<pages.count, id: \.self) { i in
                             Circle()
                                 .fill(i == page ? Color.whiskey : Color.cream.opacity(0.25))
                                 .frame(width: i == page ? 7 : 5, height: i == page ? 7 : 5)
@@ -1721,7 +2105,7 @@ struct LiveJourneyPhotosSection: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
-                    pagerChevron("chevron.right", enabled: page < pageCount - 1) { page += 1 }
+                    pagerChevron("chevron.right", enabled: page < pages.count - 1) { page += 1 }
                 }
             }
         }
@@ -1735,22 +2119,73 @@ struct LiveJourneyPhotosSection: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .strokeBorder(Color.cream.opacity(0.07), lineWidth: 1)
         )
-        .onAppear { page = pageCount - 1 }
-        .onChange(of: pageCount) { _, count in
-            // New stop or check-in/out flipping the loose page → slide to
-            // the freshest moment (also clamps if the loose page vanished).
+        .onAppear { page = max(0, pages.count - 1) }
+        .onChange(of: pages.count) { _, count in
+            // New stop / check-in-out → slide to the freshest moment (the
+            // current page is always last). Also clamps if a page vanished.
             withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
                 page = max(0, count - 1)
             }
         }
         .confirmationDialog("Whose puke break?", isPresented: $pukePickerOpen, titleVisibility: .visible) {
-            Button("Mine 🫡") { journey.addMarker(kind: .puke) }
+            Button("Mine 🫡") { journey.addMarker(kind: .puke, coordinate: userCoordinate) }
             ForEach(pukeCandidates, id: \.self) { name in
                 Button(name) {
-                    journey.addMarker(kind: .puke, named: "\(name)'s puke break")
+                    journey.addMarker(kind: .puke, named: "\(name)'s puke break", coordinate: userCoordinate)
                 }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog(spotTitle, isPresented: $spotOptionsOpen, titleVisibility: .visible) {
+            if userCoordinate != nil {
+                Button("Use my exact location") {
+                    // Commit the location now, then immediately prompt for
+                    // a name so it's one fluid step.
+                    applySpot(name: targetSpot?.name, coordinate: userCoordinate)
+                    spotNameText = targetSpot?.name ?? ""
+                    spotNaming = true
+                }
+            }
+            Button("Name only (no location)") {
+                spotNameText = targetSpot?.name ?? ""
+                spotNaming = true
+            }
+            if targetSpot != nil {
+                Button("Remove spot", role: .destructive) { clearSpot() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This pins your exact location — often a home. It stays on your device, and if recap sharing ever arrives you'll choose whether to include these spots. Prefer not to? Use a name only.")
+        }
+        .alert("Name this spot", isPresented: $spotNaming) {
+            TextField(spotTarget == .preGame ? "e.g. Anna's place" : (journey.hasCheckedInSomewhere ? "e.g. taxi, kebab line" : "e.g. Anna's place"), text: $spotNameText)
+            Button("Save") {
+                applySpot(name: spotNameText, coordinate: targetSpot?.coordinate)
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "Remove this check-in?",
+            isPresented: Binding(
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove stop", role: .destructive) {
+                if let stop = pendingRemoval {
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
+                        page = max(0, page - 1)
+                        onRemoveStop(stop)
+                    }
+                }
+                pendingRemoval = nil
+            }
+            Button("Cancel", role: .cancel) { pendingRemoval = nil }
+        } message: {
+            if let stop = pendingRemoval {
+                Text("\(stop.name) and its photos will be removed from tonight's recap.")
+            }
         }
         .photosPicker(isPresented: $libraryPickerOpen, selection: $pickerItem, matching: .images)
         .onChange(of: pickerItem) { _, item in
@@ -1783,13 +2218,71 @@ struct LiveJourneyPhotosSection: View {
         }
     }
 
+    @ViewBuilder
+    private func pageContent(_ pg: PagerPage) -> some View {
+        switch pg {
+        case .preGameHistory:
+            preGameHistoryPage
+        case .stop(let idx):
+            if idx < journey.stops.count {
+                stopPage(journey.stops[idx], isCurrent: idx == journey.stops.count - 1)
+            }
+        case .looseNow:
+            loosePage
+        }
+    }
+
+    /// Pre-game revisited — view its photos + the marked spot after you've
+    /// moved on. Read-only: adding here would mis-stamp into a later
+    /// window, so the add buttons are hidden (delete + lightbox stay).
+    private var preGameHistoryPage: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("🏠 Pre-game")
+                    .font(.system(size: 14, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .lineLimit(1)
+                Text("EARLIER")
+                    .font(.system(size: 8, weight: .black, design: .monospaced))
+                    .tracking(1.2)
+                    .foregroundStyle(Color.ink)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.cream.opacity(0.5)))
+                Spacer()
+            }
+
+            // Editable location — add a pre-game spot even after you've
+            // moved on to a bar.
+            spotRow(target: .preGame)
+
+            StopPhotoStrip(
+                photoURLs: journey.preGamePhotos.map { journey.photoURL($0.filename) },
+                onTapPhoto: { index in
+                    lightbox = LightboxContext(
+                        urls: journey.preGamePhotos.map { journey.photoURL($0.filename) },
+                        startIndex: index
+                    )
+                },
+                onDeletePhoto: { index in
+                    guard index < journey.preGamePhotos.count else { return }
+                    journey.removeLoosePhoto(journey.preGamePhotos[index].filename)
+                },
+                onSchnap: {},
+                onLibrary: {},
+                allowAdd: false
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
     /// The "right now, between places" page — pre-game before the first
     /// check-in, transit/afters later. Loose photos collect here and the
     /// recap files them onto the right leg by timestamp.
     private var loosePage: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text(journey.stops.isEmpty ? "🏠 Pre-game" : "🌃 Between bars")
+                Text(journey.hasCheckedInSomewhere ? "🌃 Between bars" : "🏠 Pre-game")
                     .font(.system(size: 14, weight: .heavy, design: .rounded))
                     .foregroundStyle(Color.cream)
                     .lineLimit(1)
@@ -1803,17 +2296,30 @@ struct LiveJourneyPhotosSection: View {
                 Spacer()
             }
 
+            // Optional location for this moment — pre-game before the
+            // first check-in, or the gap between bars / afters. Privacy-
+            // safe + opt-in.
+            looseSpotRow
+            if inFollowingGroup {
+                Text("Applies to the whole group · you're following")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.bronze)
+            }
+
+            // Only THIS moment's photos — pre-game shots don't leak onto a
+            // later between-bars page, and vice-versa.
+            let windowPhotos = journey.currentWindowLoosePhotos
             StopPhotoStrip(
-                photoURLs: journey.loosePhotos.map { journey.photoURL($0.filename) },
+                photoURLs: windowPhotos.map { journey.photoURL($0.filename) },
                 onTapPhoto: { index in
                     lightbox = LightboxContext(
-                        urls: journey.loosePhotos.map { journey.photoURL($0.filename) },
+                        urls: windowPhotos.map { journey.photoURL($0.filename) },
                         startIndex: index
                     )
                 },
                 onDeletePhoto: { index in
-                    guard index < journey.loosePhotos.count else { return }
-                    journey.removeLoosePhoto(journey.loosePhotos[index].filename)
+                    guard index < windowPhotos.count else { return }
+                    journey.removeLoosePhoto(windowPhotos[index].filename)
                 },
                 onSchnap: { cameraTarget = CameraTarget(id: Self.looseTargetId) },
                 onLibrary: {
@@ -1823,6 +2329,129 @@ struct LiveJourneyPhotosSection: View {
             )
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    /// Dialog/button title — depends on which spot the dialog is editing.
+    private var spotTitle: String {
+        if spotTarget == .preGame { return "Pre-game spot" }
+        return journey.hasCheckedInSomewhere ? "Mark this spot" : "Pre-game spot"
+    }
+
+    /// The spot the open dialog is editing.
+    private var targetSpot: LooseSpot? {
+        spotTarget == .preGame ? journey.preGameSpot : journey.currentLooseSpot
+    }
+
+    private func applySpot(name: String?, coordinate: CLLocationCoordinate2D?) {
+        if spotTarget == .preGame {
+            journey.setPreGameSpot(name: name, rawCoordinate: coordinate)
+        } else {
+            journey.setCurrentLooseSpot(name: name, rawCoordinate: coordinate)
+            // Broadcast the live moment's spot to the group.
+            onLooseSpotChanged(journey.currentLooseSpot)
+        }
+    }
+
+    private func clearSpot() {
+        if spotTarget == .preGame {
+            journey.clearPreGameSpot()
+        } else {
+            journey.clearCurrentLooseSpot()
+            onLooseSpotChanged(nil)
+        }
+    }
+
+    /// Open the spot editor for a given target (current moment, or pre-game
+    /// revisited from its history page).
+    private func openSpotEditor(_ target: SpotTarget) {
+        spotTarget = target
+        spotOptionsOpen = true
+    }
+
+    /// The opt-in location/name control for the current loose moment.
+    /// Location is exact + stays on-device; the confirm dialog spells out
+    /// the privacy trade-off, and name-only is offered for anyone who'd
+    /// rather not pin a home.
+    /// The current moment's spot control (pre-game when no bars, else
+    /// between-bars).
+    private var looseSpotRow: some View { spotRow(target: .current) }
+
+    /// Reusable spot row for a given target. `.preGame` is used on the
+    /// pre-game history page so a location can be added after the fact.
+    @ViewBuilder
+    private func spotRow(target: SpotTarget) -> some View {
+        let spot = target == .preGame ? journey.preGameSpot : journey.currentLooseSpot
+        let setLabel = (target == .preGame || !journey.hasCheckedInSomewhere)
+            ? "SET PRE-GAME SPOT" : "MARK THIS SPOT"
+        if let spot {
+            HStack(spacing: 6) {
+                Image(systemName: spot.hasLocation ? "mappin.circle.fill" : "house.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.whiskey)
+                Text(spot.name ?? "Marked spot")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.85))
+                    .lineLimit(1)
+                if spot.hasLocation {
+                    Image(systemName: "location.fill")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Color.bronze)
+                }
+                Spacer(minLength: 4)
+                Button { openSpotEditor(target) } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.cream.opacity(0.6))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(PressScaleStyle())
+                Button {
+                    if target == .preGame { journey.clearPreGameSpot() }
+                    else { journey.clearCurrentLooseSpot() }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Color.cream.opacity(0.05)))
+            .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.25), lineWidth: 1))
+        } else {
+            Button { openSpotEditor(target) } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "mappin.and.ellipse")
+                        .font(.system(size: 10, weight: .bold))
+                    Text(setLabel)
+                        .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                        .tracking(1.2)
+                }
+                .foregroundStyle(Color.whiskey)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(Capsule().fill(Color.whiskey.opacity(0.1)))
+                .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1))
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+    }
+
+    private func moveButton(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { action() }
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(enabled ? Color.cream.opacity(0.7) : Color.cream.opacity(0.2))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.cream.opacity(0.06)))
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(!enabled)
+        .accessibilityLabel(icon == "chevron.left" ? "Move stop earlier" : "Move stop later")
     }
 
     private func markerButton(_ emoji: String, action: @escaping () -> Void) -> some View {
@@ -1836,11 +2465,58 @@ struct LiveJourneyPhotosSection: View {
         .buttonStyle(PressScaleStyle())
     }
 
+    /// Add / clear a location on a non-bar stop. Only offered when device
+    /// location is available; tapping "set" drops the current coordinate.
+    @ViewBuilder
+    private func stopLocationRow(_ stop: SeshStop) -> some View {
+        if stop.coordinate != nil {
+            HStack(spacing: 6) {
+                Image(systemName: "mappin.circle.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.whiskey)
+                Text("Location added")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.85))
+                Spacer(minLength: 4)
+                Button { journey.setStopLocation(stop.id, coordinate: nil) } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Color.cream.opacity(0.05)))
+            .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.25), lineWidth: 1))
+        } else if userCoordinate != nil {
+            Button {
+                journey.setStopLocation(stop.id, coordinate: userCoordinate)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "mappin.and.ellipse")
+                        .font(.system(size: 10, weight: .bold))
+                    Text("ADD LOCATION")
+                        .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                        .tracking(1.2)
+                }
+                .foregroundStyle(Color.whiskey)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(Capsule().fill(Color.whiskey.opacity(0.1)))
+                .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1))
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+    }
+
     private func stopPage(_ stop: SeshStop, isCurrent: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text(stop.kind == .food ? "🍔 \(stop.name)"
                      : stop.kind == .puke ? "🤮 \(stop.name)"
+                     : stop.kind == .between ? "🌃 \(stop.name)"
                      : stop.name)
                     .font(.system(size: 14, weight: .heavy, design: .rounded))
                     .foregroundStyle(Color.cream)
@@ -1853,28 +2529,59 @@ struct LiveJourneyPhotosSection: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Capsule().fill(Color.whiskey))
+                } else if isCurrent && stop.kind == .between && !checkedIn {
+                    Text("NOW")
+                        .font(.system(size: 8, weight: .black, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.bronze))
                 }
                 Spacer()
+                // Reorder this stop in the journey (display only — its
+                // drinks/photos/time stay put). Shown when there's more
+                // than one stop to shuffle.
+                if journey.stops.count > 1, let idx = journey.stops.firstIndex(where: { $0.id == stop.id }) {
+                    moveButton("chevron.left", enabled: idx > 0) {
+                        journey.moveStop(stop.id, by: -1)
+                        page = max(0, page - 1)
+                    }
+                    moveButton("chevron.right", enabled: idx < journey.stops.count - 1) {
+                        journey.moveStop(stop.id, by: 1)
+                        page = min(pages.count - 1, page + 1)
+                    }
+                }
                 Text(stop.arrivedAt, format: .dateTime.hour().minute())
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(1.0)
                     .foregroundStyle(Color.bronze)
-                if stop.kind != .bar {
-                    // Markers are user-added — let a 1am mis-tap be undone.
-                    Button {
+                // Remove a stop added by mistake. Markers vanish instantly;
+                // a bar check-in confirms first (it carries more weight).
+                Button {
+                    if stop.kind == .bar {
+                        pendingRemoval = stop
+                    } else {
                         withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
                             page = max(0, page - 1)
-                            journey.removeMarker(stop.id)
+                            onRemoveStop(stop)
                         }
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(Color.cream.opacity(0.5))
-                            .frame(width: 22, height: 22)
-                            .background(Circle().fill(Color.cream.opacity(0.06)))
                     }
-                    .buttonStyle(PressScaleStyle())
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(Color.cream.opacity(0.06)))
                 }
+                .buttonStyle(PressScaleStyle())
+                .accessibilityLabel("Remove this stop")
+            }
+
+            // Non-bar stops (between bars / food / puke) can be located
+            // after the fact — bars get theirs from check-in.
+            if stop.kind != .bar {
+                stopLocationRow(stop)
             }
 
             StopPhotoStrip(
