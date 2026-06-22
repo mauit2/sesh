@@ -868,9 +868,14 @@ final class RecapHistoryStore: ObservableObject {
     /// Newest first.
     @Published private(set) var recaps: [NightRecap] = []
 
+    /// Recap ids the user has posted to their friends timeline (per-user,
+    /// persisted in UserDefaults). Drives the "Posted" vs "Post" UI.
+    @Published private(set) var postedIds: Set<UUID> = []
+
     private let dir: URL
     private let enc: JSONEncoder
     private let dec: JSONDecoder
+    private let postedKey: String
 
     init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -888,7 +893,19 @@ final class RecapHistoryStore: ObservableObject {
         enc.dateEncodingStrategy = .iso8601
         dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
+        postedKey = "posted-recaps-\(uid)"
+        if let raw = UserDefaults.standard.stringArray(forKey: postedKey) {
+            postedIds = Set(raw.compactMap(UUID.init))
+        }
         load()
+    }
+
+    func isPosted(_ id: UUID) -> Bool { postedIds.contains(id) }
+
+    /// Record that a recap has been posted to the timeline.
+    func markPosted(_ id: UUID) {
+        postedIds.insert(id)
+        UserDefaults.standard.set(postedIds.map(\.uuidString), forKey: postedKey)
     }
 
     /// Insert or update a recap on disk and in memory.
@@ -1277,6 +1294,165 @@ struct StopPhotoStrip: View {
 /// overview; the nav bar (chevrons + jump dots) lets the user scrub back
 /// and forth freely — touching it pauses the auto-advance. Serves both
 /// the live END flow and replaying a saved night (`isReplay`).
+// MARK: - Posting to the friends timeline
+
+/// Uploads a recap's photos to the `recap-photos` bucket and writes a
+/// friends-only `posts` row (migration 020). When the poster opts out of
+/// sharing BAC, the values are zeroed so they're never stored server-side.
+@MainActor
+final class PostService: ObservableObject {
+    static let shared = PostService()
+    @Published var posting = false
+
+    func createPost(_ recap: NightRecap, includeBAC: Bool, history: RecapHistoryStore) async throws {
+        guard let uid = supabase.auth.currentUser?.id else { return }
+        posting = true
+        defer { posting = false }
+
+        let uidStr = uid.uuidString.lowercased()
+        let recapIdStr = recap.id.uuidString.lowercased()
+
+        // Upload each stop's photos; rebuild the stop with public URLs in
+        // place of local filenames (and BAC zeroed if not shared).
+        var serverStops: [RecapStop] = []
+        var cover: String? = nil
+        for stop in recap.stops {
+            var urls: [String] = []
+            for filename in stop.photoFilenames {
+                let localURL = history.photoURL(filename, in: recap.id)
+                guard let data = try? Data(contentsOf: localURL) else { continue }
+                let path = "\(uidStr)/\(recapIdStr)/\(filename)"
+                _ = try await supabase.storage.from("recap-photos")
+                    .upload(path, data: data,
+                            options: FileOptions(contentType: "image/jpeg", upsert: true))
+                let pub = try supabase.storage.from("recap-photos")
+                    .getPublicURL(path: path).absoluteString
+                urls.append(pub)
+                if cover == nil { cover = pub }
+            }
+            serverStops.append(RecapStop(
+                id: stop.id, kind: stop.kind, lat: stop.lat, lon: stop.lon, name: stop.name,
+                arrivedAt: stop.arrivedAt, departedAt: stop.departedAt, drinks: stop.drinks,
+                drinkSummary: stop.drinkSummary,
+                bacOnArrival: includeBAC ? stop.bacOnArrival : 0,
+                bacOnDeparture: includeBAC ? stop.bacOnDeparture : 0,
+                isPeak: stop.isPeak, photoFilenames: urls))
+        }
+
+        let serverRecap = NightRecap(
+            id: recap.id, stops: serverStops, startedAt: recap.startedAt, endedAt: recap.endedAt,
+            totalDrinks: recap.totalDrinks, peakBAC: includeBAC ? recap.peakBAC : 0,
+            peakAt: recap.peakAt, groupLeaderboard: recap.groupLeaderboard, crawlMeters: recap.crawlMeters)
+
+        // Encode with ISO-8601 dates so the feed decodes the same way no
+        // matter what date strategy the Postgrest client uses.
+        let enc = JSONEncoder(); enc.dateEncodingStrategy = .iso8601
+        let recapData = try enc.encode(serverRecap)
+        let recapJSON = try JSONDecoder().decode(AnyJSON.self, from: recapData)
+
+        struct Insert: Encodable {
+            let author_id: String
+            let recap: AnyJSON
+            let include_bac: Bool
+            let cover_url: String?
+            let started_at: String
+        }
+        let iso = ISO8601DateFormatter()
+        try await supabase.from("posts").insert(Insert(
+            author_id: uidStr, recap: recapJSON, include_bac: includeBAC,
+            cover_url: cover, started_at: iso.string(from: recap.startedAt)
+        )).execute()
+
+        history.markPosted(recap.id)
+    }
+}
+
+/// Sheet to post a saved recap to the friends timeline, with a per-post
+/// "include my BAC" toggle (default off).
+struct PostComposerView: View {
+    let recap: NightRecap
+    @ObservedObject var history: RecapHistoryStore
+    let onPosted: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var includeBAC = false
+    @State private var posting = false
+    @State private var errorMessage: String?
+
+    private var photoCount: Int { recap.stops.reduce(0) { $0 + $1.photoFilenames.count } }
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 18) {
+                Text("POST TO TIMELINE")
+                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                    .tracking(2.4).foregroundStyle(Color.bronze)
+                Text("Share this night")
+                    .font(.system(size: 26, weight: .black, design: .rounded))
+                    .italic().foregroundStyle(Color.cream)
+                Text("Your friends will see your route, stops\(photoCount > 0 ? " and \(photoCount) photo\(photoCount == 1 ? "" : "s")" : ""). Friends only — never public.")
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.65)).lineSpacing(2)
+
+                Toggle(isOn: $includeBAC) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Include my BAC numbers")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        Text("Off by default — keeps your blood-alcohol private.")
+                            .font(.system(size: 11, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.55))
+                    }
+                }
+                .tint(Color.whiskey)
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 14).fill(Color.cream.opacity(0.05)))
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(Status.drunk.color)
+                }
+
+                Button { post() } label: {
+                    HStack {
+                        if posting { ProgressView().tint(Color.ink); Spacer() }
+                        else {
+                            Text("POST").font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(3)
+                            Spacer()
+                            Image(systemName: "paperplane.fill").font(.system(size: 12, weight: .bold))
+                        }
+                    }
+                    .foregroundStyle(Color.ink).padding(.vertical, 15).padding(.horizontal, 20)
+                    .background(RoundedRectangle(cornerRadius: 16).fill(Color.cream))
+                }
+                .disabled(posting)
+                .buttonStyle(PressScaleStyle())
+
+                Spacer()
+            }
+            .padding(24)
+        }
+        .preferredColorScheme(.dark)
+        .presentationDetents([.height(380)])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func post() {
+        posting = true; errorMessage = nil
+        Task { @MainActor in
+            do {
+                try await PostService.shared.createPost(recap, includeBAC: includeBAC, history: history)
+                dismiss()
+                onPosted()
+            } catch {
+                errorMessage = "Couldn't post — check your connection and try again."
+                posting = false
+            }
+        }
+    }
+}
+
 struct NightRecapView: View {
     /// How this recap was reached — drives the closing buttons.
     enum Mode {
@@ -1317,6 +1493,7 @@ struct NightRecapView: View {
     }
 
     @State private var stage: Stage = .intro
+    @State private var showPostComposer = false
     @State private var camera: MapCameraPosition = .automatic
     /// Set the first time the user navigates manually — kills the
     /// auto-advance so the story stays where they put it.
@@ -1839,33 +2016,45 @@ struct NightRecapView: View {
 
             switch mode {
             case .replay:
-                Button {
-                    onFinish()
-                } label: {
-                    Text("DONE")
-                        .font(.system(size: 13, weight: .black, design: .monospaced))
-                        .tracking(2.4)
-                        .foregroundStyle(Color.ink)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 15)
-                        .background(Capsule().fill(Color.cream))
-                }
-                .buttonStyle(PressScaleStyle())
-            case .liveEnd, .autoEnd:
-                // The night is already on disk (saved up front so a crash
-                // can't lose it) — "save" keeps it in Past nights, the
-                // quieter option deletes it (photos included) on the way out.
                 VStack(spacing: 10) {
+                    postOrPostedButton
                     Button {
                         onFinish()
                     } label: {
-                        Text(mode == .liveEnd ? "SAVE RECAP & END SESH" : "SAVE RECAP")
+                        Text("DONE")
                             .font(.system(size: 13, weight: .black, design: .monospaced))
-                            .tracking(2.0)
-                            .foregroundStyle(Color.ink)
+                            .tracking(2.4)
+                            .foregroundStyle(Color.cream.opacity(0.85))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 15)
-                            .background(Capsule().fill(Color.cream))
+                            .padding(.vertical, 13)
+                            .background(Capsule().fill(Color.cream.opacity(0.06)))
+                            .overlay(Capsule().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+            case .liveEnd, .autoEnd:
+                // The night is already on disk (saved up front so a crash
+                // can't lose it). POST shares it to friends; "save" keeps it
+                // in Past nights (postable later); the quiet option deletes it.
+                VStack(spacing: 10) {
+                    postOrPostedButton
+
+                    Button {
+                        onFinish()
+                    } label: {
+                        VStack(spacing: 2) {
+                            Text(mode == .liveEnd ? "SAVE RECAP & END SESH" : "SAVE RECAP")
+                                .font(.system(size: 13, weight: .black, design: .monospaced))
+                                .tracking(2.0)
+                            Text("(can be posted later)")
+                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                .tracking(1.0)
+                                .opacity(0.6)
+                        }
+                        .foregroundStyle(Color.ink)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(Color.cream))
                     }
                     .buttonStyle(PressScaleStyle())
 
@@ -1893,6 +2082,45 @@ struct NightRecapView: View {
             insertion: .move(edge: .bottom).combined(with: .opacity),
             removal: .opacity.combined(with: .scale(scale: 0.96))
         ))
+        .sheet(isPresented: $showPostComposer) {
+            PostComposerView(recap: recap, history: history, onPosted: {
+                // Posting from the END screen concludes the flow; in replay
+                // it just closes the composer (the recap stays open).
+                if mode != .replay { onFinish() }
+            })
+        }
+    }
+
+    /// POST button (whiskey) — or a "Posted" confirmation if this recap has
+    /// already been shared to the timeline.
+    @ViewBuilder
+    private var postOrPostedButton: some View {
+        if history.isPosted(recap.id) {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 13, weight: .bold))
+                Text("POSTED TO TIMELINE")
+                    .font(.system(size: 12, weight: .black, design: .monospaced)).tracking(1.6)
+            }
+            .foregroundStyle(Color.whiskey)
+            .frame(maxWidth: .infinity).padding(.vertical, 13)
+            .background(Capsule().fill(Color.whiskey.opacity(0.12)))
+            .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1))
+        } else {
+            Button {
+                showPostComposer = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "paperplane.fill").font(.system(size: 12, weight: .bold))
+                    Text("POST TO TIMELINE")
+                        .font(.system(size: 13, weight: .black, design: .monospaced)).tracking(1.6)
+                }
+                .foregroundStyle(Color.ink)
+                .frame(maxWidth: .infinity).padding(.vertical, 14)
+                .background(Capsule().fill(Color.whiskey))
+                .shadow(color: Color.whiskey.opacity(0.45), radius: 14, y: 5)
+            }
+            .buttonStyle(PressScaleStyle())
+        }
     }
 
     /// The group recap's squad table — drunkest first, MVP crowned, you
