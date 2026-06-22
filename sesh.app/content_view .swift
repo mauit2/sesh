@@ -3021,6 +3021,94 @@ final class FriendsService: ObservableObject {
     }
 }
 
+// MARK: - Timeline feed
+
+/// A friend's posted night, decoded for the timeline.
+struct TimelinePost: Identifiable {
+    let id: UUID
+    let authorId: UUID
+    let authorName: String
+    let authorUsername: String?
+    let authorAvatar: String?
+    let recap: NightRecap
+    let includeBAC: Bool
+    let coverURL: String?
+    let createdAt: String
+}
+
+/// Loads the friends timeline via the `friends_feed` RPC (migration 020).
+/// Recaps come back as JSON; we re-decode them with an ISO-8601 decoder so
+/// dates round-trip exactly the way PostService wrote them.
+@MainActor
+final class FeedService: ObservableObject {
+    @Published private(set) var posts: [TimelinePost] = []
+    @Published var loading = false
+    private var started = false
+
+    private let dec: JSONDecoder = {
+        let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return d
+    }()
+
+    func start() {
+        if !started { started = true }
+        Task { await refresh() }
+    }
+
+    private struct FeedRow: Decodable {
+        let id: UUID
+        let author_id: UUID
+        let author_name: String
+        let author_username: String?
+        let author_avatar: String?
+        let recap: AnyJSON
+        let include_bac: Bool
+        let cover_url: String?
+        let created_at: String
+    }
+
+    private func map(_ rows: [FeedRow]) -> [TimelinePost] {
+        rows.compactMap { row in
+            guard let data = try? JSONEncoder().encode(row.recap),
+                  let recap = try? dec.decode(NightRecap.self, from: data) else { return nil }
+            return TimelinePost(
+                id: row.id, authorId: row.author_id, authorName: row.author_name,
+                authorUsername: row.author_username, authorAvatar: row.author_avatar,
+                recap: recap, includeBAC: row.include_bac, coverURL: row.cover_url,
+                createdAt: row.created_at
+            )
+        }
+    }
+
+    /// The last-7-days friends feed (server-windowed).
+    func refresh() async {
+        guard supabase.auth.currentUser != nil else { posts = []; return }
+        loading = true
+        defer { loading = false }
+        struct P: Encodable { let p_limit: Int }
+        do {
+            let rows: [FeedRow] = try await supabase
+                .rpc("friends_feed", params: P(p_limit: 40))
+                .execute().value
+            posts = map(rows)
+        } catch {
+            // Leave the last good feed in place on a transient failure.
+        }
+    }
+
+    /// One user's full post archive (no time window) — for profile grids.
+    func userPosts(_ userId: UUID) async -> [TimelinePost] {
+        struct P: Encodable { let p_user: String }
+        do {
+            let rows: [FeedRow] = try await supabase
+                .rpc("user_posts", params: P(p_user: userId.uuidString.lowercased()))
+                .execute().value
+            return map(rows)
+        } catch {
+            return []
+        }
+    }
+}
+
 // MARK: - Live Sesh — Group Roast
 
 /// A roast: a punchy headline aimed at the most-drunk member of the group,
@@ -5715,6 +5803,453 @@ private struct FriendPickerSheet: View {
     }
 }
 
+// MARK: - Timeline feed UI
+
+private enum RelativeTime {
+    static func short(_ iso: String) -> String {
+        let withFrac = ISO8601DateFormatter()
+        withFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        let date = withFrac.date(from: iso) ?? plain.date(from: iso)
+        guard let date else { return "" }
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+private func recapStopEmoji(_ kind: RecapStopKind) -> String {
+    switch kind {
+    case .bar:     return "🍻"
+    case .preGame: return "🏠"
+    case .refuel:  return "🚕"
+    case .afters:  return "🌙"
+    case .food:    return "🍔"
+    case .puke:    return "🤮"
+    }
+}
+
+/// The TIMELINE tab — a scrollable feed of friends' posted nights.
+private struct TimelineFeedView: View {
+    @ObservedObject var feed: FeedService
+    let onOpenPost: (TimelinePost) -> Void
+    let onOpenAuthor: (TimelinePost) -> Void
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("TIMELINE")
+                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                    .tracking(2.4).foregroundStyle(Color.bronze)
+                    .padding(.horizontal, 22).padding(.top, 6)
+
+                if feed.posts.isEmpty {
+                    emptyState
+                } else {
+                    ForEach(feed.posts) { post in
+                        PostCard(post: post,
+                                 onOpenPost: { onOpenPost(post) },
+                                 onOpenAuthor: { onOpenAuthor(post) })
+                            .padding(.horizontal, 16)
+                    }
+                }
+            }
+            .padding(.bottom, 40)
+        }
+        .refreshable { await feed.refresh() }
+        .onAppear { feed.start() }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(Color.whiskey.opacity(0.7))
+            Text("No posts yet")
+                .font(.system(size: 17, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.cream)
+            Text("When your friends post their nights, they show up here. Add friends, then share your own recap after a night out.")
+                .font(.system(size: 13, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.6))
+                .multilineTextAlignment(.center).lineSpacing(2)
+        }
+        .frame(maxWidth: .infinity).padding(.horizontal, 36).padding(.top, 90)
+    }
+}
+
+/// All of a night's photos paired with the stop they were taken at.
+private struct NightPhoto: Identifiable {
+    let id = UUID()
+    let stop: String
+    let url: URL
+}
+
+private func nightPhotos(_ recap: NightRecap) -> [NightPhoto] {
+    recap.stops.flatMap { stop in
+        stop.photoFilenames.compactMap { s in
+            URL(string: s).map { NightPhoto(stop: stop.name, url: $0) }
+        }
+    }
+}
+
+/// One night in the feed. Tapping the author header opens their profile;
+/// the photos swipe through the whole night (each tagged with its stop);
+/// tapping a photo or the stats opens the full post.
+private struct PostCard: View {
+    let post: TimelinePost
+    let onOpenPost: () -> Void
+    let onOpenAuthor: () -> Void
+
+    private var barCount: Int { post.recap.stops.filter { $0.kind == .bar }.count }
+    private var photos: [NightPhoto] { nightPhotos(post.recap) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: onOpenAuthor) {
+                HStack(spacing: 10) {
+                    FriendAvatar(name: post.authorName, avatarURL: post.authorAvatar, size: 36)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(post.authorName)
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        if let u = post.authorUsername {
+                            Text("@\(u)").font(.system(size: 11, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.5))
+                        }
+                    }
+                    Spacer()
+                    Text(RelativeTime.short(post.createdAt))
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.bronze)
+                }
+                .padding(14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleStyle())
+
+            // Swipeable photo carousel — each photo tagged with its stop.
+            if !photos.isEmpty {
+                TabView {
+                    ForEach(photos) { photo in
+                        ZStack(alignment: .bottomLeading) {
+                            AsyncImage(url: photo.url) { img in
+                                img.resizable().scaledToFill()
+                            } placeholder: {
+                                Color.cream.opacity(0.06)
+                            }
+                            .frame(maxWidth: .infinity).frame(height: 260).clipped()
+                            .overlay(LinearGradient(colors: [.clear, Color.ink.opacity(0.5)],
+                                                    startPoint: .center, endPoint: .bottom))
+
+                            HStack(spacing: 5) {
+                                Image(systemName: "mappin.circle.fill").font(.system(size: 11))
+                                Text(photo.stop)
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .lineLimit(1)
+                            }
+                            .foregroundStyle(Color.cream)
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(Capsule().fill(Color.ink.opacity(0.55)))
+                            .padding(12)
+                            .padding(.bottom, photos.count > 1 ? 16 : 0) // clear the page dots
+                            .contentShape(Rectangle())
+                            .onTapGesture { onOpenPost() }
+                        }
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: photos.count > 1 ? .automatic : .never))
+                .frame(height: 260)
+            }
+
+            Button(action: onOpenPost) {
+                HStack(spacing: 14) {
+                    Label("\(barCount) stop\(barCount == 1 ? "" : "s")", systemImage: "mappin.and.ellipse")
+                    Label("\(post.recap.totalDrinks) drink\(post.recap.totalDrinks == 1 ? "" : "s")", systemImage: "wineglass")
+                    if post.includeBAC {
+                        let unit = BACUnitSetting.current()
+                        Label("\(unit.formatted(post.recap.peakBAC))\(unit.symbol)", systemImage: "flame.fill")
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.bronze)
+                }
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.8))
+                .padding(14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+        .background(Color.cream.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+    }
+}
+
+/// Lightweight reference to a profile we can open a post grid for.
+struct ProfileRef: Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    let username: String?
+    let avatar: String?
+}
+
+/// Square cover thumbnail for the profile grids. Falls back to a tinted
+/// tile with the drink count when a post has no photo.
+private struct PostThumb: View {
+    let post: TimelinePost
+    var body: some View {
+        ZStack {
+            Color.cream.opacity(0.06)
+            if let cover = post.coverURL, let url = URL(string: cover) {
+                AsyncImage(url: url) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: { Color.clear }
+            } else {
+                VStack(spacing: 4) {
+                    Text("🍻").font(.system(size: 22))
+                    Text("\(post.recap.totalDrinks)")
+                        .font(.system(size: 12, weight: .black, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.8))
+                }
+            }
+        }
+        .aspectRatio(1, contentMode: .fill)
+        .frame(maxWidth: .infinity)
+        .clipped()
+    }
+}
+
+/// A profile page: avatar + name + posted-sesh count, with a grid of that
+/// user's posts (their full archive). Tap a tile to open the night.
+private struct ProfileFeedView: View {
+    let user: ProfileRef
+    @ObservedObject var feed: FeedService
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var posts: [TimelinePost] = []
+    @State private var loading = true
+    @State private var selectedPost: TimelinePost?
+
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.ink.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 16) {
+                    VStack(spacing: 8) {
+                        FriendAvatar(name: user.name, avatarURL: user.avatar, size: 78)
+                        Text(user.name)
+                            .font(.system(size: 20, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        if let u = user.username {
+                            Text("@\(u)").font(.system(size: 13, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        }
+                        Text("\(posts.count) sesh\(posts.count == 1 ? "" : "s") posted")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .tracking(1.6).foregroundStyle(Color.bronze)
+                            .padding(.top, 2)
+                    }
+                    .padding(.top, 40)
+
+                    if loading {
+                        ProgressView().tint(Color.whiskey).padding(.top, 40)
+                    } else if posts.isEmpty {
+                        Text("No posted seshs yet.")
+                            .font(.system(size: 13, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.5))
+                            .padding(.top, 40)
+                    } else {
+                        LazyVGrid(columns: cols, spacing: 3) {
+                            ForEach(posts) { p in
+                                Button { selectedPost = p } label: { PostThumb(post: p) }
+                                    .buttonStyle(PressScaleStyle())
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 40)
+            }
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.cream.opacity(0.85))
+                    .padding(12).background(Circle().fill(Color.cream.opacity(0.08)))
+            }
+            .padding(.top, 16).padding(.trailing, 20)
+            .buttonStyle(PressScaleStyle())
+        }
+        .preferredColorScheme(.dark)
+        .task {
+            posts = await feed.userPosts(user.id)
+            loading = false
+        }
+        .fullScreenCover(item: $selectedPost) { p in
+            PostDetailView(post: p) { selectedPost = nil }
+        }
+    }
+}
+
+/// A friend's posted night, full-screen and read-only (remote photos).
+/// BAC is shown only if the poster opted to include it.
+private struct PostDetailView: View {
+    let post: TimelinePost
+    let onClose: () -> Void
+
+    @State private var lightbox: NightPhoto?
+
+    private static let timeFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "h:mm a"; return f
+    }()
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.ink.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 12) {
+                        FriendAvatar(name: post.authorName, avatarURL: post.authorAvatar, size: 46)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(post.authorName)
+                                .font(.system(size: 18, weight: .black, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                            Text((post.authorUsername.map { "@\($0)" } ?? "") + " · " + RelativeTime.short(post.createdAt))
+                                .font(.system(size: 12, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        }
+                        Spacer()
+                    }
+
+                    HStack(spacing: 10) {
+                        stat("\(post.recap.stops.filter { $0.kind == .bar }.count)", "stops")
+                        stat("\(post.recap.totalDrinks)", "drinks")
+                        if post.includeBAC {
+                            let unit = BACUnitSetting.current()
+                            stat("\(unit.formatted(post.recap.peakBAC))\(unit.symbol)", "peak")
+                        }
+                    }
+
+                    ForEach(post.recap.stops) { stop in
+                        stopCard(stop)
+                    }
+
+                    Spacer(minLength: 30)
+                }
+                .padding(20).padding(.top, 56)
+            }
+
+            Button { onClose() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.cream.opacity(0.85))
+                    .padding(12).background(Circle().fill(Color.cream.opacity(0.08)))
+            }
+            .padding(.top, 16).padding(.trailing, 20)
+            .buttonStyle(PressScaleStyle())
+        }
+        .preferredColorScheme(.dark)
+        .fullScreenCover(item: $lightbox) { photo in
+            LightboxView(url: photo.url) { lightbox = nil }
+        }
+    }
+
+    private func stat(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.system(size: 20, weight: .black, design: .rounded)).foregroundStyle(Color.cream)
+            Text(label.uppercased()).font(.system(size: 9, weight: .bold, design: .monospaced))
+                .tracking(1.4).foregroundStyle(Color.bronze)
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.cream.opacity(0.05)))
+    }
+
+    @ViewBuilder
+    private func stopCard(_ stop: RecapStop) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(recapStopEmoji(stop.kind)).font(.system(size: 16))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(stop.name).font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    Text(Self.timeFmt.string(from: stop.arrivedAt))
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                }
+                Spacer()
+                if stop.isPeak && post.includeBAC {
+                    Text("PEAK").font(.system(size: 9, weight: .black, design: .monospaced))
+                        .tracking(1.2).foregroundStyle(Color.whiskey)
+                }
+            }
+
+            if !stop.photoFilenames.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(stop.photoFilenames, id: \.self) { urlStr in
+                            if let url = URL(string: urlStr) {
+                                Button { lightbox = NightPhoto(stop: stop.name, url: url) } label: {
+                                    AsyncImage(url: url) { img in
+                                        img.resizable().scaledToFill()
+                                    } placeholder: {
+                                        Color.cream.opacity(0.06)
+                                    }
+                                    .frame(width: 150, height: 150)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                                }
+                                .buttonStyle(PressScaleStyle())
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !stop.drinkSummary.isEmpty {
+                Text(stop.drinkSummary)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.7))
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color.cream.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+    }
+}
+
+/// Full-screen photo viewer. Tap anywhere or the X to dismiss.
+private struct LightboxView: View {
+    let url: URL
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            AsyncImage(url: url) { img in
+                img.resizable().scaledToFit()
+            } placeholder: {
+                ProgressView().tint(.white)
+            }
+            .ignoresSafeArea()
+
+            Button { onClose() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(12)
+                    .background(Circle().fill(.white.opacity(0.15)))
+            }
+            .padding(.top, 16).padding(.trailing, 20)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onClose() }
+    }
+}
+
 private struct ModePill: View {
     let label: String
     let selected: Bool
@@ -5915,8 +6450,14 @@ enum SeshMode: String, Hashable, Identifiable {
 /// Top bar shown above the paged TabView. Houses the mode switcher and
 /// the profile chip — replaces the old Masthead + LiveSeshBar split.
 /// Pinned to the top of the screen so it doesn't scroll with content.
+/// The three top-level pages of the signed-in app. PLAN and LIVE map to the
+/// existing sesh modes; TIMELINE is the friends feed. Kept separate from
+/// `SeshMode` (which is sesh/group scope) so feed selection doesn't leak into
+/// drink/group logic.
+enum TopTab: Hashable { case plan, live, timeline }
+
 private struct ModeTopBar: View {
-    @Binding var mode: SeshMode
+    @Binding var tab: TopTab
     let profile: Profile
     /// True when there's something happening in LIVE that the user should
     /// notice from the PLAN side (live timeline running, group has live
@@ -5932,7 +6473,7 @@ private struct ModeTopBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ModeSwitcher(mode: $mode, liveActive: liveActive)
+            ModeSwitcher(tab: $tab, liveActive: liveActive)
             Spacer(minLength: 8)
             // Friends — set your @username, search + add friends, invite
             // them to a sesh. Always present.
@@ -6002,7 +6543,7 @@ private struct ModeTopBar: View {
 /// for LIVE and a more neutral cream tint for PLAN — visually
 /// reinforcing the energy difference between the two modes.
 private struct ModeSwitcher: View {
-    @Binding var mode: SeshMode
+    @Binding var tab: TopTab
     let liveActive: Bool
 
     @Namespace private var thumb
@@ -6011,6 +6552,7 @@ private struct ModeSwitcher: View {
         HStack(spacing: 0) {
             segment(.plan, label: "PLAN")
             segment(.live, label: "LIVE", showLiveDot: liveActive)
+            segment(.timeline, label: "TIMELINE")
         }
         .padding(3)
         .background(
@@ -6022,34 +6564,35 @@ private struct ModeSwitcher: View {
                 .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
         )
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Mode")
-        .accessibilityValue(mode == .plan ? "Plan" : "Live")
+        .accessibilityLabel("Section")
     }
 
     @ViewBuilder
-    private func segment(_ value: SeshMode, label: String, showLiveDot: Bool = false) -> some View {
-        let isOn = mode == value
+    private func segment(_ value: TopTab, label: String, showLiveDot: Bool = false) -> some View {
+        let isOn = tab == value
         let isLive = value == .live
         Button {
             // Spring matches the TabView page swipe so the thumb and the
             // page transition feel like one motion.
             withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
-                mode = value
+                tab = value
             }
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 if showLiveDot {
                     LivePulseDot()
                         .frame(width: 7, height: 7)
                 }
                 Text(label)
-                    .font(.system(size: 11, weight: .black, design: .monospaced))
-                    .tracking(2.2)
+                    .font(.system(size: 10.5, weight: .black, design: .monospaced))
+                    .tracking(1.4)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                     .foregroundStyle(textColor(isOn: isOn, isLive: isLive))
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 8)
             .background(
                 ZStack {
                     if isOn {
@@ -6075,10 +6618,7 @@ private struct ModeSwitcher: View {
     }
 
     private func textColor(isOn: Bool, isLive: Bool) -> Color {
-        if isOn {
-            return isLive ? Color.ink : Color.ink
-        }
-        return Color.cream.opacity(0.55)
+        isOn ? Color.ink : Color.cream.opacity(0.55)
     }
 }
 
@@ -6168,13 +6708,19 @@ private struct SessionView: View {
     /// Friends roster + incoming requests. App-wide so the bell badge and
     /// the unified inbox stay current; polls every 8s while signed in.
     @StateObject private var friends = FriendsService()
+    /// The friends timeline (loaded when the TIMELINE tab is first shown).
+    @StateObject private var feed = FeedService()
+    /// A friend's post opened full-screen.
+    @State private var openPost: TimelinePost?
+    /// A profile (post grid) opened from a feed author tap.
+    @State private var openProfileUser: ProfileRef?
     /// Observes push taps. When a sesh-invite notification is tapped,
     /// `push.openInvites` flips true and we present the inbox + refresh.
     @ObservedObject private var push = PushManager.shared
     /// Which page the user is on. Driven by both the segmented switcher
     /// at the top and the swipe gesture on the underlying TabView.
     /// Defaults to LIVE so the app opens straight into the live experience.
-    @State private var mode: SeshMode = .live
+    @State private var tab: TopTab = .live
 
     private let eliminationRate = 0.015
 
@@ -6360,12 +6906,12 @@ private struct SessionView: View {
             // The atmosphere accent shifts when the user is on LIVE so
             // the whole screen reads "this is the live experience" even
             // before any content swipes in.
-            AtmosphereBackground(accent: mode == .live ? Color.whiskey : status.color)
-                .animation(.easeInOut(duration: 0.45), value: mode)
+            AtmosphereBackground(accent: tab == .live ? Color.whiskey : status.color)
+                .animation(.easeInOut(duration: 0.45), value: tab)
 
             VStack(spacing: 0) {
                 ModeTopBar(
-                    mode: $mode,
+                    tab: $tab,
                     profile: profile,
                     liveActive: liveActive,
                     inboxCount: invites.pending.count + friends.incoming.count,
@@ -6377,15 +6923,16 @@ private struct SessionView: View {
                 .padding(.top, 4)
                 .padding(.bottom, 8)
 
-                TabView(selection: $mode) {
-                    planPage.tag(SeshMode.plan)
-                    livePage.tag(SeshMode.live)
+                TabView(selection: $tab) {
+                    planPage.tag(TopTab.plan)
+                    livePage.tag(TopTab.live)
+                    timelinePage.tag(TopTab.timeline)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 // Smooth horizontal swipe between modes; matches the
                 // ModeSwitcher's spring so tapping the pill and dragging
                 // the page feel like the same animation.
-                .animation(.spring(response: 0.4, dampingFraction: 0.82), value: mode)
+                .animation(.spring(response: 0.4, dampingFraction: 0.82), value: tab)
             }
 
             // Floating invite banner — pinned just below the ModeTopBar.
@@ -6483,10 +7030,10 @@ private struct SessionView: View {
                             // LIVE page so they SEE the group they just
                             // joined — without this they'd accept and
                             // then wonder where it went.
-                            mode = .live
+                            tab = .live
                         } else {
                             await planGroup.join(code: invite.joinCode)
-                            mode = .plan
+                            tab = .plan
                         }
                         invitesSheetOpen = false
                     }
@@ -6499,7 +7046,7 @@ private struct SessionView: View {
             .presentationDragIndicator(.visible)
         }
         .preferredColorScheme(.dark)
-        .onChange(of: mode) { _, new in
+        .onChange(of: tab) { _, new in
             // Auto-start the solo live timeline the first time the user
             // swipes into LIVE — saves them from a "Start" → "Add" two-step.
             // In a live group, the group itself is the live backing so we
@@ -6507,6 +7054,7 @@ private struct SessionView: View {
             if new == .live, !liveGroup.isActive, !live.isActive {
                 live.start()
             }
+            if new == .timeline { feed.start() }
         }
         .animation(.spring(response: 0.55, dampingFraction: 0.82), value: status)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: planGroup.isActive)
@@ -6658,7 +7206,7 @@ private struct SessionView: View {
                 .presentationBackground(Color.ink)
         }
         .sheet(isPresented: $profileOpen) {
-            ProfileSheet(profile: profile, auth: auth, admin: admin, friends: friends)
+            ProfileSheet(profile: profile, auth: auth, admin: admin, friends: friends, feed: feed)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
@@ -6689,6 +7237,27 @@ private struct SessionView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
+        .fullScreenCover(item: $openPost) { post in
+            PostDetailView(post: post) { openPost = nil }
+        }
+        .sheet(item: $openProfileUser) { ref in
+            ProfileFeedView(user: ref, feed: feed)
+                .presentationBackground(Color.ink)
+        }
+    }
+
+    /// TIMELINE — the friends feed of posted nights.
+    private var timelinePage: some View {
+        TimelineFeedView(
+            feed: feed,
+            onOpenPost: { openPost = $0 },
+            onOpenAuthor: { post in
+                openProfileUser = ProfileRef(
+                    id: post.authorId, name: post.authorName,
+                    username: post.authorUsername, avatar: post.authorAvatar
+                )
+            }
+        )
     }
 
     // MARK: - Pages
@@ -7908,6 +8477,12 @@ private struct ProfileSheet: View {
     /// Friends roster + incoming requests — shared with SessionView so the
     /// bell badge and inbox stay in sync (SessionView owns the polling).
     @ObservedObject var friends: FriendsService
+    /// Timeline service — used here to load the user's own posted seshs.
+    @ObservedObject var feed: FeedService
+
+    /// The user's own posted seshs (Instagram-style grid) + a tapped one.
+    @State private var myPosts: [TimelinePost] = []
+    @State private var selectedPost: TimelinePost?
 
     /// BAC display unit — "auto" (region default), "percent", or
     /// "promille". Persisted in the App Group so the widget agrees.
@@ -7918,15 +8493,41 @@ private struct ProfileSheet: View {
     @StateObject private var nightHistory = RecapHistoryStore()
     @State private var replayRecap: NightRecap? = nil
 
-    init(profile: Profile, auth: AuthService, admin: AdminService, friends: FriendsService) {
+    private let postCols = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
+
+    init(profile: Profile, auth: AuthService, admin: AdminService, friends: FriendsService, feed: FeedService) {
         self.profile = profile
         self.auth = auth
         self.admin = admin
         self.friends = friends
+        self.feed = feed
         _name = State(initialValue: profile.name)
         _age = State(initialValue: Double(profile.age))
         _sex = State(initialValue: profile.sex)
         _weightKg = State(initialValue: profile.weightKg)
+    }
+
+    /// Instagram-style grid of the user's own posted seshs + count.
+    @ViewBuilder
+    private var mySeshsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("YOUR SESHS · \(myPosts.count)")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .tracking(2).foregroundStyle(Color.bronze)
+            if myPosts.isEmpty {
+                Text("Post a night from a recap and it shows up here.")
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.5))
+            } else {
+                LazyVGrid(columns: postCols, spacing: 3) {
+                    ForEach(myPosts) { p in
+                        Button { selectedPost = p } label: { PostThumb(post: p) }
+                            .buttonStyle(PressScaleStyle())
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+        }
     }
 
     private var dirty: Bool {
@@ -7970,6 +8571,8 @@ private struct ProfileSheet: View {
                             .tracking(-1.8)
                             .foregroundStyle(Color.cream)
                     }
+
+                    mySeshsSection
 
                     HStack(spacing: 16) {
                         AvatarPicker(
@@ -8272,6 +8875,11 @@ private struct ProfileSheet: View {
                 replayRecap = nil
             }
         }
+        // Tap one of your posted seshs to view it.
+        .fullScreenCover(item: $selectedPost) { post in
+            PostDetailView(post: post) { selectedPost = nil }
+        }
+        .task { myPosts = await feed.userPosts(profile.id) }
     }
 }
 
