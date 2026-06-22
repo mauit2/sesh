@@ -4124,8 +4124,11 @@ private struct InviteBanner: View {
 
 private struct InvitesSheet: View {
     @ObservedObject var invites: InvitesService
+    @ObservedObject var friends: FriendsService
     let onAccept: (Invite) -> Void
     let onDecline: (Invite) -> Void
+
+    private var isEmpty: Bool { invites.pending.isEmpty && friends.incoming.isEmpty }
 
     var body: some View {
         ZStack {
@@ -4133,20 +4136,18 @@ private struct InvitesSheet: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("INVITES")
+                        Text("NOTIFICATIONS")
                             .font(.system(size: 11, weight: .black, design: .monospaced))
                             .tracking(2.4)
                             .foregroundStyle(Color.bronze)
-                        Text(invites.pending.isEmpty
-                             ? "All caught up"
-                             : "Tap accept to drop straight into the sesh")
+                        Text(isEmpty ? "All caught up" : "Friend requests and sesh invites")
                             .font(.system(size: 22, weight: .black, design: .rounded))
                             .foregroundStyle(Color.cream)
                             .lineLimit(2)
                     }
                     .padding(.top, 8)
 
-                    if invites.pending.isEmpty {
+                    if isEmpty {
                         VStack(spacing: 8) {
                             Image(systemName: "tray")
                                 .font(.system(size: 32, weight: .light))
@@ -4157,7 +4158,30 @@ private struct InvitesSheet: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 60)
-                    } else {
+                    }
+
+                    // Friend requests
+                    if !friends.incoming.isEmpty {
+                        Text("FRIEND REQUESTS")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .tracking(2).foregroundStyle(Color.bronze)
+                        VStack(spacing: 10) {
+                            ForEach(friends.incoming) { req in
+                                FriendRequestRow(
+                                    request: req,
+                                    onAccept: { Task { await friends.respond(requestId: req.requestId, accept: true) } },
+                                    onDecline: { Task { await friends.respond(requestId: req.requestId, accept: false) } }
+                                )
+                            }
+                        }
+                    }
+
+                    // Sesh invites
+                    if !invites.pending.isEmpty {
+                        Text("SESH INVITES")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .tracking(2).foregroundStyle(Color.bronze)
+                            .padding(.top, friends.incoming.isEmpty ? 0 : 6)
                         VStack(spacing: 10) {
                             ForEach(invites.pending) { invite in
                                 InviteRow(
@@ -4170,7 +4194,7 @@ private struct InvitesSheet: View {
                         }
                     }
 
-                    if let err = invites.error {
+                    if let err = invites.error ?? friends.error {
                         Text(err)
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(Color(red: 0.85, green: 0.32, blue: 0.23))
@@ -4183,6 +4207,46 @@ private struct InvitesSheet: View {
             }
         }
         .preferredColorScheme(.dark)
+    }
+}
+
+/// A friend request row inside the unified inbox.
+private struct FriendRequestRow: View {
+    let request: FriendRequest
+    let onAccept: () -> Void
+    let onDecline: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            FriendAvatar(name: request.name, avatarURL: request.avatarURL)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(request.name)
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                Text(request.username.map { "@\($0) wants to be friends" } ?? "wants to be friends")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.65))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Button(action: onAccept) {
+                Text("ACCEPT")
+                    .font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1.4)
+                    .foregroundStyle(Color.ink)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Capsule().fill(Color.whiskey))
+            }
+            .buttonStyle(PressScaleStyle())
+            Button(action: onDecline) {
+                Image(systemName: "xmark").font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.bronze).padding(8)
+                    .background(Circle().fill(Color.cream.opacity(0.06)))
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.whiskey.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.whiskey.opacity(0.25), lineWidth: 1))
     }
 }
 
@@ -5360,6 +5424,173 @@ private struct UsernameEditorView: View {
     }
 }
 
+/// Invite people to the current sesh: search anyone by @username (display
+/// name shown too) or multi-select from your friends. Sends in-app invites
+/// directly via InvitesService.
+private struct FriendPickerSheet: View {
+    @ObservedObject var friends: FriendsService
+    @ObservedObject var invites: InvitesService
+    let session: SeshSession
+    let scope: SeshMode
+    let alreadyIn: Set<UUID>
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var selected: Set<UUID> = []
+    @State private var query = ""
+    @State private var results: [UserSearchHit] = []
+    @State private var searchTask: Task<Void, Never>?
+    @State private var invited: Set<UUID> = []
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("INVITE TO SESH")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .tracking(2.4).foregroundStyle(Color.bronze)
+                        Text("Search a username or pick friends")
+                            .font(.system(size: 22, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                    }
+                    .padding(.top, 8)
+
+                    LoungeField(label: "FIND BY USERNAME", text: $query,
+                                placeholder: "search @username", autocapitalize: false)
+
+                    if !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                        // Search results — display name + @username.
+                        VStack(spacing: 8) {
+                            if results.isEmpty {
+                                Text("No one with that username.")
+                                    .font(.system(size: 12, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.5))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 6)
+                            }
+                            ForEach(results) { hit in
+                                personRow(id: hit.id, name: hit.name, username: hit.username,
+                                          avatarURL: hit.avatarURL, trailing: .invite)
+                            }
+                        }
+                    } else {
+                        // Friends multi-select.
+                        Text("YOUR FRIENDS")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .tracking(2).foregroundStyle(Color.bronze)
+                        if friends.friends.isEmpty {
+                            Text("No friends yet — search a username above, or add friends from the Friends screen.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                                .padding(.vertical, 8)
+                        } else {
+                            VStack(spacing: 8) {
+                                ForEach(friends.friends) { friend in
+                                    personRow(id: friend.id, name: friend.name, username: friend.username,
+                                              avatarURL: friend.avatarURL, trailing: .select)
+                                }
+                            }
+                            Button {
+                                Task { await invite(Array(selected)) ; dismiss() }
+                            } label: {
+                                HStack {
+                                    Text(selected.isEmpty ? "SELECT FRIENDS" : "SEND \(selected.count) INVITE\(selected.count == 1 ? "" : "S")")
+                                        .font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(2)
+                                    Spacer()
+                                    Image(systemName: "paperplane.fill").font(.system(size: 12, weight: .bold))
+                                }
+                                .foregroundStyle(Color.ink)
+                                .padding(.vertical, 15).padding(.horizontal, 20)
+                                .background(RoundedRectangle(cornerRadius: 16).fill(selected.isEmpty ? Color.cream.opacity(0.4) : Color.cream))
+                            }
+                            .disabled(selected.isEmpty)
+                            .buttonStyle(PressScaleStyle())
+                            .padding(.top, 4)
+                        }
+                    }
+
+                    Spacer(minLength: 20)
+                }
+                .padding(.horizontal, 24).padding(.bottom, 40)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .scrollDismissesKeyboard(.interactively)
+        .onChange(of: query) { _, q in
+            searchTask?.cancel()
+            let trimmed = q.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { results = []; return }
+            searchTask = Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if Task.isCancelled { return }
+                let hits = await friends.search(trimmed)
+                if !Task.isCancelled { results = hits }
+            }
+        }
+    }
+
+    private enum Trailing { case select, invite }
+
+    @ViewBuilder
+    private func personRow(id: UUID, name: String, username: String?, avatarURL: String?, trailing: Trailing) -> some View {
+        let isIn = alreadyIn.contains(id)
+        let isSel = selected.contains(id)
+        let isInvited = invited.contains(id)
+        Button {
+            guard !isIn, !isInvited else { return }
+            switch trailing {
+            case .select:
+                if isSel { selected.remove(id) } else { selected.insert(id) }
+            case .invite:
+                Task { await invite([id]) }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                FriendAvatar(name: name, avatarURL: avatarURL)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name)
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    if let u = username {
+                        Text("@\(u)").font(.system(size: 12, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.55))
+                    }
+                }
+                Spacer()
+                if isIn {
+                    Text("IN").font(.system(size: 9, weight: .black, design: .monospaced))
+                        .tracking(1.2).foregroundStyle(Color.bronze)
+                } else if isInvited {
+                    Text("INVITED").font(.system(size: 9, weight: .black, design: .monospaced))
+                        .tracking(1.2).foregroundStyle(Color.whiskey)
+                } else if trailing == .select {
+                    Image(systemName: isSel ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 18))
+                        .foregroundStyle(isSel ? Color.whiskey : Color.cream.opacity(0.4))
+                } else {
+                    Text("INVITE").font(.system(size: 10, weight: .black, design: .monospaced))
+                        .tracking(1.2).foregroundStyle(Color.ink)
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Capsule().fill(Color.cream))
+                }
+            }
+            .padding(.vertical, 8).padding(.horizontal, 12)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.cream.opacity(isSel ? 0.07 : 0.04)))
+            .opacity(isIn ? 0.5 : 1)
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(isIn || isInvited)
+    }
+
+    private func invite(_ ids: [UUID]) async {
+        guard !ids.isEmpty else { return }
+        _ = await invites.send(sessionId: session.id, joinCode: session.joinCode,
+                               mode: scope, recipientIds: ids)
+        invited.formUnion(ids)
+    }
+}
+
 private struct ModePill: View {
     let label: String
     let selected: Bool
@@ -5573,29 +5804,45 @@ private struct ModeTopBar: View {
     let inboxCount: Int
     let onTapInbox: () -> Void
     let onTapProfile: () -> Void
+    let onTapFriends: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
             ModeSwitcher(mode: $mode, liveActive: liveActive)
             Spacer(minLength: 8)
-            // Notification-center bell. Only shown when there's something
-            // in the inbox — a 0-count bell would be dead chrome.
-            if inboxCount > 0 {
-                Button(action: onTapInbox) {
-                    ZStack(alignment: .topTrailing) {
-                        ZStack {
-                            Circle()
-                                .fill(Color.cream.opacity(0.05))
-                                .frame(width: 32, height: 32)
-                            Image(systemName: "bell.fill")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(Color.whiskey)
-                        }
-                        .overlay(
-                            Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1)
-                        )
-                        // Count badge — caps at 9+ so it never overflows
-                        // the little pill.
+            // Friends — set your @username, search + add friends, invite
+            // them to a sesh. Always present.
+            Button(action: onTapFriends) {
+                ZStack {
+                    Circle()
+                        .fill(Color.cream.opacity(0.05))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.cream.opacity(0.8))
+                }
+                .overlay(Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+            }
+            .buttonStyle(PressScaleStyle())
+            .accessibilityLabel("Friends")
+            // Notification-center bell — always present, sitting next to the
+            // friends icon. Shows a count badge only when there's something
+            // pending (friend requests + sesh invites).
+            Button(action: onTapInbox) {
+                ZStack(alignment: .topTrailing) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.cream.opacity(0.05))
+                            .frame(width: 32, height: 32)
+                        Image(systemName: inboxCount > 0 ? "bell.fill" : "bell")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(inboxCount > 0 ? Color.whiskey : Color.cream.opacity(0.8))
+                    }
+                    .overlay(
+                        Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1)
+                    )
+                    // Count badge — caps at 9+ so it never overflows the pill.
+                    if inboxCount > 0 {
                         Text(inboxCount > 9 ? "9+" : "\(inboxCount)")
                             .font(.system(size: 9, weight: .black, design: .rounded))
                             .foregroundStyle(Color.ink)
@@ -5606,10 +5853,9 @@ private struct ModeTopBar: View {
                             .offset(x: 5, y: -5)
                     }
                 }
-                .buttonStyle(PressScaleStyle())
-                .accessibilityLabel("\(inboxCount) pending invite\(inboxCount == 1 ? "" : "s")")
-                .transition(.scale.combined(with: .opacity))
             }
+            .buttonStyle(PressScaleStyle())
+            .accessibilityLabel(inboxCount > 0 ? "Notifications, \(inboxCount) pending" : "Notifications")
             Button(action: onTapProfile) {
                 AvatarView(
                     urlString: profile.avatarURL,
@@ -5794,6 +6040,10 @@ private struct SessionView: View {
     /// it; accept/decline inside the sheet drains the banner naturally
     /// because each action removes the row from `invites.pending`.
     @State private var invitesSheetOpen = false
+    @State private var friendsSheetOpen = false
+    /// Friends roster + incoming requests. App-wide so the bell badge and
+    /// the unified inbox stay current; polls every 8s while signed in.
+    @StateObject private var friends = FriendsService()
     /// Observes push taps. When a sesh-invite notification is tapped,
     /// `push.openInvites` flips true and we present the inbox + refresh.
     @ObservedObject private var push = PushManager.shared
@@ -5994,9 +6244,10 @@ private struct SessionView: View {
                     mode: $mode,
                     profile: profile,
                     liveActive: liveActive,
-                    inboxCount: invites.pending.count,
+                    inboxCount: invites.pending.count + friends.incoming.count,
                     onTapInbox: { invitesSheetOpen = true },
-                    onTapProfile: { profileOpen = true }
+                    onTapProfile: { profileOpen = true },
+                    onTapFriends: { friendsSheetOpen = true }
                 )
                 .padding(.horizontal, 22)
                 .padding(.top, 4)
@@ -6093,6 +6344,7 @@ private struct SessionView: View {
         .sheet(isPresented: $invitesSheetOpen) {
             InvitesSheet(
                 invites: invites,
+                friends: friends,
                 onAccept: { invite in
                     // Accept = join in the SAME mode the sender was in
                     // when they fired this invite. A live host's invite
@@ -6256,6 +6508,7 @@ private struct SessionView: View {
         .onAppear {
             recordSavedGroup(from: planGroup)
             recordSavedGroup(from: liveGroup)
+            friends.start()
         }
         // Profile edits (weight/age/sex) need to flow into the live
         // Widmark formula immediately. Otherwise the per-drink BAC
@@ -6281,9 +6534,13 @@ private struct SessionView: View {
                 .presentationBackground(Color.ink)
         }
         .sheet(isPresented: $profileOpen) {
-            ProfileSheet(profile: profile, auth: auth, admin: admin)
+            ProfileSheet(profile: profile, auth: auth, admin: admin, friends: friends)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+        .sheet(isPresented: $friendsSheetOpen) {
+            FriendsView(friends: friends, auth: auth)
                 .presentationBackground(Color.ink)
         }
         .sheet(item: $groupSheetScope) { scope in
@@ -6295,7 +6552,8 @@ private struct SessionView: View {
                 group: scope == .plan ? planGroup : liveGroup,
                 cousin: scope == .plan ? liveGroup : planGroup,
                 savedGroups: savedGroups,
-                invites: invites
+                invites: invites,
+                friends: friends
             )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
@@ -7523,8 +7781,9 @@ private struct ProfileSheet: View {
     @State private var adminPanelOpen = false
     @State private var friendsOpen = false
 
-    /// Friends roster + incoming requests. Polls while this sheet is open.
-    @StateObject private var friends = FriendsService()
+    /// Friends roster + incoming requests — shared with SessionView so the
+    /// bell badge and inbox stay in sync (SessionView owns the polling).
+    @ObservedObject var friends: FriendsService
 
     /// BAC display unit — "auto" (region default), "percent", or
     /// "promille". Persisted in the App Group so the widget agrees.
@@ -7535,10 +7794,11 @@ private struct ProfileSheet: View {
     @StateObject private var nightHistory = RecapHistoryStore()
     @State private var replayRecap: NightRecap? = nil
 
-    init(profile: Profile, auth: AuthService, admin: AdminService) {
+    init(profile: Profile, auth: AuthService, admin: AdminService, friends: FriendsService) {
         self.profile = profile
         self.auth = auth
         self.admin = admin
+        self.friends = friends
         _name = State(initialValue: profile.name)
         _age = State(initialValue: Double(profile.age))
         _sex = State(initialValue: profile.sex)
@@ -7888,8 +8148,6 @@ private struct ProfileSheet: View {
                 replayRecap = nil
             }
         }
-        .onAppear { friends.start() }
-        .onDisappear { friends.stop() }
     }
 }
 
@@ -10094,7 +10352,12 @@ private struct GroupSheet: View {
     /// fire invites at every saved-crew member with one tap, instead of
     /// kicking out to iMessage.
     @ObservedObject var invites: InvitesService
+    /// The signed-in user's friends — powers the "Invite friends" picker so
+    /// you can pull people into the sesh without a code.
+    @ObservedObject var friends: FriendsService
     @Environment(\.dismiss) private var dismiss
+
+    @State private var friendPickerOpen = false
 
     @State private var joinCode: String = ""
     @State private var showCopied = false
@@ -10317,6 +10580,20 @@ private struct GroupSheet: View {
         .onChange(of: group.session?.id) { _, newValue in
             if newValue == nil { pendingInvite = nil }
         }
+        .sheet(isPresented: $friendPickerOpen) {
+            if let session = group.session {
+                FriendPickerSheet(
+                    friends: friends,
+                    invites: invites,
+                    session: session,
+                    scope: group.scope,
+                    alreadyIn: Set(group.members.map(\.profileId))
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+            }
+        }
         // Saved-crew detail popup: roster + one-tap "start sesh & invite
         // all". Presented when the user taps a SavedGroupRow.
         .sheet(item: $detailGroup) { entry in
@@ -10416,7 +10693,9 @@ private struct GroupSheet: View {
         Button {
             Task {
                 await group.create()
-                if group.isActive { dismiss() }
+                // Stay in the sheet — it flips to the active view with the
+                // join code, Share, and Invite friends right here, so the
+                // user can invite immediately without reopening the sheet.
             }
         } label: {
             HStack {
@@ -10769,6 +11048,35 @@ private struct GroupSheet: View {
                     }
                     .buttonStyle(PressScaleStyle())
                 }
+
+                // Pull friends straight in — or search anyone by username.
+                Button {
+                    friendPickerOpen = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 12, weight: .bold))
+                        Text("INVITE FRIENDS")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .tracking(1.6)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .bold))
+                    }
+                    .foregroundStyle(Color.cream)
+                    .padding(.vertical, 14)
+                    .padding(.horizontal, 16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.whiskey.opacity(0.12))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(PressScaleStyle())
+                .padding(.top, 4)
             }
 
             VStack(alignment: .leading, spacing: 10) {
