@@ -776,6 +776,7 @@ enum AuthError: LocalizedError {
     case emailConfirmationRequired
     case profileMissing
     case emailAlreadyRegistered
+    case invalidLogin
 
     var errorDescription: String? {
         switch self {
@@ -785,6 +786,8 @@ enum AuthError: LocalizedError {
             return "We couldn't find your profile. Try signing up again."
         case .emailAlreadyRegistered:
             return "This email already has an account. Try signing in instead."
+        case .invalidLogin:
+            return "Wrong username/email or password."
         }
     }
 }
@@ -807,6 +810,7 @@ final class AuthService: ObservableObject {
         let email: String
         let password: String
         let name: String
+        let username: String
         let age: Int
         let sex: Sex
         let weightKg: Double
@@ -873,10 +877,11 @@ final class AuthService: ObservableObject {
     /// confirmSignUp finishes the job once the code is verified. If
     /// confirmation is off, the profile is created immediately.
     @discardableResult
-    func signUp(email: String, password: String, name: String, age: Int, sex: Sex, weightKg: Double, avatarData: Data? = nil) async throws -> SignUpOutcome {
+    func signUp(email: String, password: String, name: String, username: String, age: Int, sex: Sex, weightKg: Double, avatarData: Data? = nil) async throws -> SignUpOutcome {
         let cleanEmail = email.trimmingCharacters(in: .whitespaces).lowercased()
         let response = try await supabase.auth.signUp(email: cleanEmail, password: password)
         let pending = PendingSignUp(email: cleanEmail, password: password, name: name,
+                                    username: username.trimmingCharacters(in: .whitespaces).lowercased(),
                                     age: age, sex: sex, weightKg: weightKg, avatarData: avatarData)
         if response.session != nil {
             try await createProfile(userId: response.user.id, from: pending)
@@ -925,6 +930,7 @@ final class AuthService: ObservableObject {
         struct InsertProfile: Encodable {
             let id: String
             let name: String
+            let username: String?
             let age: Int
             let sex: String
             let weight_kg: Double
@@ -934,6 +940,7 @@ final class AuthService: ObservableObject {
         let payload = InsertProfile(
             id: userId.uuidString.lowercased(),
             name: p.name,
+            username: p.username.isEmpty ? nil : p.username,
             age: p.age,
             sex: p.sex.rawValue,
             weight_kg: p.weightKg,
@@ -947,6 +954,47 @@ final class AuthService: ObservableObject {
 
     func signIn(email: String, password: String) async throws {
         let session = try await supabase.auth.signIn(email: email, password: password)
+        let profile = try await loadProfile(userId: session.user.id)
+        state = .signedIn(profile)
+    }
+
+    /// Live username-availability check for the sign-up form (works while
+    /// signed out — the RPC is granted to anon). Returns true only for a
+    /// well-formed, unclaimed username.
+    func isUsernameAvailable(_ username: String) async -> Bool {
+        struct P: Encodable { let p_username: String }
+        do {
+            return try await supabase
+                .rpc("username_available", params: P(p_username: username))
+                .execute().value
+        } catch {
+            return false
+        }
+    }
+
+    /// Sign in with a @username instead of email. The `username-login` Edge
+    /// Function resolves the email server-side (never exposed) and returns
+    /// session tokens, which we install locally.
+    func signInWithUsername(username: String, password: String) async throws {
+        struct Body: Encodable { let username: String; let password: String }
+        struct Resp: Decodable { let access_token: String?; let refresh_token: String? }
+        let resp: Resp
+        do {
+            resp = try await supabase.functions.invoke(
+                "username-login",
+                options: FunctionInvokeOptions(body: Body(
+                    username: username.trimmingCharacters(in: .whitespaces),
+                    password: password
+                ))
+            )
+        } catch {
+            // 400 from the function (bad username/password) surfaces here.
+            throw AuthError.invalidLogin
+        }
+        guard let at = resp.access_token, let rt = resp.refresh_token else {
+            throw AuthError.invalidLogin
+        }
+        let session = try await supabase.auth.setSession(accessToken: at, refreshToken: rt)
         let profile = try await loadProfile(userId: session.user.id)
         state = .signedIn(profile)
     }
@@ -4410,6 +4458,7 @@ private struct AuthView: View {
     @State private var password = ""
 
     @State private var name = ""
+    @State private var username = ""
     @State private var age: Double = 25
     @State private var sex: Sex = .male
     @State private var weightKg: Double = 75
@@ -4419,9 +4468,19 @@ private struct AuthView: View {
     @State private var errorMessage: String?
     @State private var showReset = false
     @State private var showSignupConfirm = false
+    /// Live username availability for sign-up: nil = unknown/checking,
+    /// true = free, false = taken/invalid. Debounced via usernameCheckTask.
+    @State private var usernameAvailable: Bool? = nil
+    @State private var checkingUsername = false
+    @State private var usernameCheckTask: Task<Void, Never>?
     @FocusState private var focus: Field?
 
-    enum Field { case email, password, name }
+    enum Field { case email, password, name, username }
+
+    private var cleanUsername: String { username.lowercased().trimmingCharacters(in: .whitespaces) }
+    private var usernameFormatValid: Bool {
+        cleanUsername.range(of: "^[a-z0-9_]{3,20}$", options: .regularExpression) != nil
+    }
 
     /// A single password requirement and whether the current input meets it.
     /// Mirrors the server-side rules configured in Supabase Auth
@@ -4449,13 +4508,16 @@ private struct AuthView: View {
     private var passwordMeetsRules: Bool { passwordRules.allSatisfy(\.satisfied) }
 
     private var canSubmit: Bool {
-        guard email.contains("@") else { return false }
         if mode == .signUp {
-            return passwordMeetsRules && !name.trimmingCharacters(in: .whitespaces).isEmpty
+            return email.contains("@")
+                && passwordMeetsRules
+                && !name.trimmingCharacters(in: .whitespaces).isEmpty
+                && usernameFormatValid
+                && usernameAvailable == true
         }
-        // Sign-in stays lenient — the server validates the actual password,
-        // and existing accounts predate these rules.
-        return !password.isEmpty
+        // Sign-in accepts an email OR a username as the identifier; the
+        // server validates the actual password.
+        return !email.trimmingCharacters(in: .whitespaces).isEmpty && !password.isEmpty
     }
 
     var body: some View {
@@ -4483,6 +4545,7 @@ private struct AuthView: View {
             .scrollDismissesKeyboard(.interactively)
         }
         .preferredColorScheme(.dark)
+        .onChange(of: username) { _, _ in scheduleUsernameCheck() }
         .sheet(isPresented: $showReset) {
             PasswordResetView(auth: auth, prefillEmail: email)
         }
@@ -4550,10 +4613,10 @@ private struct AuthView: View {
     private var fields: some View {
         VStack(spacing: 10) {
             LoungeField(
-                label: "EMAIL",
+                label: mode == .signUp ? "EMAIL" : "EMAIL OR USERNAME",
                 text: $email,
-                placeholder: "you@nightly.com",
-                keyboard: .emailAddress,
+                placeholder: mode == .signUp ? "you@seshapp.xyz" : "you@seshapp.xyz or yourname",
+                keyboard: mode == .signUp ? .emailAddress : .default,
                 autocapitalize: false
             )
             .focused($focus, equals: .email)
@@ -4595,6 +4658,15 @@ private struct AuthView: View {
                     placeholder: "What should we call you?"
                 )
                 .focused($focus, equals: .name)
+
+                LoungeField(
+                    label: "USERNAME",
+                    text: $username,
+                    placeholder: "pick a @handle",
+                    autocapitalize: false
+                )
+                .focused($focus, equals: .username)
+                usernameStatus
 
                 LoungeNumberField(
                     label: "AGE",
@@ -4643,6 +4715,52 @@ private struct AuthView: View {
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.bronze.opacity(0.2), lineWidth: 1))
             .animation(.easeInOut(duration: 0.2), value: password)
             .transition(.opacity)
+        }
+    }
+
+    /// Inline availability/format feedback under the sign-up username field.
+    @ViewBuilder
+    private var usernameStatus: some View {
+        if mode == .signUp, !username.isEmpty {
+            HStack(spacing: 8) {
+                if !usernameFormatValid {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.bronze)
+                    Text("3–20 chars: lowercase letters, numbers, underscore")
+                        .foregroundStyle(Color.cream.opacity(0.6))
+                } else if checkingUsername {
+                    ProgressView().controlSize(.mini).tint(Color.bronze)
+                    Text("Checking…").foregroundStyle(Color.cream.opacity(0.6))
+                } else if usernameAvailable == true {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.whiskey)
+                    Text("@\(cleanUsername) is available").foregroundStyle(Color.cream.opacity(0.85))
+                } else if usernameAvailable == false {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Status.drunk.color)
+                    Text("That username is taken").foregroundStyle(Color.cream.opacity(0.85))
+                }
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 11, weight: .medium, design: .rounded))
+            .padding(.horizontal, 4)
+        }
+    }
+
+    /// Debounced availability check, called from the body's onChange.
+    private func scheduleUsernameCheck() {
+        usernameCheckTask?.cancel()
+        usernameAvailable = nil
+        guard mode == .signUp, usernameFormatValid else { return }
+        let candidate = cleanUsername
+        checkingUsername = true
+        usernameCheckTask = Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if Task.isCancelled { return }
+            let ok = await auth.isUsernameAvailable(candidate)
+            if Task.isCancelled || candidate != cleanUsername { return }
+            usernameAvailable = ok
+            checkingUsername = false
         }
     }
 
@@ -4710,12 +4828,18 @@ private struct AuthView: View {
             do {
                 switch mode {
                 case .signIn:
-                    try await auth.signIn(email: email, password: password)
+                    let identifier = email.trimmingCharacters(in: .whitespaces)
+                    if identifier.contains("@") {
+                        try await auth.signIn(email: identifier, password: password)
+                    } else {
+                        try await auth.signInWithUsername(username: identifier, password: password)
+                    }
                 case .signUp:
                     let outcome = try await auth.signUp(
                         email: email,
                         password: password,
                         name: name.trimmingCharacters(in: .whitespaces),
+                        username: cleanUsername,
                         age: Int(age),
                         sex: sex,
                         weightKg: weightKg,
@@ -4780,7 +4904,7 @@ private struct PasswordResetView: View {
                     header
                     if phase == .request {
                         LoungeField(label: "EMAIL", text: $email,
-                                    placeholder: "you@nightly.com",
+                                    placeholder: "you@seshapp.xyz",
                                     keyboard: .emailAddress, autocapitalize: false)
                     } else {
                         LoungeField(label: "8-DIGIT CODE", text: $code,
