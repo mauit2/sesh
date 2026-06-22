@@ -7188,6 +7188,43 @@ private struct ProfileSheet: View {
                         .buttonStyle(PressScaleStyle())
                     }
 
+                    // Support contact — opens the mail composer pre-addressed
+                    // to support. Gives users (and App Review) a clear way to
+                    // reach us.
+                    if let supportURL = URL(string: "mailto:contact@seshapp.xyz?subject=sesh%20support") {
+                        Link(destination: supportURL) {
+                            HStack(spacing: 10) {
+                                Image(systemName: "envelope.fill")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(Color.whiskey)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("CONTACT SUPPORT")
+                                        .font(.system(size: 12, weight: .black, design: .monospaced))
+                                        .tracking(2.0)
+                                        .foregroundStyle(Color.cream)
+                                    Text("Questions or trouble? We're here.")
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.55))
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(Color.bronze)
+                            }
+                            .padding(.vertical, 14)
+                            .padding(.horizontal, 18)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(Color.whiskey.opacity(0.08))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+
                     Button {
                         Task {
                             try? await auth.signOut()
