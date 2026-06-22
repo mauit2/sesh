@@ -3032,8 +3032,11 @@ struct TimelinePost: Identifiable {
     let authorAvatar: String?
     let recap: NightRecap
     let includeBAC: Bool
+    let caption: String?
     let coverURL: String?
     let createdAt: String
+
+    var isMine: Bool { authorId == supabase.auth.currentUser?.id }
 }
 
 /// Loads the friends timeline via the `friends_feed` RPC (migration 020).
@@ -3050,7 +3053,8 @@ final class FeedService: ObservableObject {
     }()
 
     func start() {
-        if !started { started = true }
+        guard !started else { return }
+        started = true
         Task { await refresh() }
     }
 
@@ -3062,6 +3066,7 @@ final class FeedService: ObservableObject {
         let author_avatar: String?
         let recap: AnyJSON
         let include_bac: Bool
+        let caption: String?
         let cover_url: String?
         let created_at: String
     }
@@ -3073,10 +3078,34 @@ final class FeedService: ObservableObject {
             return TimelinePost(
                 id: row.id, authorId: row.author_id, authorName: row.author_name,
                 authorUsername: row.author_username, authorAvatar: row.author_avatar,
-                recap: recap, includeBAC: row.include_bac, coverURL: row.cover_url,
-                createdAt: row.created_at
+                recap: recap, includeBAC: row.include_bac, caption: row.caption,
+                coverURL: row.cover_url, createdAt: row.created_at
             )
         }
+    }
+
+    /// Delete one of the caller's own posts (RLS enforces ownership).
+    func deletePost(_ id: UUID) async {
+        posts.removeAll { $0.id == id }   // optimistic
+        do {
+            _ = try await supabase.from("posts")
+                .delete().eq("id", value: id.uuidString.lowercased()).execute()
+        } catch {
+            await refresh()
+        }
+    }
+
+    /// Toggle whether a post's BAC is shared (author only). The full recap is
+    /// always stored; this just flips the read-time visibility flag.
+    func setBAC(postId: UUID, include: Bool) async {
+        struct Patch: Encodable { let include_bac: Bool }
+        do {
+            _ = try await supabase.from("posts")
+                .update(Patch(include_bac: include))
+                .eq("id", value: postId.uuidString.lowercased())
+                .execute()
+            await refresh()
+        } catch { }
     }
 
     /// The last-7-days friends feed (server-windowed).
@@ -5297,15 +5326,10 @@ private struct FriendAvatar: View {
     var body: some View {
         ZStack {
             Circle().fill(Color.whiskey.opacity(0.18))
+            initial
             if let s = avatarURL, let url = URL(string: s) {
-                AsyncImage(url: url) { img in
-                    img.resizable().scaledToFill()
-                } placeholder: {
-                    initial
-                }
-                .clipShape(Circle())
-            } else {
-                initial
+                DownsampledAsyncImage(url: url, targetPoints: size, placeholder: .clear)
+                    .clipShape(Circle())
             }
         }
         .frame(width: size, height: size)
@@ -5857,7 +5881,10 @@ private struct TimelineFeedView: View {
             .padding(.bottom, 40)
         }
         .refreshable { await feed.refresh() }
-        .onAppear { feed.start() }
+        // Re-fetch whenever the timeline appears so newly posted (or deleted)
+        // nights show up. Stable post/photo ids keep this from resetting the
+        // carousels, and downsampled images keep it cheap.
+        .onAppear { feed.start(); Task { await feed.refresh() } }
     }
 
     private var emptyState: some View {
@@ -5878,8 +5905,10 @@ private struct TimelineFeedView: View {
 }
 
 /// All of a night's photos paired with the stop they were taken at.
+/// `id` is the URL (stable) so SwiftUI doesn't rebuild the carousel — a
+/// fresh UUID each render was resetting the pager and reloading every image.
 private struct NightPhoto: Identifiable {
-    let id = UUID()
+    var id: String { url.absoluteString }
     let stop: String
     let url: URL
 }
@@ -5889,6 +5918,70 @@ private func nightPhotos(_ recap: NightRecap) -> [NightPhoto] {
         stop.photoFilenames.compactMap { s in
             URL(string: s).map { NightPhoto(stop: stop.name, url: $0) }
         }
+    }
+}
+
+/// Small in-memory cache of already-downsampled images (keyed by URL+size).
+private enum RemoteImageCache {
+    static let shared: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 120
+        return c
+    }()
+}
+
+/// Loads a remote image and **downsamples it to the displayed size** via
+/// ImageIO before decoding — so a 4000px photo shown at 130px costs ~0.5 MB
+/// instead of ~48 MB. Caches the small result. This is the main lever for
+/// keeping memory sane across the feed + profile grids.
+private struct DownsampledAsyncImage: View {
+    let url: URL?
+    /// Max dimension in points; multiplied by screen scale for pixels.
+    let targetPoints: CGFloat
+    var fill: Bool = true
+    var placeholder: Color = Color.cream.opacity(0.06)
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                if fill {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else {
+                    Image(uiImage: image).resizable().scaledToFit()
+                }
+            } else {
+                placeholder
+            }
+        }
+        .task(id: url) { await load() }
+    }
+
+    private func load() async {
+        guard let url else { return }
+        let maxPixels = Int(targetPoints * UIScreen.main.scale)
+        let key = "\(url.absoluteString)@\(maxPixels)" as NSString
+        if let cached = RemoteImageCache.shared.object(forKey: key) {
+            image = cached; return
+        }
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let down = Self.downsample(data: data, maxPixels: maxPixels) else { return }
+        RemoteImageCache.shared.setObject(down, forKey: key)
+        if !Task.isCancelled { image = down }
+    }
+
+    private static func downsample(data: Data, maxPixels: Int) -> UIImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData,
+                [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg)
     }
 }
 
@@ -5932,11 +6025,7 @@ private struct PostCard: View {
                 TabView {
                     ForEach(photos) { photo in
                         ZStack(alignment: .bottomLeading) {
-                            AsyncImage(url: photo.url) { img in
-                                img.resizable().scaledToFill()
-                            } placeholder: {
-                                Color.cream.opacity(0.06)
-                            }
+                            DownsampledAsyncImage(url: photo.url, targetPoints: 420)
                             .frame(maxWidth: .infinity).frame(height: 260).clipped()
                             .overlay(LinearGradient(colors: [.clear, Color.ink.opacity(0.5)],
                                                     startPoint: .center, endPoint: .bottom))
@@ -5962,19 +6051,28 @@ private struct PostCard: View {
             }
 
             Button(action: onOpenPost) {
-                HStack(spacing: 14) {
-                    Label("\(barCount) stop\(barCount == 1 ? "" : "s")", systemImage: "mappin.and.ellipse")
-                    Label("\(post.recap.totalDrinks) drink\(post.recap.totalDrinks == 1 ? "" : "s")", systemImage: "wineglass")
-                    if post.includeBAC {
-                        let unit = BACUnitSetting.current()
-                        Label("\(unit.formatted(post.recap.peakBAC))\(unit.symbol)", systemImage: "flame.fill")
+                VStack(alignment: .leading, spacing: 8) {
+                    if let caption = post.caption, !caption.isEmpty {
+                        Text(caption)
+                            .font(.system(size: 13, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.92))
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color.bronze)
+                    HStack(spacing: 14) {
+                        Label("\(barCount) stop\(barCount == 1 ? "" : "s")", systemImage: "mappin.and.ellipse")
+                        Label("\(post.recap.totalDrinks) drink\(post.recap.totalDrinks == 1 ? "" : "s")", systemImage: "wineglass")
+                        if post.includeBAC {
+                            let unit = BACUnitSetting.current()
+                            Label("\(unit.formatted(post.recap.peakBAC))\(unit.symbol)", systemImage: "flame.fill")
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Color.bronze)
+                    }
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.8))
                 }
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.cream.opacity(0.8))
                 .padding(14)
                 .contentShape(Rectangle())
             }
@@ -6000,24 +6098,24 @@ struct ProfileRef: Identifiable, Equatable {
 private struct PostThumb: View {
     let post: TimelinePost
     var body: some View {
-        ZStack {
-            Color.cream.opacity(0.06)
-            if let cover = post.coverURL, let url = URL(string: cover) {
-                AsyncImage(url: url) { img in
-                    img.resizable().scaledToFill()
-                } placeholder: { Color.clear }
-            } else {
-                VStack(spacing: 4) {
-                    Text("🍻").font(.system(size: 22))
-                    Text("\(post.recap.totalDrinks)")
-                        .font(.system(size: 12, weight: .black, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.8))
+        Color.cream.opacity(0.06)
+            .overlay {
+                if let cover = post.coverURL, let url = URL(string: cover) {
+                    DownsampledAsyncImage(url: url, targetPoints: 160)
+                } else {
+                    VStack(spacing: 4) {
+                        Text("🍻").font(.system(size: 22))
+                        Text("\(post.recap.totalDrinks)")
+                            .font(.system(size: 12, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.8))
+                    }
                 }
             }
-        }
-        .aspectRatio(1, contentMode: .fill)
-        .frame(maxWidth: .infinity)
-        .clipped()
+            // Force a strict square cell so the grid is uniform (Instagram-style).
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .overlay(Rectangle().strokeBorder(Color.ink, lineWidth: 1))
     }
 }
 
@@ -6089,8 +6187,11 @@ private struct ProfileFeedView: View {
             posts = await feed.userPosts(user.id)
             loading = false
         }
-        .fullScreenCover(item: $selectedPost) { p in
-            PostDetailView(post: p) { selectedPost = nil }
+        .fullScreenCover(item: $selectedPost, onDismiss: {
+            // A delete or BAC toggle in the detail may have changed things.
+            Task { posts = await feed.userPosts(user.id) }
+        }) { p in
+            PostDetailView(post: p, feed: feed) { selectedPost = nil }
         }
     }
 }
@@ -6099,6 +6200,7 @@ private struct ProfileFeedView: View {
 /// BAC is shown only if the poster opted to include it.
 private struct PostDetailView: View {
     let post: TimelinePost
+    var feed: FeedService? = nil
     let onClose: () -> Void
 
     @State private var lightbox: NightPhoto?
@@ -6123,6 +6225,36 @@ private struct PostDetailView: View {
                                 .foregroundStyle(Color.cream.opacity(0.55))
                         }
                         Spacer()
+                        if post.isMine, let feed {
+                            Menu {
+                                Button {
+                                    Task { await feed.setBAC(postId: post.id, include: !post.includeBAC); onClose() }
+                                } label: {
+                                    Label(post.includeBAC ? "Hide my BAC" : "Show my BAC",
+                                          systemImage: post.includeBAC ? "eye.slash" : "eye")
+                                }
+                                Button(role: .destructive) {
+                                    Task { await feed.deletePost(post.id); onClose() }
+                                } label: {
+                                    Label("Delete post", systemImage: "trash")
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundStyle(Color.cream.opacity(0.8))
+                                    .frame(width: 34, height: 34)
+                                    .background(Circle().fill(Color.cream.opacity(0.08)))
+                            }
+                            .padding(.trailing, 44) // clear the close button
+                        }
+                    }
+
+                    if let caption = post.caption, !caption.isEmpty {
+                        Text(caption)
+                            .font(.system(size: 15, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .lineSpacing(2)
                     }
 
                     HStack(spacing: 10) {
@@ -6193,13 +6325,9 @@ private struct PostDetailView: View {
                         ForEach(stop.photoFilenames, id: \.self) { urlStr in
                             if let url = URL(string: urlStr) {
                                 Button { lightbox = NightPhoto(stop: stop.name, url: url) } label: {
-                                    AsyncImage(url: url) { img in
-                                        img.resizable().scaledToFill()
-                                    } placeholder: {
-                                        Color.cream.opacity(0.06)
-                                    }
-                                    .frame(width: 150, height: 150)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                                    DownsampledAsyncImage(url: url, targetPoints: 170)
+                                        .frame(width: 150, height: 150)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
                                 }
                                 .buttonStyle(PressScaleStyle())
                             }
@@ -6212,6 +6340,18 @@ private struct PostDetailView: View {
                 Text(stop.drinkSummary)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.7))
+            }
+
+            if let note = stop.note, !note.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "text.bubble.fill")
+                        .font(.system(size: 11)).foregroundStyle(Color.bronze).padding(.top, 1)
+                    Text(note)
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.9))
+                        .italic()
+                }
+                .padding(.top, 2)
             }
         }
         .padding(14)
@@ -6229,12 +6369,8 @@ private struct LightboxView: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
-            AsyncImage(url: url) { img in
-                img.resizable().scaledToFit()
-            } placeholder: {
-                ProgressView().tint(.white)
-            }
-            .ignoresSafeArea()
+            DownsampledAsyncImage(url: url, targetPoints: 1000, fill: false, placeholder: .black)
+                .ignoresSafeArea()
 
             Button { onClose() } label: {
                 Image(systemName: "xmark")
@@ -6820,6 +6956,7 @@ private struct SessionView: View {
             bumpPerGram: 100 / denom,
             loosePhotos: journey.loosePhotos,
             looseSpots: journey.looseSpots,
+            preGameNote: journey.preGameNote,
             endedAt: endedAt
         )
     }
@@ -7054,7 +7191,8 @@ private struct SessionView: View {
             if new == .live, !liveGroup.isActive, !live.isActive {
                 live.start()
             }
-            if new == .timeline { feed.start() }
+            // Feed loads once via TimelineFeedView.onAppear; pull-to-refresh
+            // updates it. (Avoids re-fetching/rebuilding cards on every switch.)
         }
         .animation(.spring(response: 0.55, dampingFraction: 0.82), value: status)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: planGroup.isActive)
@@ -7238,7 +7376,7 @@ private struct SessionView: View {
                 .presentationBackground(Color.ink)
         }
         .fullScreenCover(item: $openPost) { post in
-            PostDetailView(post: post) { openPost = nil }
+            PostDetailView(post: post, feed: feed) { openPost = nil }
         }
         .sheet(item: $openProfileUser) { ref in
             ProfileFeedView(user: ref, feed: feed)
@@ -8876,8 +9014,10 @@ private struct ProfileSheet: View {
             }
         }
         // Tap one of your posted seshs to view it.
-        .fullScreenCover(item: $selectedPost) { post in
-            PostDetailView(post: post) { selectedPost = nil }
+        .fullScreenCover(item: $selectedPost, onDismiss: {
+            Task { myPosts = await feed.userPosts(profile.id) }
+        }) { post in
+            PostDetailView(post: post, feed: feed) { selectedPost = nil }
         }
         .task { myPosts = await feed.userPosts(profile.id) }
     }
@@ -12767,6 +12907,7 @@ private struct LiveSeshView: View {
             bumpPerGram: 100 / denom,
             loosePhotos: journey.loosePhotos,
             looseSpots: journey.looseSpots,
+            preGameNote: journey.preGameNote,
             endedAt: now
         )
     }

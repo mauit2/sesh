@@ -65,6 +65,9 @@ struct SeshStop: Codable, Identifiable, Equatable {
     /// Photos snapped while AT this stop, staged in the journey's photo
     /// directory until the recap adopts them at END time.
     var photoFilenames: [String] = []
+    /// A short comment the user typed about this stop during the night.
+    /// Carried into the recap + shown under the stop on a posted timeline.
+    var note: String? = nil
 
     var coordinate: CLLocationCoordinate2D? {
         guard let lat, let lon else { return nil }
@@ -72,15 +75,15 @@ struct SeshStop: Codable, Identifiable, Equatable {
     }
 
     // Custom decode so journeys persisted by older builds (no kind /
-    // departedAt / photoFilenames keys) still load instead of resetting.
+    // departedAt / photoFilenames / note keys) still load instead of resetting.
     enum CodingKeys: String, CodingKey {
-        case id, venueId, kind, name, lat, lon, arrivedAt, departedAt, photoFilenames
+        case id, venueId, kind, name, lat, lon, arrivedAt, departedAt, photoFilenames, note
     }
 
     init(
         id: UUID, venueId: UUID, kind: JourneyStopKind = .bar, name: String,
         lat: Double?, lon: Double?, arrivedAt: Date,
-        departedAt: Date? = nil, photoFilenames: [String] = []
+        departedAt: Date? = nil, photoFilenames: [String] = [], note: String? = nil
     ) {
         self.id = id
         self.venueId = venueId
@@ -91,6 +94,7 @@ struct SeshStop: Codable, Identifiable, Equatable {
         self.arrivedAt = arrivedAt
         self.departedAt = departedAt
         self.photoFilenames = photoFilenames
+        self.note = note
     }
 
     init(from decoder: Decoder) throws {
@@ -104,6 +108,7 @@ struct SeshStop: Codable, Identifiable, Equatable {
         arrivedAt = try c.decode(Date.self, forKey: .arrivedAt)
         departedAt = try? c.decodeIfPresent(Date.self, forKey: .departedAt)
         photoFilenames = (try? c.decodeIfPresent([String].self, forKey: .photoFilenames)) ?? []
+        note = try? c.decodeIfPresent(String.self, forKey: .note)
     }
 }
 
@@ -141,10 +146,14 @@ final class NightJourneyStore: ObservableObject {
     @Published private(set) var stops: [SeshStop] = []
     @Published private(set) var loosePhotos: [LooseTake] = []
     @Published private(set) var looseSpots: [LooseSpot] = []
+    /// The user's comment on the pre-game (before the first check-in). The
+    /// pre-game is a synthetic leg with no SeshStop, so its note lives here.
+    @Published private(set) var preGameNote: String?
 
     private let key = "sesh.nightJourney.v1"
     private let looseKey = "sesh.nightJourney.loose.v1"
     private let looseSpotsKey = "sesh.nightJourney.looseSpots.v1"
+    private let preGameNoteKey = "sesh.nightJourney.preGameNote.v1"
 
     /// Start of the current loose window — the last checkout (between bars
     /// / afters), or the dawn of time when no bar has been visited yet
@@ -421,6 +430,14 @@ final class NightJourneyStore: ObservableObject {
         save()
     }
 
+    /// Set (or clear) the user's comment on a stop, typed during the night.
+    func setNote(_ stopId: UUID, _ note: String) {
+        guard let i = stops.firstIndex(where: { $0.id == stopId }) else { return }
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        stops[i].note = trimmed.isEmpty ? nil : trimmed
+        save()
+    }
+
     /// Swap a stop with its neighbour in the journey order. Purely a
     /// display reorder — timestamps (and therefore each bar's drinks/BAC)
     /// are untouched; only the sequence shown on the pager + recap changes.
@@ -442,10 +459,23 @@ final class NightJourneyStore: ObservableObject {
         save()
     }
 
+    /// Set (or clear) the pre-game comment.
+    func setPreGameNote(_ note: String) {
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        preGameNote = trimmed.isEmpty ? nil : trimmed
+        if let preGameNote {
+            UserDefaults.standard.set(preGameNote, forKey: preGameNoteKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: preGameNoteKey)
+        }
+    }
+
     func clear() {
         stops = []
         loosePhotos = []
         looseSpots = []
+        preGameNote = nil
+        UserDefaults.standard.removeObject(forKey: preGameNoteKey)
         save()
         saveLooseSpots()
         // Wipe any staged photos that never made it into a recap (the
@@ -469,6 +499,7 @@ final class NightJourneyStore: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: looseSpotsKey) {
             looseSpots = (try? dec.decode([LooseSpot].self, from: data)) ?? []
         }
+        preGameNote = UserDefaults.standard.string(forKey: preGameNoteKey)
     }
 
     private func save() {
@@ -538,6 +569,8 @@ struct RecapStop: Codable, Identifiable {
     /// Filenames (relative to the recap's photo directory) of photos the
     /// user attached to this stop. Mutated via RecapHistoryStore.
     var photoFilenames: [String] = []
+    /// The user's comment about this stop, typed during the live sesh.
+    var note: String? = nil
 
     var coordinate: CLLocationCoordinate2D? {
         guard let lat, let lon else { return nil }
@@ -548,14 +581,14 @@ struct RecapStop: Codable, Identifiable {
     // .bar (their "Warm-up" legs map to .preGame by name).
     enum CodingKeys: String, CodingKey {
         case id, kind, lat, lon, name, arrivedAt, departedAt, drinks
-        case drinkSummary, bacOnArrival, bacOnDeparture, isPeak, photoFilenames
+        case drinkSummary, bacOnArrival, bacOnDeparture, isPeak, photoFilenames, note
     }
 
     init(
         id: UUID, kind: RecapStopKind, lat: Double?, lon: Double?, name: String,
         arrivedAt: Date, departedAt: Date, drinks: [RecapEvent], drinkSummary: String,
         bacOnArrival: Double, bacOnDeparture: Double, isPeak: Bool,
-        photoFilenames: [String] = []
+        note: String? = nil, photoFilenames: [String] = []
     ) {
         self.id = id
         self.kind = kind
@@ -569,6 +602,7 @@ struct RecapStop: Codable, Identifiable {
         self.bacOnArrival = bacOnArrival
         self.bacOnDeparture = bacOnDeparture
         self.isPeak = isPeak
+        self.note = note
         self.photoFilenames = photoFilenames
     }
 
@@ -587,6 +621,7 @@ struct RecapStop: Codable, Identifiable {
         bacOnArrival = try c.decode(Double.self, forKey: .bacOnArrival)
         bacOnDeparture = try c.decode(Double.self, forKey: .bacOnDeparture)
         isPeak = try c.decode(Bool.self, forKey: .isPeak)
+        note = try? c.decodeIfPresent(String.self, forKey: .note)
         photoFilenames = (try? c.decodeIfPresent([String].self, forKey: .photoFilenames)) ?? []
     }
 }
@@ -636,6 +671,7 @@ struct NightRecap: Codable, Identifiable {
         bumpPerGram: Double,
         loosePhotos: [LooseTake] = [],
         looseSpots: [LooseSpot] = [],
+        preGameNote: String? = nil,
         endedAt: Date = Date()
     ) -> NightRecap? {
         let events = rawEvents.sorted { $0.when < $1.when }
@@ -832,6 +868,7 @@ struct NightRecap: Codable, Identifiable {
                 bacOnArrival: bac(at: leg.from),
                 bacOnDeparture: bac(at: leg.to),
                 isPeak: leg.isWindow && peakAt >= leg.from && peakAt < leg.to,
+                note: leg.kind == .preGame ? preGameNote : leg.stop?.note,
                 photoFilenames: photos
             )
         }
@@ -1297,14 +1334,17 @@ struct StopPhotoStrip: View {
 // MARK: - Posting to the friends timeline
 
 /// Uploads a recap's photos to the `recap-photos` bucket and writes a
-/// friends-only `posts` row (migration 020). When the poster opts out of
-/// sharing BAC, the values are zeroed so they're never stored server-side.
+/// friends-only `posts` row (migration 020). The full recap (real BAC) is
+/// always stored; the `include_bac` flag controls whether the feed RPCs
+/// expose BAC to friends (stripped server-side at read time), so the author
+/// can toggle it later. Friends can't read posts rows directly (author-only
+/// SELECT, migration 025).
 @MainActor
 final class PostService: ObservableObject {
     static let shared = PostService()
     @Published var posting = false
 
-    func createPost(_ recap: NightRecap, includeBAC: Bool, history: RecapHistoryStore) async throws {
+    func createPost(_ recap: NightRecap, includeBAC: Bool, caption: String, history: RecapHistoryStore) async throws {
         guard let uid = supabase.auth.currentUser?.id else { return }
         posting = true
         defer { posting = false }
@@ -1313,7 +1353,7 @@ final class PostService: ObservableObject {
         let recapIdStr = recap.id.uuidString.lowercased()
 
         // Upload each stop's photos; rebuild the stop with public URLs in
-        // place of local filenames (and BAC zeroed if not shared).
+        // place of local filenames. Real BAC is preserved either way.
         var serverStops: [RecapStop] = []
         var cover: String? = nil
         for stop in recap.stops {
@@ -1334,14 +1374,13 @@ final class PostService: ObservableObject {
                 id: stop.id, kind: stop.kind, lat: stop.lat, lon: stop.lon, name: stop.name,
                 arrivedAt: stop.arrivedAt, departedAt: stop.departedAt, drinks: stop.drinks,
                 drinkSummary: stop.drinkSummary,
-                bacOnArrival: includeBAC ? stop.bacOnArrival : 0,
-                bacOnDeparture: includeBAC ? stop.bacOnDeparture : 0,
-                isPeak: stop.isPeak, photoFilenames: urls))
+                bacOnArrival: stop.bacOnArrival, bacOnDeparture: stop.bacOnDeparture,
+                isPeak: stop.isPeak, note: stop.note, photoFilenames: urls))
         }
 
         let serverRecap = NightRecap(
             id: recap.id, stops: serverStops, startedAt: recap.startedAt, endedAt: recap.endedAt,
-            totalDrinks: recap.totalDrinks, peakBAC: includeBAC ? recap.peakBAC : 0,
+            totalDrinks: recap.totalDrinks, peakBAC: recap.peakBAC,
             peakAt: recap.peakAt, groupLeaderboard: recap.groupLeaderboard, crawlMeters: recap.crawlMeters)
 
         // Encode with ISO-8601 dates so the feed decodes the same way no
@@ -1350,16 +1389,19 @@ final class PostService: ObservableObject {
         let recapData = try enc.encode(serverRecap)
         let recapJSON = try JSONDecoder().decode(AnyJSON.self, from: recapData)
 
+        let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         struct Insert: Encodable {
             let author_id: String
             let recap: AnyJSON
             let include_bac: Bool
+            let caption: String?
             let cover_url: String?
             let started_at: String
         }
         let iso = ISO8601DateFormatter()
         try await supabase.from("posts").insert(Insert(
             author_id: uidStr, recap: recapJSON, include_bac: includeBAC,
+            caption: trimmedCaption.isEmpty ? nil : trimmedCaption,
             cover_url: cover, started_at: iso.string(from: recap.startedAt)
         )).execute()
 
@@ -1376,6 +1418,7 @@ struct PostComposerView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var includeBAC = false
+    @State private var caption = ""
     @State private var posting = false
     @State private var errorMessage: String?
 
@@ -1394,6 +1437,14 @@ struct PostComposerView: View {
                 Text("Your friends will see your route, stops\(photoCount > 0 ? " and \(photoCount) photo\(photoCount == 1 ? "" : "s")" : ""). Friends only — never public.")
                     .font(.system(size: 13, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.65)).lineSpacing(2)
+
+                TextField("Add a caption…", text: $caption, axis: .vertical)
+                    .font(.system(size: 14, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .lineLimit(1...4)
+                    .padding(14)
+                    .background(RoundedRectangle(cornerRadius: 14).fill(Color.cream.opacity(0.05)))
+                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
 
                 Toggle(isOn: $includeBAC) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -1434,7 +1485,7 @@ struct PostComposerView: View {
             .padding(24)
         }
         .preferredColorScheme(.dark)
-        .presentationDetents([.height(380)])
+        .presentationDetents([.height(470), .large])
         .presentationDragIndicator(.visible)
     }
 
@@ -1442,7 +1493,7 @@ struct PostComposerView: View {
         posting = true; errorMessage = nil
         Task { @MainActor in
             do {
-                try await PostService.shared.createPost(recap, includeBAC: includeBAC, history: history)
+                try await PostService.shared.createPost(recap, includeBAC: includeBAC, caption: caption, history: history)
                 dismiss()
                 onPosted()
             } catch {
@@ -2333,8 +2384,10 @@ struct LiveJourneyPhotosSection: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            // Pre-game + loose pages carry an extra location row → taller.
-            .frame(height: (page < pages.count && isTall(pages[page])) ? 150 : 112)
+            // Sized to fit the title + photo strip + comment field (pre-game /
+            // loose / non-bar stops also carry a location row → taller). Pages
+            // top-align inside this frame so the title is never clipped.
+            .frame(height: (page < pages.count && isTall(pages[page])) ? 252 : 208)
             .animation(.spring(response: 0.45, dampingFraction: 0.85), value: page)
 
             if pages.count > 1 {
@@ -2516,8 +2569,11 @@ struct LiveJourneyPhotosSection: View {
                 onLibrary: {},
                 allowAdd: false
             )
+
+            // The pre-game comment stays editable even after moving on.
+            StopNoteEditor(note: journey.preGameNote) { journey.setPreGameNote($0) }
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     /// The "right now, between places" page — pre-game before the first
@@ -2571,8 +2627,14 @@ struct LiveJourneyPhotosSection: View {
                     libraryPickerOpen = true
                 }
             )
+
+            // Pre-game comment (only before the first check-in — that's the
+            // pre-game window the note maps to in the recap).
+            if !journey.hasCheckedInSomewhere {
+                StopNoteEditor(note: journey.preGameNote) { journey.setPreGameNote($0) }
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     /// Dialog/button title — depends on which spot the dialog is editing.
@@ -2857,8 +2919,12 @@ struct LiveJourneyPhotosSection: View {
                     libraryPickerOpen = true
                 }
             )
+
+            // A comment about this stop — saved to the recap and shown on
+            // the timeline if the night gets posted.
+            StopNoteEditor(note: stop.note) { journey.setNote(stop.id, $0) }
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func pagerChevron(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
@@ -2874,6 +2940,40 @@ struct LiveJourneyPhotosSection: View {
         }
         .buttonStyle(PressScaleStyle())
         .disabled(!enabled)
+    }
+}
+
+/// A compact, inline comment field for a stop. Commits on return or when
+/// focus leaves, calling `onCommit` with the latest text.
+private struct StopNoteEditor: View {
+    @State private var text: String
+    let onCommit: (String) -> Void
+    @FocusState private var focused: Bool
+
+    init(note: String?, onCommit: @escaping (String) -> Void) {
+        _text = State(initialValue: note ?? "")
+        self.onCommit = onCommit
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "text.bubble")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.bronze)
+            TextField("Add a comment about this stop…", text: $text, axis: .vertical)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .lineLimit(1...3)
+                .focused($focused)
+                .submitLabel(.done)
+                .onSubmit { focused = false; onCommit(text) }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.cream.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.bronze.opacity(0.2), lineWidth: 1))
+        .onChange(of: focused) { _, isFocused in
+            if !isFocused { onCommit(text) }
+        }
     }
 }
 
