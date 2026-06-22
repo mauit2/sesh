@@ -31,6 +31,7 @@ import CoreLocation
 import PhotosUI
 import UIKit
 import ImageIO
+import Supabase
 
 // MARK: - Journey store
 
@@ -873,7 +874,15 @@ final class RecapHistoryStore: ObservableObject {
 
     init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        dir = docs.appendingPathComponent("night-recaps", isDirectory: true)
+        // Scope saved nights per signed-in user, so accounts sharing a device
+        // never see each other's recaps. Signed-out falls back to a throwaway
+        // bucket (there's no recap UI while signed out anyway). Recaps written
+        // before this scoping lived at the un-scoped root and are intentionally
+        // left there — they can't be attributed to a specific account.
+        let uid = supabase.auth.currentUser?.id.uuidString.lowercased() ?? "anon"
+        dir = docs
+            .appendingPathComponent("night-recaps", isDirectory: true)
+            .appendingPathComponent(uid, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
