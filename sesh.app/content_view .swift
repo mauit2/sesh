@@ -48,11 +48,39 @@ struct Profile: Codable, Equatable, Hashable {
     var sex: Sex
     var weightKg: Double
     var avatarURL: String?
+    /// Unique @handle (lowercased) used to find + friend this user. Nil until
+    /// the user picks one. Added in migration 018.
+    var username: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, age, sex
+        case id, name, age, sex, username
         case weightKg = "weight_kg"
         case avatarURL = "avatar_url"
+    }
+
+    /// Tolerate rows that predate the username column.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        age = try c.decode(Int.self, forKey: .age)
+        sex = try c.decode(Sex.self, forKey: .sex)
+        weightKg = try c.decode(Double.self, forKey: .weightKg)
+        avatarURL = try c.decodeIfPresent(String.self, forKey: .avatarURL)
+        username = try c.decodeIfPresent(String.self, forKey: .username)
+    }
+
+    /// Explicit memberwise init (the custom decoder init suppresses the
+    /// synthesized one). username defaults to nil for existing call sites.
+    init(id: UUID, name: String, age: Int, sex: Sex, weightKg: Double,
+         avatarURL: String? = nil, username: String? = nil) {
+        self.id = id
+        self.name = name
+        self.age = age
+        self.sex = sex
+        self.weightKg = weightKg
+        self.avatarURL = avatarURL
+        self.username = username
     }
 }
 
@@ -942,6 +970,32 @@ final class AuthService: ObservableObject {
             type: .recovery
         )
         try await supabase.auth.update(user: UserAttributes(password: newPassword))
+    }
+
+    /// Set / change the signed-in user's @username via the migration-018 RPC.
+    /// Returns nil on success, or a short user-facing error string.
+    func setUsername(_ username: String) async -> String? {
+        struct P: Encodable { let p_username: String }
+        struct R: Decodable { let ok: Bool; let username: String?; let reason: String? }
+        do {
+            let r: R = try await supabase
+                .rpc("set_username", params: P(p_username: username))
+                .execute().value
+            if r.ok {
+                if case .signedIn(var p) = state {
+                    p.username = r.username
+                    state = .signedIn(p)
+                }
+                return nil
+            }
+            switch r.reason {
+            case "taken":   return "That username is taken."
+            case "invalid": return "3–20 chars: lowercase letters, numbers, underscore."
+            default:        return "Couldn't save username."
+            }
+        } catch {
+            return "Couldn't save username."
+        }
     }
 
     func signOut() async throws {
@@ -2752,6 +2806,168 @@ final class InvitesService: ObservableObject {
             // restore the row if the update truly failed. Surface a soft
             // error string so the inbox sheet can show a retry hint.
             self.error = "Couldn't update invite"
+            await refresh()
+        }
+    }
+}
+
+// MARK: - Friends
+
+/// A user you can friend / invite: minimal public fields returned by the
+/// friends RPCs (migration 018). `username` is the @handle.
+struct FriendProfile: Identifiable, Equatable, Hashable, Decodable {
+    let id: UUID            // the other user's profile id
+    let name: String
+    let username: String?
+    let avatarURL: String?
+}
+
+/// An accepted friend (carries the friendship row id for removal).
+struct Friend: Identifiable, Equatable, Hashable, Decodable {
+    let friendshipId: UUID
+    let id: UUID
+    let name: String
+    let username: String?
+    let avatarURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case friendshipId = "friendship_id"
+        case id, name, username
+        case avatarURL = "avatar_url"
+    }
+}
+
+/// A pending incoming friend request (carries the request id to respond).
+struct FriendRequest: Identifiable, Equatable, Hashable, Decodable {
+    let requestId: UUID
+    let id: UUID            // requester's profile id
+    let name: String
+    let username: String?
+    let avatarURL: String?
+
+    var id_: UUID { requestId }
+    enum CodingKeys: String, CodingKey {
+        case requestId = "request_id"
+        case id, name, username
+        case avatarURL = "avatar_url"
+    }
+}
+
+/// A username-search hit, annotated with our relationship to them.
+struct UserSearchHit: Identifiable, Equatable, Hashable, Decodable {
+    let id: UUID
+    let name: String
+    let username: String?
+    let avatarURL: String?
+    let relation: String    // none | friend | outgoing | incoming
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, username, relation
+        case avatarURL = "avatar_url"
+    }
+}
+
+/// Loads + manages the signed-in user's friends and incoming friend
+/// requests. All cross-user reads/writes go through the SECURITY DEFINER
+/// RPCs from migration 018. Polls every 8s for new requests (rare events).
+@MainActor
+final class FriendsService: ObservableObject {
+    @Published private(set) var friends: [Friend] = []
+    @Published private(set) var incoming: [FriendRequest] = []
+    @Published var error: String?
+
+    private var pollTask: Task<Void, Never>?
+
+    func start() {
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refresh()
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+            }
+        }
+    }
+
+    func stop() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    func refresh() async {
+        guard supabase.auth.currentUser != nil else {
+            friends = []; incoming = []; return
+        }
+        do {
+            async let f: [Friend] = supabase.rpc("list_friends").execute().value
+            async let r: [FriendRequest] = supabase.rpc("list_incoming_requests").execute().value
+            let (loadedFriends, loadedRequests) = try await (f, r)
+            friends = loadedFriends
+            incoming = loadedRequests
+        } catch {
+            // Leave the last good lists in place on a transient failure.
+        }
+    }
+
+    /// Prefix-search usernames for the add-friend screen.
+    func search(_ query: String) async -> [UserSearchHit] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return [] }
+        struct P: Encodable { let p_query: String }
+        do {
+            return try await supabase.rpc("search_usernames", params: P(p_query: q)).execute().value
+        } catch {
+            return []
+        }
+    }
+
+    /// Send a friend request by username. Returns a user-facing result string
+    /// (nil = success, otherwise a short reason to show).
+    func sendRequest(username: String) async -> String? {
+        struct P: Encodable { let p_username: String }
+        struct R: Decodable { let ok: Bool; let status: String?; let reason: String? }
+        do {
+            let r: R = try await supabase
+                .rpc("send_friend_request", params: P(p_username: username))
+                .execute().value
+            if r.ok {
+                await refresh()
+                return nil
+            }
+            switch r.reason {
+            case "not_found":      return "No one with that username."
+            case "self":           return "That's you 🙂"
+            case "already_friends": return "You're already friends."
+            default:                return "Couldn't send request."
+            }
+        } catch {
+            return "Couldn't send request."
+        }
+    }
+
+    func respond(requestId: UUID, accept: Bool) async {
+        struct P: Encodable { let p_request_id: String; let p_accept: Bool }
+        incoming.removeAll { $0.requestId == requestId }   // optimistic
+        do {
+            _ = try await supabase
+                .rpc("respond_friend_request", params: P(p_request_id: requestId.uuidString.lowercased(), p_accept: accept))
+                .execute()
+            await refresh()
+        } catch {
+            self.error = "Couldn't update request"
+            await refresh()
+        }
+    }
+
+    func remove(userId: UUID) async {
+        struct P: Encodable { let p_other: String }
+        friends.removeAll { $0.id == userId }              // optimistic
+        do {
+            _ = try await supabase
+                .rpc("remove_friend", params: P(p_other: userId.uuidString.lowercased()))
+                .execute()
+            await refresh()
+        } catch {
+            self.error = "Couldn't remove friend"
             await refresh()
         }
     }
@@ -4790,6 +5006,356 @@ private struct SignUpConfirmView: View {
                 errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
             resending = false
+        }
+    }
+}
+
+// MARK: - Friends
+
+/// Small round avatar: remote image if present, else a tinted initial.
+private struct FriendAvatar: View {
+    let name: String
+    let avatarURL: String?
+    var size: CGFloat = 40
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color.whiskey.opacity(0.18))
+            if let s = avatarURL, let url = URL(string: s) {
+                AsyncImage(url: url) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    initial
+                }
+                .clipShape(Circle())
+            } else {
+                initial
+            }
+        }
+        .frame(width: size, height: size)
+        .overlay(Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+    }
+
+    private var initial: some View {
+        Text(name.isEmpty ? "?" : String(name.prefix(1)).uppercased())
+            .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
+            .foregroundStyle(Color.cream.opacity(0.85))
+    }
+}
+
+/// Friends hub: set your @username, search + add friends, accept incoming
+/// requests, and see your roster. Backed by FriendsService (migration 018).
+private struct FriendsView: View {
+    @ObservedObject var friends: FriendsService
+    @ObservedObject var auth: AuthService
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var query = ""
+    @State private var results: [UserSearchHit] = []
+    @State private var searchTask: Task<Void, Never>?
+    @State private var banner: String?
+    @State private var showUsernameEditor = false
+
+    private var myUsername: String? {
+        if case .signedIn(let p) = auth.state { return p.username }
+        return nil
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            AtmosphereBackground(accent: .whiskey)
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 22) {
+                    header
+                    usernameCard
+                    addFriendSection
+                    if !results.isEmpty { resultsSection }
+                    if !friends.incoming.isEmpty { requestsSection }
+                    friendsSection
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 52)
+                .padding(.bottom, 40)
+            }
+            .scrollDismissesKeyboard(.interactively)
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.cream.opacity(0.8))
+                    .padding(12)
+                    .background(Circle().fill(Color.cream.opacity(0.08)))
+            }
+            .padding(.top, 16).padding(.trailing, 20)
+            .buttonStyle(PressScaleStyle())
+        }
+        .preferredColorScheme(.dark)
+        .presentationDragIndicator(.visible)
+        .onAppear { Task { await friends.refresh() } }
+        .onChange(of: query) { _, q in
+            searchTask?.cancel()
+            let trimmed = q.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { results = []; return }
+            searchTask = Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if Task.isCancelled { return }
+                let hits = await friends.search(trimmed)
+                if !Task.isCancelled { results = hits }
+            }
+        }
+        .sheet(isPresented: $showUsernameEditor) {
+            UsernameEditorView(auth: auth)
+                .presentationDetents([.height(340)])
+                .presentationDragIndicator(.visible)
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("YOUR CREW")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .tracking(2.4).foregroundStyle(Color.bronze)
+            Text("Friends")
+                .font(.system(size: 32, weight: .black, design: .rounded))
+                .italic().tracking(-1).foregroundStyle(Color.cream)
+        }
+    }
+
+    // Your handle — prompts to set one if missing (you can't be found without it).
+    private var usernameCard: some View {
+        Button { showUsernameEditor = true } label: {
+            HStack(spacing: 12) {
+                Image(systemName: myUsername == nil ? "exclamationmark.circle.fill" : "at")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.whiskey)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(myUsername == nil ? "Pick a username" : "@\(myUsername!)")
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    Text(myUsername == nil ? "So friends can find and add you." : "Tap to change your handle.")
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.6))
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.bronze)
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color.whiskey.opacity(0.10)))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+
+    private var addFriendSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("ADD A FRIEND")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .tracking(2).foregroundStyle(Color.bronze)
+            LoungeField(label: "USERNAME", text: $query,
+                        placeholder: "search by @username", autocapitalize: false)
+            if let banner {
+                Text(banner)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.8))
+            }
+        }
+    }
+
+    private var resultsSection: some View {
+        VStack(spacing: 8) {
+            ForEach(results) { hit in
+                HStack(spacing: 12) {
+                    FriendAvatar(name: hit.name, avatarURL: hit.avatarURL)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(hit.name).font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        if let u = hit.username {
+                            Text("@\(u)").font(.system(size: 12, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        }
+                    }
+                    Spacer()
+                    relationButton(hit)
+                }
+                .padding(.vertical, 8).padding(.horizontal, 12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.cream.opacity(0.04)))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func relationButton(_ hit: UserSearchHit) -> some View {
+        switch hit.relation {
+        case "friend":
+            tag("FRIENDS", filled: false)
+        case "outgoing":
+            tag("REQUESTED", filled: false)
+        case "incoming":
+            Button { Task { await act(username: hit.username) } } label: { tag("ACCEPT", filled: true) }
+                .buttonStyle(PressScaleStyle())
+        default:
+            Button { Task { await act(username: hit.username) } } label: { tag("ADD", filled: true) }
+                .buttonStyle(PressScaleStyle())
+        }
+    }
+
+    private func tag(_ text: String, filled: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1.4)
+            .foregroundStyle(filled ? Color.ink : Color.bronze)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(Capsule().fill(filled ? Color.cream : Color.clear))
+            .overlay(Capsule().strokeBorder(filled ? Color.clear : Color.bronze.opacity(0.5), lineWidth: 1))
+    }
+
+    private func act(username: String?) async {
+        guard let username else { return }
+        banner = nil
+        if let err = await friends.sendRequest(username: username) {
+            banner = err
+        }
+        // Refresh search annotations so the row flips to Requested/Friends.
+        results = await friends.search(query.trimmingCharacters(in: .whitespaces))
+    }
+
+    private var requestsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("REQUESTS")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .tracking(2).foregroundStyle(Color.bronze)
+            ForEach(friends.incoming) { req in
+                HStack(spacing: 12) {
+                    FriendAvatar(name: req.name, avatarURL: req.avatarURL)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(req.name).font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        if let u = req.username {
+                            Text("@\(u)").font(.system(size: 12, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        }
+                    }
+                    Spacer()
+                    Button { Task { await friends.respond(requestId: req.requestId, accept: true) } } label: {
+                        tag("ACCEPT", filled: true)
+                    }.buttonStyle(PressScaleStyle())
+                    Button { Task { await friends.respond(requestId: req.requestId, accept: false) } } label: {
+                        Image(systemName: "xmark").font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Color.bronze).padding(8)
+                            .background(Circle().fill(Color.cream.opacity(0.06)))
+                    }.buttonStyle(PressScaleStyle())
+                }
+                .padding(.vertical, 8).padding(.horizontal, 12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.whiskey.opacity(0.06)))
+            }
+        }
+    }
+
+    private var friendsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("FRIENDS · \(friends.friends.count)")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .tracking(2).foregroundStyle(Color.bronze)
+            if friends.friends.isEmpty {
+                Text("No friends yet. Search a username above to add someone.")
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.5))
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(friends.friends) { friend in
+                    HStack(spacing: 12) {
+                        FriendAvatar(name: friend.name, avatarURL: friend.avatarURL)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(friend.name).font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                            if let u = friend.username {
+                                Text("@\(u)").font(.system(size: 12, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.55))
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 8).padding(.horizontal, 12)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.cream.opacity(0.04)))
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            Task { await friends.remove(userId: friend.id) }
+                        } label: { Label("Remove friend", systemImage: "person.badge.minus") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Sheet to set / change your @username.
+private struct UsernameEditorView: View {
+    @ObservedObject var auth: AuthService
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var username = ""
+    @State private var saving = false
+    @State private var errorMessage: String?
+
+    private var cleaned: String { username.lowercased().trimmingCharacters(in: .whitespaces) }
+    private var valid: Bool { cleaned.range(of: "^[a-z0-9_]{3,20}$", options: .regularExpression) != nil }
+
+    init(auth: AuthService) {
+        self.auth = auth
+        if case .signedIn(let p) = auth.state, let u = p.username {
+            _username = State(initialValue: u)
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            AtmosphereBackground(accent: .whiskey)
+            VStack(alignment: .leading, spacing: 16) {
+                Text("YOUR USERNAME")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(2.4).foregroundStyle(Color.bronze)
+                Text("Pick a handle")
+                    .font(.system(size: 26, weight: .black, design: .rounded))
+                    .italic().foregroundStyle(Color.cream)
+                LoungeField(label: "USERNAME", text: $username,
+                            placeholder: "yourname", autocapitalize: false)
+                Text("3–20 characters · lowercase letters, numbers, underscore")
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.5))
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Status.drunk.color)
+                }
+                Button { save() } label: {
+                    HStack {
+                        if saving { ProgressView().tint(Color.ink); Spacer() }
+                        else {
+                            Text("SAVE").font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(3)
+                            Spacer()
+                            Image(systemName: "checkmark").font(.system(size: 12, weight: .bold))
+                        }
+                    }
+                    .foregroundStyle(Color.ink).padding(.vertical, 15).padding(.horizontal, 20)
+                    .background(RoundedRectangle(cornerRadius: 16).fill(valid ? Color.cream : Color.cream.opacity(0.4)))
+                }
+                .disabled(!valid || saving)
+                .buttonStyle(PressScaleStyle())
+            }
+            .padding(24)
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func save() {
+        saving = true; errorMessage = nil
+        Task { @MainActor in
+            if let err = await auth.setUsername(cleaned) {
+                errorMessage = err
+            } else {
+                dismiss()
+            }
+            saving = false
         }
     }
 }
@@ -6955,6 +7521,10 @@ private struct ProfileSheet: View {
     @State private var saving = false
     @State private var errorMessage: String?
     @State private var adminPanelOpen = false
+    @State private var friendsOpen = false
+
+    /// Friends roster + incoming requests. Polls while this sheet is open.
+    @StateObject private var friends = FriendsService()
 
     /// BAC display unit — "auto" (region default), "percent", or
     /// "promille". Persisted in the App Group so the widget agrees.
@@ -7148,6 +7718,48 @@ private struct ProfileSheet: View {
                     .disabled(!dirty || saving)
                     .buttonStyle(PressScaleStyle())
 
+                    // Friends — manage your crew + invite them to seshes.
+                    Button {
+                        friendsOpen = true
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "person.2.fill")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(Color.whiskey)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("FRIENDS")
+                                    .font(.system(size: 12, weight: .black, design: .monospaced))
+                                    .tracking(2.0)
+                                    .foregroundStyle(Color.cream)
+                                Text("Add friends and invite them to a sesh")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.55))
+                            }
+                            Spacer()
+                            if !friends.incoming.isEmpty {
+                                Text("\(friends.incoming.count)")
+                                    .font(.system(size: 11, weight: .black, design: .rounded))
+                                    .foregroundStyle(Color.ink)
+                                    .frame(minWidth: 20, minHeight: 20)
+                                    .background(Circle().fill(Color.whiskey))
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(Color.bronze)
+                        }
+                        .padding(.vertical, 14)
+                        .padding(.horizontal, 18)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color.whiskey.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(PressScaleStyle())
+
                     // Admin entry — only shown to admins / the owner. Opens
                     // the catalog-role management panel.
                     if admin.isAdmin {
@@ -7266,12 +7878,18 @@ private struct ProfileSheet: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
+        .sheet(isPresented: $friendsOpen) {
+            FriendsView(friends: friends, auth: auth)
+                .presentationBackground(Color.ink)
+        }
         // Replay a saved night — closing button is a plain DONE.
         .fullScreenCover(item: $replayRecap) { night in
             NightRecapView(recap: night, history: nightHistory, mode: .replay) {
                 replayRecap = nil
             }
         }
+        .onAppear { friends.start() }
+        .onDisappear { friends.stop() }
     }
 }
 
