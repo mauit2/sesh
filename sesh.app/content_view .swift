@@ -3035,7 +3035,31 @@ struct TimelinePost: Identifiable {
     let caption: String?
     let coverURL: String?
     let createdAt: String
+    var likeCount: Int = 0
+    var likedByMe: Bool = false
+    var commentCount: Int = 0
 
+    var isMine: Bool { authorId == supabase.auth.currentUser?.id }
+}
+
+/// A comment on a Nightline post.
+struct PostComment: Identifiable, Decodable {
+    let id: UUID
+    let authorId: UUID
+    let authorName: String
+    let authorUsername: String?
+    let authorAvatar: String?
+    let body: String
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, body
+        case authorId = "author_id"
+        case authorName = "author_name"
+        case authorUsername = "author_username"
+        case authorAvatar = "author_avatar"
+        case createdAt = "created_at"
+    }
     var isMine: Bool { authorId == supabase.auth.currentUser?.id }
 }
 
@@ -3069,6 +3093,9 @@ final class FeedService: ObservableObject {
         let caption: String?
         let cover_url: String?
         let created_at: String
+        let like_count: Int?
+        let liked_by_me: Bool?
+        let comment_count: Int?
     }
 
     private func map(_ rows: [FeedRow]) -> [TimelinePost] {
@@ -3079,8 +3106,51 @@ final class FeedService: ObservableObject {
                 id: row.id, authorId: row.author_id, authorName: row.author_name,
                 authorUsername: row.author_username, authorAvatar: row.author_avatar,
                 recap: recap, includeBAC: row.include_bac, caption: row.caption,
-                coverURL: row.cover_url, createdAt: row.created_at
+                coverURL: row.cover_url, createdAt: row.created_at,
+                likeCount: row.like_count ?? 0, likedByMe: row.liked_by_me ?? false,
+                commentCount: row.comment_count ?? 0
             )
+        }
+    }
+
+    /// Like / unlike a post. Updates the in-memory feed optimistically.
+    func toggleLike(_ postId: UUID) async {
+        if let i = posts.firstIndex(where: { $0.id == postId }) {
+            let nowLiked = !posts[i].likedByMe
+            posts[i].likedByMe = nowLiked
+            posts[i].likeCount += nowLiked ? 1 : -1
+        }
+        let liked = posts.first(where: { $0.id == postId })?.likedByMe ?? true
+        struct P: Encodable { let p_post_id: String; let p_like: Bool }
+        do {
+            _ = try await supabase.rpc("set_like",
+                params: P(p_post_id: postId.uuidString.lowercased(), p_like: liked)).execute()
+        } catch {
+            await refresh()
+        }
+    }
+
+    func comments(_ postId: UUID) async -> [PostComment] {
+        struct P: Encodable { let p_post_id: String }
+        do {
+            return try await supabase.rpc("list_comments",
+                params: P(p_post_id: postId.uuidString.lowercased())).execute().value
+        } catch { return [] }
+    }
+
+    func addComment(_ postId: UUID, body: String) async {
+        struct P: Encodable { let p_post_id: String; let p_body: String }
+        _ = try? await supabase.rpc("add_comment",
+            params: P(p_post_id: postId.uuidString.lowercased(), p_body: body)).execute()
+        if let i = posts.firstIndex(where: { $0.id == postId }) { posts[i].commentCount += 1 }
+    }
+
+    func deleteComment(_ id: UUID, postId: UUID) async {
+        struct P: Encodable { let p_id: String }
+        _ = try? await supabase.rpc("delete_comment",
+            params: P(p_id: id.uuidString.lowercased())).execute()
+        if let i = posts.firstIndex(where: { $0.id == postId }), posts[i].commentCount > 0 {
+            posts[i].commentCount -= 1
         }
     }
 
@@ -5862,7 +5932,7 @@ private struct TimelineFeedView: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
-                Text("TIMELINE")
+                Text("NIGHTLINE")
                     .font(.system(size: 11, weight: .black, design: .monospaced))
                     .tracking(2.4).foregroundStyle(Color.bronze)
                     .padding(.horizontal, 22).padding(.top, 6)
@@ -5873,7 +5943,8 @@ private struct TimelineFeedView: View {
                     ForEach(feed.posts) { post in
                         PostCard(post: post,
                                  onOpenPost: { onOpenPost(post) },
-                                 onOpenAuthor: { onOpenAuthor(post) })
+                                 onOpenAuthor: { onOpenAuthor(post) },
+                                 onLike: { Task { await feed.toggleLike(post.id) } })
                             .padding(.horizontal, 16)
                     }
                 }
@@ -5911,6 +5982,13 @@ private struct NightPhoto: Identifiable {
     var id: String { url.absoluteString }
     let stop: String
     let url: URL
+}
+
+/// Compact straight-line crawl distance, e.g. "820 m" or "1.4 km".
+private func crawlDistanceString(_ meters: Double) -> String {
+    meters >= 1000
+        ? String(format: "%.1f km", meters / 1000)
+        : "\(Int(meters.rounded())) m"
 }
 
 private func nightPhotos(_ recap: NightRecap) -> [NightPhoto] {
@@ -5992,6 +6070,7 @@ private struct PostCard: View {
     let post: TimelinePost
     let onOpenPost: () -> Void
     let onOpenAuthor: () -> Void
+    let onLike: () -> Void
 
     private var barCount: Int { post.recap.stops.filter { $0.kind == .bar }.count }
     private var photos: [NightPhoto] { nightPhotos(post.recap) }
@@ -6050,6 +6129,32 @@ private struct PostCard: View {
                 .frame(height: 260)
             }
 
+            // Like + comment bar.
+            HStack(spacing: 18) {
+                Button(action: onLike) {
+                    HStack(spacing: 6) {
+                        Image(systemName: post.likedByMe ? "heart.fill" : "heart")
+                            .foregroundStyle(post.likedByMe ? Status.drunk.color : Color.cream.opacity(0.85))
+                        if post.likeCount > 0 {
+                            Text("\(post.likeCount)").foregroundStyle(Color.cream.opacity(0.85))
+                        }
+                    }
+                }
+                .buttonStyle(PressScaleStyle())
+                Button(action: onOpenPost) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bubble.right").foregroundStyle(Color.cream.opacity(0.85))
+                        if post.commentCount > 0 {
+                            Text("\(post.commentCount)").foregroundStyle(Color.cream.opacity(0.85))
+                        }
+                    }
+                }
+                .buttonStyle(PressScaleStyle())
+                Spacer()
+            }
+            .font(.system(size: 15, weight: .semibold, design: .rounded))
+            .padding(.horizontal, 14).padding(.top, 12)
+
             Button(action: onOpenPost) {
                 VStack(alignment: .leading, spacing: 8) {
                     if let caption = post.caption, !caption.isEmpty {
@@ -6059,9 +6164,10 @@ private struct PostCard: View {
                             .lineLimit(2)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    HStack(spacing: 14) {
+                    HStack(spacing: 12) {
                         Label("\(barCount) stop\(barCount == 1 ? "" : "s")", systemImage: "mappin.and.ellipse")
-                        Label("\(post.recap.totalDrinks) drink\(post.recap.totalDrinks == 1 ? "" : "s")", systemImage: "wineglass")
+                        Label("\(post.recap.totalDrinks)", systemImage: "wineglass")
+                        Label(crawlDistanceString(post.recap.crawlMeters), systemImage: "figure.walk")
                         if post.includeBAC {
                             let unit = BACUnitSetting.current()
                             Label("\(unit.formatted(post.recap.peakBAC))\(unit.symbol)", systemImage: "flame.fill")
@@ -6201,9 +6307,16 @@ private struct ProfileFeedView: View {
 private struct PostDetailView: View {
     let post: TimelinePost
     var feed: FeedService? = nil
+    var history: RecapHistoryStore? = nil
     let onClose: () -> Void
 
-    @State private var lightbox: NightPhoto?
+    @State private var gallery: PhotoGallery?
+    @State private var liked = false
+    @State private var likeCount = 0
+    @State private var loadedLike = false
+    @State private var comments: [PostComment] = []
+    @State private var commentText = ""
+    @FocusState private var commentFocused: Bool
 
     private static let timeFmt: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "h:mm a"; return f
@@ -6233,8 +6346,28 @@ private struct PostDetailView: View {
                                     Label(post.includeBAC ? "Hide my BAC" : "Show my BAC",
                                           systemImage: post.includeBAC ? "eye.slash" : "eye")
                                 }
+                                // Archive MOVES the post to Past nights: it's
+                                // taken off the timeline and kept privately.
+                                // Local recap is keyed by the recap id (which
+                                // lives inside the post), not the posts row id.
+                                if let history, let local = history.localRecap(for: post.recap.id) {
+                                    Button {
+                                        Task {
+                                            history.archive(local)             // -> Past nights
+                                            history.unmarkPosted(post.recap.id)
+                                            await feed.deletePost(post.id)     // off the timeline
+                                            onClose()
+                                        }
+                                    } label: {
+                                        Label("Move to Past nights", systemImage: "tray.and.arrow.down")
+                                    }
+                                }
                                 Button(role: .destructive) {
-                                    Task { await feed.deletePost(post.id); onClose() }
+                                    Task {
+                                        await feed.deletePost(post.id)
+                                        history?.unmarkPosted(post.recap.id)
+                                        onClose()
+                                    }
                                 } label: {
                                     Label("Delete post", systemImage: "trash")
                                 }
@@ -6260,15 +6393,38 @@ private struct PostDetailView: View {
                     HStack(spacing: 10) {
                         stat("\(post.recap.stops.filter { $0.kind == .bar }.count)", "stops")
                         stat("\(post.recap.totalDrinks)", "drinks")
+                        stat(crawlDistanceString(post.recap.crawlMeters), "crawled")
                         if post.includeBAC {
                             let unit = BACUnitSetting.current()
                             stat("\(unit.formatted(post.recap.peakBAC))\(unit.symbol)", "peak")
                         }
                     }
 
+                    // Where the night went — located stops + the route line.
+                    if post.recap.hasMap {
+                        let coords = post.recap.locatedStops.compactMap { $0.coordinate }
+                        Map {
+                            ForEach(post.recap.locatedStops) { stop in
+                                if let c = stop.coordinate {
+                                    Marker(stop.name, systemImage: "mappin", coordinate: c)
+                                        .tint(Color.whiskey)
+                                }
+                            }
+                            if coords.count > 1 {
+                                MapPolyline(coordinates: coords)
+                                    .stroke(Color.whiskey, lineWidth: 3)
+                            }
+                        }
+                        .frame(height: 200)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .allowsHitTesting(false)
+                    }
+
                     ForEach(post.recap.stops) { stop in
                         stopCard(stop)
                     }
+
+                    socialSection
 
                     Spacer(minLength: 30)
                 }
@@ -6285,8 +6441,108 @@ private struct PostDetailView: View {
             .buttonStyle(PressScaleStyle())
         }
         .preferredColorScheme(.dark)
-        .fullScreenCover(item: $lightbox) { photo in
-            LightboxView(url: photo.url) { lightbox = nil }
+        .fullScreenCover(item: $gallery) { g in
+            GalleryLightbox(urls: g.urls, start: g.start) { gallery = nil }
+        }
+        .task {
+            if !loadedLike { liked = post.likedByMe; likeCount = post.likeCount; loadedLike = true }
+            comments = await feed?.comments(post.id) ?? []
+        }
+    }
+
+    // MARK: Likes + comments
+
+    @ViewBuilder
+    private var socialSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 20) {
+                Button {
+                    liked.toggle()
+                    likeCount = max(0, likeCount + (liked ? 1 : -1))
+                    Task { await feed?.toggleLike(post.id) }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: liked ? "heart.fill" : "heart")
+                            .foregroundStyle(liked ? Status.drunk.color : Color.cream.opacity(0.85))
+                        if likeCount > 0 { Text("\(likeCount)").foregroundStyle(Color.cream.opacity(0.85)) }
+                    }
+                }
+                .buttonStyle(PressScaleStyle())
+                HStack(spacing: 6) {
+                    Image(systemName: "bubble.right")
+                    if !comments.isEmpty { Text("\(comments.count)") }
+                }
+                .foregroundStyle(Color.cream.opacity(0.85))
+                Spacer()
+            }
+            .font(.system(size: 17, weight: .semibold, design: .rounded))
+
+            // Input at the top of the comments.
+            HStack(spacing: 8) {
+                TextField("Add a comment…", text: $commentText, axis: .vertical)
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .lineLimit(1...3)
+                    .focused($commentFocused)
+                    .padding(.horizontal, 12).padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.cream.opacity(0.05)))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+                Button { sendComment() } label: {
+                    Image(systemName: "paperplane.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(commentText.trimmingCharacters(in: .whitespaces).isEmpty ? Color.cream.opacity(0.3) : Color.whiskey)
+                }
+                .disabled(commentText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+
+            if !comments.isEmpty {
+                ForEach(comments) { c in commentRow(c) }
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private func commentRow(_ c: PostComment) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            FriendAvatar(name: c.authorName, avatarURL: c.authorAvatar, size: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(c.authorName)
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    Text(RelativeTime.short(c.createdAt))
+                        .font(.system(size: 10, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.45))
+                    Spacer(minLength: 0)
+                }
+                Text(c.body)
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.9))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.vertical, 4)
+        .contextMenu {
+            if c.isMine || post.isMine {
+                Button(role: .destructive) {
+                    Task {
+                        await feed?.deleteComment(c.id, postId: post.id)
+                        comments = await feed?.comments(post.id) ?? []
+                    }
+                } label: { Label("Delete comment", systemImage: "trash") }
+            }
+        }
+    }
+
+    private func sendComment() {
+        let body = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        commentText = ""
+        commentFocused = false
+        Task {
+            await feed?.addComment(post.id, body: body)
+            comments = await feed?.comments(post.id) ?? []
         }
     }
 
@@ -6313,24 +6569,31 @@ private struct PostDetailView: View {
                         .foregroundStyle(Color.cream.opacity(0.5))
                 }
                 Spacer()
-                if stop.isPeak && post.includeBAC {
-                    Text("PEAK").font(.system(size: 9, weight: .black, design: .monospaced))
-                        .tracking(1.2).foregroundStyle(Color.whiskey)
+                if post.includeBAC {
+                    let unit = BACUnitSetting.current()
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text("\(unit.formatted(stop.bacOnArrival)) → \(unit.formatted(stop.bacOnDeparture))\(unit.symbol)")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.cream.opacity(0.85))
+                        if stop.isPeak {
+                            Text("PEAK").font(.system(size: 8, weight: .black, design: .monospaced))
+                                .tracking(1.2).foregroundStyle(Color.whiskey)
+                        }
+                    }
                 }
             }
 
             if !stop.photoFilenames.isEmpty {
+                let urls = stop.photoFilenames.compactMap { URL(string: $0) }
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(stop.photoFilenames, id: \.self) { urlStr in
-                            if let url = URL(string: urlStr) {
-                                Button { lightbox = NightPhoto(stop: stop.name, url: url) } label: {
-                                    DownsampledAsyncImage(url: url, targetPoints: 170)
-                                        .frame(width: 150, height: 150)
-                                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                                }
-                                .buttonStyle(PressScaleStyle())
+                        ForEach(Array(urls.enumerated()), id: \.offset) { idx, url in
+                            Button { gallery = PhotoGallery(urls: urls, start: idx) } label: {
+                                DownsampledAsyncImage(url: url, targetPoints: 170)
+                                    .frame(width: 150, height: 150)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
+                            .buttonStyle(PressScaleStyle())
                         }
                     }
                 }
@@ -6361,17 +6624,39 @@ private struct PostDetailView: View {
     }
 }
 
-/// Full-screen photo viewer. Tap anywhere or the X to dismiss.
-private struct LightboxView: View {
-    let url: URL
+/// A set of photos to view full-screen, starting at a given index.
+private struct PhotoGallery: Identifiable {
+    let id = UUID()
+    let urls: [URL]
+    let start: Int
+}
+
+/// Full-screen, swipeable photo gallery. Each photo fits on screen at its
+/// real aspect ratio; swipe between them, tap or X to dismiss.
+private struct GalleryLightbox: View {
+    let urls: [URL]
+    let start: Int
     let onClose: () -> Void
 
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.black.ignoresSafeArea()
-            DownsampledAsyncImage(url: url, targetPoints: 1000, fill: false, placeholder: .black)
-                .ignoresSafeArea()
+    @State private var index = 0
 
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            TabView(selection: $index) {
+                ForEach(Array(urls.enumerated()), id: \.offset) { i, url in
+                    DownsampledAsyncImage(url: url, targetPoints: 1200, fill: false, placeholder: .black)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .onTapGesture { onClose() }
+                        .tag(i)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: urls.count > 1 ? .always : .never))
+            .indexViewStyle(.page(backgroundDisplayMode: .interactive))
+        }
+        .ignoresSafeArea()
+        .overlay(alignment: .topTrailing) {
             Button { onClose() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 14, weight: .bold))
@@ -6381,8 +6666,7 @@ private struct LightboxView: View {
             }
             .padding(.top, 16).padding(.trailing, 20)
         }
-        .contentShape(Rectangle())
-        .onTapGesture { onClose() }
+        .onAppear { index = start }
     }
 }
 
@@ -6608,9 +6892,9 @@ private struct ModeTopBar: View {
     let onTapFriends: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             ModeSwitcher(tab: $tab, liveActive: liveActive)
-            Spacer(minLength: 8)
+            Spacer(minLength: 6)
             // Friends — set your @username, search + add friends, invite
             // them to a sesh. Always present.
             Button(action: onTapFriends) {
@@ -6688,7 +6972,7 @@ private struct ModeSwitcher: View {
         HStack(spacing: 0) {
             segment(.plan, label: "PLAN")
             segment(.live, label: "LIVE", showLiveDot: liveActive)
-            segment(.timeline, label: "TIMELINE")
+            segment(.timeline, label: "NIGHTLINE")
         }
         .padding(3)
         .background(
@@ -6720,15 +7004,14 @@ private struct ModeSwitcher: View {
                         .frame(width: 7, height: 7)
                 }
                 Text(label)
-                    .font(.system(size: 10.5, weight: .black, design: .monospaced))
-                    .tracking(1.4)
+                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                    .tracking(1.6)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .fixedSize()   // size to the text so longer labels never crop
                     .foregroundStyle(textColor(isOn: isOn, isLive: isLive))
             }
-            .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 11)
             .background(
                 ZStack {
                     if isOn {
@@ -7056,7 +7339,7 @@ private struct SessionView: View {
                     onTapProfile: { profileOpen = true },
                     onTapFriends: { friendsSheetOpen = true }
                 )
-                .padding(.horizontal, 22)
+                .padding(.horizontal, 16)
                 .padding(.top, 4)
                 .padding(.bottom, 8)
 
@@ -7376,7 +7659,7 @@ private struct SessionView: View {
                 .presentationBackground(Color.ink)
         }
         .fullScreenCover(item: $openPost) { post in
-            PostDetailView(post: post, feed: feed) { openPost = nil }
+            PostDetailView(post: post, feed: feed, history: recapHistory) { openPost = nil }
         }
         .sheet(item: $openProfileUser) { ref in
             ProfileFeedView(user: ref, feed: feed)
@@ -8764,13 +9047,13 @@ private struct ProfileSheet: View {
                     // Saved night recaps — replay any past night (and add
                     // photos to its stops the morning after). Long-press a
                     // row to delete.
-                    if !nightHistory.recaps.isEmpty {
+                    if !nightHistory.pastNights.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("PAST NIGHTS")
                                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                                 .tracking(2)
                                 .foregroundStyle(Color.bronze)
-                            ForEach(nightHistory.recaps.prefix(12)) { night in
+                            ForEach(nightHistory.pastNights.prefix(20)) { night in
                                 Button {
                                     replayRecap = night
                                 } label: {
@@ -8782,9 +9065,9 @@ private struct ProfileSheet: View {
                                 .buttonStyle(PressScaleStyle())
                                 .contextMenu {
                                     Button(role: .destructive) {
-                                        nightHistory.delete(night)
+                                        nightHistory.removeFromPastNights(night.id)
                                     } label: {
-                                        Label("Delete recap", systemImage: "trash")
+                                        Label("Delete from Past nights", systemImage: "trash")
                                     }
                                 }
                             }
@@ -9008,7 +9291,11 @@ private struct ProfileSheet: View {
                 .presentationBackground(Color.ink)
         }
         // Replay a saved night — closing button is a plain DONE.
-        .fullScreenCover(item: $replayRecap) { night in
+        .fullScreenCover(item: $replayRecap, onDismiss: {
+            // Posting a past night moves it onto the timeline — refresh the
+            // posts grid so it appears immediately.
+            Task { myPosts = await feed.userPosts(profile.id) }
+        }) { night in
             NightRecapView(recap: night, history: nightHistory, mode: .replay) {
                 replayRecap = nil
             }
@@ -9017,7 +9304,7 @@ private struct ProfileSheet: View {
         .fullScreenCover(item: $selectedPost, onDismiss: {
             Task { myPosts = await feed.userPosts(profile.id) }
         }) { post in
-            PostDetailView(post: post, feed: feed) { selectedPost = nil }
+            PostDetailView(post: post, feed: feed, history: nightHistory) { selectedPost = nil }
         }
         .task { myPosts = await feed.userPosts(profile.id) }
     }

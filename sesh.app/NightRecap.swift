@@ -908,11 +908,19 @@ final class RecapHistoryStore: ObservableObject {
     /// Recap ids the user has posted to their friends timeline (per-user,
     /// persisted in UserDefaults). Drives the "Posted" vs "Post" UI.
     @Published private(set) var postedIds: Set<UUID> = []
+    /// Recap ids the user keeps in "Past nights". A recap can be a post, a
+    /// past night, both, or (transiently) just on disk. Posting no longer
+    /// auto-adds to past nights — archiving (or saving at END) does.
+    @Published private(set) var pastNightIds: Set<UUID> = []
+
+    /// Recaps shown in the Past Nights list (newest first).
+    var pastNights: [NightRecap] { recaps.filter { pastNightIds.contains($0.id) } }
 
     private let dir: URL
     private let enc: JSONEncoder
     private let dec: JSONDecoder
     private let postedKey: String
+    private let pastNightKey: String
 
     init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -931,18 +939,61 @@ final class RecapHistoryStore: ObservableObject {
         dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         postedKey = "posted-recaps-\(uid)"
+        pastNightKey = "past-night-recaps-\(uid)"
         if let raw = UserDefaults.standard.stringArray(forKey: postedKey) {
             postedIds = Set(raw.compactMap(UUID.init))
         }
         load()
+        // Migration: before past-night tracking existed, every saved recap
+        // appeared in Past Nights. Seed the set with all current recaps EXCEPT
+        // posted ones (posted recaps now live as posts, not past nights).
+        if let raw = UserDefaults.standard.stringArray(forKey: pastNightKey) {
+            pastNightIds = Set(raw.compactMap(UUID.init))
+        } else {
+            pastNightIds = Set(recaps.map(\.id)).subtracting(postedIds)
+            persistPastNights()
+        }
     }
 
     func isPosted(_ id: UUID) -> Bool { postedIds.contains(id) }
+    func isPastNight(_ id: UUID) -> Bool { pastNightIds.contains(id) }
+    func localRecap(for id: UUID) -> NightRecap? { recaps.first { $0.id == id } }
 
-    /// Record that a recap has been posted to the timeline.
+    private func persistPosted() {
+        UserDefaults.standard.set(postedIds.map(\.uuidString), forKey: postedKey)
+    }
+    private func persistPastNights() {
+        UserDefaults.standard.set(pastNightIds.map(\.uuidString), forKey: pastNightKey)
+    }
+
+    /// Record that a recap has been posted to the timeline (does NOT add it
+    /// to Past Nights — posting and saving are independent).
     func markPosted(_ id: UUID) {
         postedIds.insert(id)
-        UserDefaults.standard.set(postedIds.map(\.uuidString), forKey: postedKey)
+        persistPosted()
+    }
+
+    /// The post was deleted — drop the posted flag, and clean up the on-disk
+    /// recap if it isn't also kept as a past night.
+    func unmarkPosted(_ id: UUID) {
+        postedIds.remove(id)
+        persistPosted()
+        if !pastNightIds.contains(id) { deleteFromDisk(id) }
+    }
+
+    /// Keep a recap in Past Nights (archive). Ensures it's on disk.
+    func archive(_ recap: NightRecap) {
+        if !recaps.contains(where: { $0.id == recap.id }) { save(recap) }
+        pastNightIds.insert(recap.id)
+        persistPastNights()
+    }
+
+    /// Remove a recap from Past Nights. Deletes the on-disk recap only if it
+    /// isn't also a post (the post lives on independently).
+    func removeFromPastNights(_ id: UUID) {
+        pastNightIds.remove(id)
+        persistPastNights()
+        if !postedIds.contains(id) { deleteFromDisk(id) }
     }
 
     /// Insert or update a recap on disk and in memory.
@@ -957,10 +1008,17 @@ final class RecapHistoryStore: ObservableObject {
         }
     }
 
+    private func deleteFromDisk(_ id: UUID) {
+        try? FileManager.default.removeItem(at: fileURL(id))
+        try? FileManager.default.removeItem(at: photoDir(id))
+        recaps.removeAll { $0.id == id }
+    }
+
+    /// Full delete: wipe the recap from disk and from both lists.
     func delete(_ recap: NightRecap) {
-        try? FileManager.default.removeItem(at: fileURL(recap.id))
-        try? FileManager.default.removeItem(at: photoDir(recap.id))
-        recaps.removeAll { $0.id == recap.id }
+        pastNightIds.remove(recap.id); persistPastNights()
+        postedIds.remove(recap.id); persistPosted()
+        deleteFromDisk(recap.id)
     }
 
     /// Attach a photo to a stop: compress, write to the recap's photo
@@ -1405,7 +1463,10 @@ final class PostService: ObservableObject {
             cover_url: cover, started_at: iso.string(from: recap.startedAt)
         )).execute()
 
+        // Posting MOVES the recap to the timeline: it's a post now, not a
+        // past night. (No-op at END, where it was never a past night.)
         history.markPosted(recap.id)
+        history.removeFromPastNights(recap.id)
     }
 }
 
@@ -1428,7 +1489,7 @@ struct PostComposerView: View {
         ZStack {
             Color.ink.ignoresSafeArea()
             VStack(alignment: .leading, spacing: 18) {
-                Text("POST TO TIMELINE")
+                Text("POST TO NIGHTLINE")
                     .font(.system(size: 11, weight: .black, design: .monospaced))
                     .tracking(2.4).foregroundStyle(Color.bronze)
                 Text("Share this night")
@@ -2082,6 +2143,20 @@ struct NightRecapView: View {
                             .overlay(Capsule().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
                     }
                     .buttonStyle(PressScaleStyle())
+
+                    // Remove from Past nights. The post (if any) is untouched.
+                    Button {
+                        history.removeFromPastNights(recap.id)
+                        onFinish()
+                    } label: {
+                        Text("DELETE FROM PAST NIGHTS")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .tracking(1.6)
+                            .foregroundStyle(Status.drunk.color)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                    }
+                    .buttonStyle(PressScaleStyle())
                 }
             case .liveEnd, .autoEnd:
                 // The night is already on disk (saved up front so a crash
@@ -2091,10 +2166,11 @@ struct NightRecapView: View {
                     postOrPostedButton
 
                     Button {
+                        history.archive(recap)   // keep it in Past nights
                         onFinish()
                     } label: {
                         VStack(spacing: 2) {
-                            Text(mode == .liveEnd ? "SAVE RECAP & END SESH" : "SAVE RECAP")
+                            Text(mode == .liveEnd ? "SAVE TO PAST NIGHTS & END" : "SAVE TO PAST NIGHTS")
                                 .font(.system(size: 13, weight: .black, design: .monospaced))
                                 .tracking(2.0)
                             Text("(can be posted later)")
@@ -2149,7 +2225,7 @@ struct NightRecapView: View {
         if history.isPosted(recap.id) {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle.fill").font(.system(size: 13, weight: .bold))
-                Text("POSTED TO TIMELINE")
+                Text("POSTED TO NIGHTLINE")
                     .font(.system(size: 12, weight: .black, design: .monospaced)).tracking(1.6)
             }
             .foregroundStyle(Color.whiskey)
@@ -2162,7 +2238,7 @@ struct NightRecapView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "paperplane.fill").font(.system(size: 12, weight: .bold))
-                    Text("POST TO TIMELINE")
+                    Text("POST TO NIGHTLINE")
                         .font(.system(size: 13, weight: .black, design: .monospaced)).tracking(1.6)
                 }
                 .foregroundStyle(Color.ink)
