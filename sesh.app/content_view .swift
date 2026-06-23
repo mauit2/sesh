@@ -2915,6 +2915,52 @@ struct UserSearchHit: Identifiable, Equatable, Hashable, Decodable {
     }
 }
 
+/// Someone who liked or commented on your post.
+struct ActivityActor: Identifiable, Decodable, Hashable {
+    let id: UUID
+    let name: String
+    let username: String?
+    let avatar: String?
+}
+
+/// A condensed bell notification: all the likers (or commenters) on one of
+/// your posts within the last 24h.
+struct ActivityNotification: Identifiable, Decodable {
+    let postId: UUID
+    let kind: String          // "like" | "comment"
+    let actorCount: Int
+    let latestAt: String
+    let actors: [ActivityActor]
+    let coverURL: String?
+
+    var id: String { "\(postId.uuidString)-\(kind)" }
+    var isLike: Bool { kind == "like" }
+
+    enum CodingKeys: String, CodingKey {
+        case postId = "post_id", kind, latestAt = "latest_at", actors, coverURL = "cover_url"
+        case actorCount = "actor_count"
+    }
+
+    var latestDate: Date? {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: latestAt) ?? ISO8601DateFormatter().date(from: latestAt)
+    }
+
+    /// "Alex liked your night" / "Alex & Sam commented" / "Alex, Sam +3 liked".
+    var summary: String {
+        let verb = isLike ? "liked" : "commented on"
+        let names = actors.map(\.name)
+        let who: String
+        switch names.count {
+        case 0: who = "Someone"
+        case 1: who = names[0]
+        case 2: who = "\(names[0]) & \(names[1])"
+        default: who = "\(names[0]), \(names[1]) +\(names.count - 2)"
+        }
+        return "\(who) \(verb) your night"
+    }
+}
+
 /// Loads + manages the signed-in user's friends and incoming friend
 /// requests. All cross-user reads/writes go through the SECURITY DEFINER
 /// RPCs from migration 018. Polls every 8s for new requests (rare events).
@@ -2922,9 +2968,52 @@ struct UserSearchHit: Identifiable, Equatable, Hashable, Decodable {
 final class FriendsService: ObservableObject {
     @Published private(set) var friends: [Friend] = []
     @Published private(set) var incoming: [FriendRequest] = []
+    /// Likes/comments on the user's own posts in the last 24h, condensed per
+    /// post — drives the bell's activity notifications.
+    @Published private(set) var activity: [ActivityNotification] = []
+    /// Notification id -> the latest-activity time it was dismissed at. A
+    /// notification reappears only if NEW activity arrives after that.
+    @Published private var dismissedActivity: [String: Double] = [:]
+    private var dismissedLoaded = false
     @Published var error: String?
 
     private var pollTask: Task<Void, Never>?
+
+    private var uidKey: String { supabase.auth.currentUser?.id.uuidString.lowercased() ?? "anon" }
+    private var lastSeenKey: String { "activity-seen-\(uidKey)" }
+    private var dismissedKey: String { "activity-dismissed-\(uidKey)" }
+
+    private var lastSeenActivity: Date {
+        get { Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: lastSeenKey)) }
+        set { UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: lastSeenKey) }
+    }
+
+    private func loadDismissedIfNeeded() {
+        guard !dismissedLoaded else { return }
+        dismissedLoaded = true
+        dismissedActivity = UserDefaults.standard.dictionary(forKey: dismissedKey) as? [String: Double] ?? [:]
+    }
+
+    /// Activity not dismissed (or dismissed but with newer activity since).
+    var visibleActivity: [ActivityNotification] {
+        activity.filter { n in
+            guard let d = dismissedActivity[n.id] else { return true }
+            return (n.latestDate?.timeIntervalSince1970 ?? 0) > d
+        }
+    }
+
+    /// New activity since the bell was last opened — drives the badge.
+    var unseenActivityCount: Int {
+        let seen = lastSeenActivity
+        return visibleActivity.filter { ($0.latestDate ?? .distantPast) > seen }.count
+    }
+    func markActivitySeen() { lastSeenActivity = Date() }
+
+    /// Swipe-to-dismiss a notification from the bell.
+    func dismissActivity(_ n: ActivityNotification) {
+        dismissedActivity[n.id] = n.latestDate?.timeIntervalSince1970 ?? Date().timeIntervalSince1970
+        UserDefaults.standard.set(dismissedActivity, forKey: dismissedKey)
+    }
 
     func start() {
         guard pollTask == nil else { return }
@@ -2943,14 +3032,17 @@ final class FriendsService: ObservableObject {
 
     func refresh() async {
         guard supabase.auth.currentUser != nil else {
-            friends = []; incoming = []; return
+            friends = []; incoming = []; activity = []; return
         }
+        loadDismissedIfNeeded()
         do {
             async let f: [Friend] = supabase.rpc("list_friends").execute().value
             async let r: [FriendRequest] = supabase.rpc("list_incoming_requests").execute().value
-            let (loadedFriends, loadedRequests) = try await (f, r)
+            async let a: [ActivityNotification] = supabase.rpc("my_post_activity").execute().value
+            let (loadedFriends, loadedRequests, loadedActivity) = try await (f, r, a)
             friends = loadedFriends
             incoming = loadedRequests
+            activity = loadedActivity
         } catch {
             // Leave the last good lists in place on a transient failure.
         }
@@ -3205,6 +3297,13 @@ final class FeedService: ObservableObject {
         } catch {
             return []
         }
+    }
+
+    /// Fetch one of the caller's own posts by id (for opening from a bell
+    /// notification — activity is always on your own posts).
+    func myPost(_ postId: UUID) async -> TimelinePost? {
+        guard let uid = supabase.auth.currentUser?.id else { return nil }
+        return await userPosts(uid).first { $0.id == postId }
     }
 }
 
@@ -4362,25 +4461,21 @@ private struct InvitesSheet: View {
     @ObservedObject var friends: FriendsService
     let onAccept: (Invite) -> Void
     let onDecline: (Invite) -> Void
+    let onOpenPost: (UUID) -> Void
 
-    private var isEmpty: Bool { invites.pending.isEmpty && friends.incoming.isEmpty }
+    private var isEmpty: Bool {
+        invites.pending.isEmpty && friends.incoming.isEmpty && friends.visibleActivity.isEmpty
+    }
 
     var body: some View {
         ZStack {
             Color.ink.ignoresSafeArea()
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("NOTIFICATIONS")
-                            .font(.system(size: 11, weight: .black, design: .monospaced))
-                            .tracking(2.4)
-                            .foregroundStyle(Color.bronze)
-                        Text(isEmpty ? "All caught up" : "Friend requests and sesh invites")
-                            .font(.system(size: 22, weight: .black, design: .rounded))
-                            .foregroundStyle(Color.cream)
-                            .lineLimit(2)
-                    }
-                    .padding(.top, 8)
+                    Text(isEmpty ? "All caught up" : "Notifications")
+                        .font(.system(size: 26, weight: .black, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .padding(.top, 8)
 
                     if isEmpty {
                         VStack(spacing: 8) {
@@ -4411,12 +4506,26 @@ private struct InvitesSheet: View {
                         }
                     }
 
+                    // Activity on your posts (condensed per post, last 24h)
+                    if !friends.visibleActivity.isEmpty {
+                        VStack(spacing: 10) {
+                            ForEach(friends.visibleActivity) { act in
+                                ActivityRow(
+                                    activity: act,
+                                    onOpen: { onOpenPost(act.postId) },
+                                    onDelete: { withAnimation { friends.dismissActivity(act) } }
+                                )
+                            }
+                        }
+                        .padding(.top, friends.incoming.isEmpty ? 0 : 6)
+                    }
+
                     // Sesh invites
                     if !invites.pending.isEmpty {
                         Text("SESH INVITES")
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
                             .tracking(2).foregroundStyle(Color.bronze)
-                            .padding(.top, friends.incoming.isEmpty ? 0 : 6)
+                            .padding(.top, (friends.incoming.isEmpty && friends.visibleActivity.isEmpty) ? 0 : 6)
                         VStack(spacing: 10) {
                             ForEach(invites.pending) { invite in
                                 InviteRow(
@@ -4442,6 +4551,113 @@ private struct InvitesSheet: View {
             }
         }
         .preferredColorScheme(.dark)
+    }
+}
+
+/// A condensed like/comment notification. Tap to open the post, the chevron
+/// to expand the people, or swipe left to dismiss (Apple-Mail style).
+private struct ActivityRow: View {
+    let activity: ActivityNotification
+    let onOpen: () -> Void
+    let onDelete: () -> Void
+    @State private var expanded = false
+    @State private var offsetX: CGFloat = 0
+
+    private let revealWidth: CGFloat = 76
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            // Delete action revealed behind the card on left-swipe.
+            Button { onDelete() } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: revealWidth)
+                    .frame(maxHeight: .infinity)
+                    .background(Status.drunk.color)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+
+            card
+                .offset(x: offsetX)
+                .gesture(
+                    DragGesture(minimumDistance: 14)
+                        .onChanged { v in
+                            if v.translation.width < 0 {
+                                offsetX = max(v.translation.width, -revealWidth)
+                            } else if offsetX < 0 {
+                                offsetX = min(0, -revealWidth + v.translation.width)
+                            }
+                        }
+                        .onEnded { v in
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                offsetX = v.translation.width < -40 ? -revealWidth : 0
+                            }
+                        }
+                )
+        }
+    }
+
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Button { onOpen() } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: activity.isLike ? "heart.fill" : "bubble.right.fill")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(activity.isLike ? Status.drunk.color : Color.whiskey)
+                            .frame(width: 22)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(activity.summary)
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                            Text(RelativeTime.short(activity.latestAt))
+                                .font(.system(size: 11, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.5))
+                        }
+                        Spacer(minLength: 8)
+                        if let cover = activity.coverURL, let url = URL(string: cover) {
+                            DownsampledAsyncImage(url: url, targetPoints: 48)
+                                .frame(width: 40, height: 40)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PressScaleStyle())
+
+                Button { withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() } } label: {
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11, weight: .bold)).foregroundStyle(Color.bronze)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+
+            if expanded {
+                VStack(spacing: 8) {
+                    ForEach(activity.actors) { actor in
+                        HStack(spacing: 8) {
+                            FriendAvatar(name: actor.name, avatarURL: actor.avatar, size: 26)
+                            Text(actor.name)
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                            if let u = actor.username {
+                                Text("@\(u)").font(.system(size: 11, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.5))
+                            }
+                            Spacer()
+                        }
+                    }
+                }
+                .padding(.leading, 4)
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color.inkElev))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
     }
 }
 
@@ -7334,8 +7550,8 @@ private struct SessionView: View {
                     tab: $tab,
                     profile: profile,
                     liveActive: liveActive,
-                    inboxCount: invites.pending.count + friends.incoming.count,
-                    onTapInbox: { invitesSheetOpen = true },
+                    inboxCount: invites.pending.count + friends.incoming.count + friends.unseenActivityCount,
+                    onTapInbox: { invitesSheetOpen = true; friends.markActivitySeen() },
                     onTapProfile: { profileOpen = true },
                     onTapFriends: { friendsSheetOpen = true }
                 )
@@ -7460,6 +7676,15 @@ private struct SessionView: View {
                 },
                 onDecline: { invite in
                     Task { await invites.updateStatus(invite.id, to: "declined") }
+                },
+                onOpenPost: { postId in
+                    // Open the post the like/comment was left on.
+                    Task {
+                        guard let p = await feed.myPost(postId) else { return }
+                        invitesSheetOpen = false
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        openPost = p
+                    }
                 }
             )
             .presentationDetents([.medium, .large])
