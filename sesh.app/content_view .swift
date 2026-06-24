@@ -694,6 +694,54 @@ struct VenueSpecial: Codable, Identifiable, Equatable, Hashable {
     }
 }
 
+/// A promotional OFFER at a venue — surfaced on the "deals near you" map
+/// (Phase A) and, later, at check-in. Marketing, not a menu item: unlike
+/// VenueSpecial it never feeds the BAC math. See migration 029_venue_offers.
+/// Only the display columns are decoded; RLS already filters the table to
+/// live (active + approved + unexpired) offers, so the client trusts what it
+/// gets.
+struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let venueId: UUID
+    let kind: String            // price | free_entry | bundle | happy_hour | event
+    let title: String
+    let description: String?
+    let finePrint: String?
+    let redeem: String          // show | code | scan
+    let code: String?
+    let startMinute: Int?       // local minutes from midnight; nil = all day
+    let endMinute: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case venueId     = "venue_id"
+        case kind, title, description
+        case finePrint   = "fine_print"
+        case redeem, code
+        case startMinute = "start_minute"
+        case endMinute   = "end_minute"
+    }
+
+    /// SF Symbol for the offer kind — drives the pin/row glyph.
+    var glyph: String {
+        switch kind {
+        case "free_entry": return "ticket.fill"
+        case "happy_hour": return "clock.fill"
+        case "bundle":     return "gift.fill"
+        case "event":      return "music.note"
+        default:           return "tag.fill"      // price
+        }
+    }
+
+    /// "16:00–19:00" window, or nil when the offer runs all day.
+    var windowLabel: String? {
+        guard let s = startMinute, let e = endMinute,
+              !(s == 0 && e >= 24 * 60 - 1) else { return nil }
+        func hhmm(_ m: Int) -> String { String(format: "%02d:%02d", m / 60, m % 60) }
+        return "\(hhmm(s))–\(hhmm(e))"
+    }
+}
+
 /// Name-matched local "secret menu" — when a user checks in to a venue
 /// whose name matches one of the patterns below, these specials are
 /// attached to that venue in memory and surface in the drink picker.
@@ -2372,6 +2420,8 @@ final class MapKitVenueSearch: ObservableObject {
 final class VenueService: ObservableObject {
     @Published private(set) var venues: [Venue] = []
     @Published private(set) var specialsByVenue: [UUID: [VenueSpecial]] = [:]
+    /// Live promotional offers grouped by venue (Phase A "deals near you").
+    @Published private(set) var offersByVenue: [UUID: [VenueOffer]] = [:]
     @Published private(set) var loading = false
 
     /// User-selected current venue. Persisted across launches via
@@ -2419,6 +2469,17 @@ final class VenueService: ObservableObject {
     /// Specials at a venue, ready to drop into the picker.
     func specials(for venue: Venue) -> [VenueSpecial] {
         specialsByVenue[venue.id] ?? []
+    }
+
+    /// Live offers at a venue (Phase A deals map).
+    func offers(for venue: Venue) -> [VenueOffer] {
+        offersByVenue[venue.id] ?? []
+    }
+
+    /// Venues that currently have at least one live offer — the pins shown on
+    /// the deals map.
+    var venuesWithOffers: [Venue] {
+        venues.filter { !(offersByVenue[$0.id]?.isEmpty ?? true) }
     }
 
     /// Specials for the currently-checked-in venue, mapped to DrinkOptions
@@ -2476,12 +2537,24 @@ final class VenueService: ObservableObject {
                 .select()
                 .execute()
                 .value
+            // RLS filters venue_offers to live (active + approved + unexpired)
+            // offers, so a plain select returns exactly what's safe to show.
+            let os: [VenueOffer] = try await supabase
+                .from("venue_offers")
+                .select()
+                .execute()
+                .value
             venues = vs
             var grouped: [UUID: [VenueSpecial]] = [:]
             for s in ss {
                 grouped[s.venueId, default: []].append(s)
             }
             specialsByVenue = grouped
+            var groupedOffers: [UUID: [VenueOffer]] = [:]
+            for o in os {
+                groupedOffers[o.venueId, default: []].append(o)
+            }
+            offersByVenue = groupedOffers
             attachLocalSpecials()
             reconcileCurrent()
         } catch {
@@ -6350,11 +6423,16 @@ private struct PostCard: View {
                 Button(action: onLike) {
                     HStack(spacing: 6) {
                         Image(systemName: post.likedByMe ? "heart.fill" : "heart")
+                            .font(.system(size: 23, weight: .semibold))
                             .foregroundStyle(post.likedByMe ? Status.drunk.color : Color.cream.opacity(0.85))
                         if post.likeCount > 0 {
                             Text("\(post.likeCount)").foregroundStyle(Color.cream.opacity(0.85))
                         }
                     }
+                    // Bigger, more forgiving tap target than the bare icon.
+                    .padding(.vertical, 6)
+                    .padding(.trailing, 8)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(PressScaleStyle())
                 Button(action: onOpenPost) {
@@ -6619,7 +6697,19 @@ private struct PostDetailView: View {
                     // Where the night went — located stops + the route line.
                     if post.recap.hasMap {
                         let coords = post.recap.locatedStops.compactMap { $0.coordinate }
-                        Map {
+                        // A single stop has no bounding box, so `.automatic`
+                        // zooms to the max and loses all context — frame it to
+                        // the surrounding neighbourhood instead. Multiple stops
+                        // fit the whole route. `initialPosition` (not `position`)
+                        // sets the start but leaves the camera free, so users
+                        // can pan + zoom from there.
+                        let initialCamera: MapCameraPosition = coords.count == 1
+                            ? .region(MKCoordinateRegion(
+                                center: coords[0],
+                                latitudinalMeters: 1500,
+                                longitudinalMeters: 1500))
+                            : .automatic
+                        Map(initialPosition: initialCamera) {
                             ForEach(post.recap.locatedStops) { stop in
                                 if let c = stop.coordinate {
                                     Marker(stop.name, systemImage: "mappin", coordinate: c)
@@ -6633,7 +6723,8 @@ private struct PostDetailView: View {
                         }
                         .frame(height: 200)
                         .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .allowsHitTesting(false)
+                        // Interactive — drag to pan, pinch to zoom. (Drop the
+                        // old allowsHitTesting(false) that froze it.)
                     }
 
                     ForEach(post.recap.stops) { stop in
@@ -6679,9 +6770,13 @@ private struct PostDetailView: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: liked ? "heart.fill" : "heart")
+                            .font(.system(size: 24, weight: .semibold))
                             .foregroundStyle(liked ? Status.drunk.color : Color.cream.opacity(0.85))
                         if likeCount > 0 { Text("\(likeCount)").foregroundStyle(Color.cream.opacity(0.85)) }
                     }
+                    .padding(.vertical, 6)
+                    .padding(.trailing, 8)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(PressScaleStyle())
                 HStack(spacing: 6) {
@@ -7090,7 +7185,19 @@ enum SeshMode: String, Hashable, Identifiable {
 /// existing sesh modes; TIMELINE is the friends feed. Kept separate from
 /// `SeshMode` (which is sesh/group scope) so feed selection doesn't leak into
 /// drink/group logic.
-enum TopTab: Hashable { case plan, live, timeline }
+enum TopTab: Hashable {
+    case plan, live, timeline, offers
+
+    /// Section name shown in the top bar (the switcher now lives at the bottom).
+    var title: String {
+        switch self {
+        case .plan:     return "Plan"
+        case .live:     return "Live"
+        case .timeline: return "Nightline"
+        case .offers:   return "Deals"
+        }
+    }
+}
 
 private struct ModeTopBar: View {
     @Binding var tab: TopTab
@@ -7106,11 +7213,35 @@ private struct ModeTopBar: View {
     let onTapInbox: () -> Void
     let onTapProfile: () -> Void
     let onTapFriends: () -> Void
+    /// LIVE-tab status, surfaced in the top bar so the in-page header can go
+    /// away and the content moves up. `liveStarted == nil` ⇒ not started yet.
+    var liveStarted: Date? = nil
+    var liveInGroup: Bool = false
+    var liveMemberCount: Int = 0
+    /// Show the END pill (solo live running). Tapping it asks the live view
+    /// to confirm via the shared binding.
+    var liveCanEnd: Bool = false
+    var onEndLive: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 10) {
-            ModeSwitcher(tab: $tab, liveActive: liveActive)
+            sectionLeading
             Spacer(minLength: 6)
+            // END moves up here next to the status (solo live only).
+            if liveCanEnd {
+                Button(action: onEndLive) {
+                    Text("END")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(2.0)
+                        .foregroundStyle(Color.cream)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Capsule().fill(Color.cream.opacity(0.06)))
+                        .overlay(Capsule().strokeBorder(Color.cream.opacity(0.2), lineWidth: 1))
+                }
+                .buttonStyle(PressScaleStyle())
+                .accessibilityLabel("End live sesh")
+            }
             // Friends — set your @username, search + add friends, invite
             // them to a sesh. Always present.
             Button(action: onTapFriends) {
@@ -7171,6 +7302,51 @@ private struct ModeTopBar: View {
             .buttonStyle(PressScaleStyle())
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: inboxCount > 0)
+    }
+
+    /// Top-left content. On LIVE it's the sesh status (dot + label + elapsed),
+    /// replacing the old in-page header; elsewhere it's the section name.
+    @ViewBuilder
+    private var sectionLeading: some View {
+        if tab == .live {
+            TimelineView(.periodic(from: .now, by: 30)) { ctx in
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 7) {
+                        Circle()
+                            .fill(Color.whiskey)
+                            .frame(width: 7, height: 7)
+                            .shadow(color: Color.whiskey.opacity(0.8), radius: 5)
+                        Text(liveInGroup ? "LIVE GROUP" : "LIVE SESH")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .tracking(2.4)
+                            .foregroundStyle(Color.whiskey)
+                        if liveInGroup, liveMemberCount > 0 {
+                            Text("· \(liveMemberCount)")
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        }
+                    }
+                    Text(liveStarted.map { Self.elapsed(from: $0, to: ctx.date) } ?? "Ready when you are")
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.cream.opacity(0.55))
+                        .lineLimit(1)
+                }
+            }
+        } else {
+            Text(tab.title)
+                .font(.system(size: 23, weight: .heavy, design: .rounded))
+                .italic()
+                .tracking(-0.6)
+                .foregroundStyle(Color.cream)
+        }
+    }
+
+    private static func elapsed(from start: Date, to now: Date) -> String {
+        let mins = max(0, Int(now.timeIntervalSince(start) / 60))
+        if mins < 1 { return "Just started" }
+        if mins < 60 { return "Started \(mins)m ago" }
+        let h = mins / 60, m = mins % 60
+        return m == 0 ? "Started \(h)h ago" : "Started \(h)h \(m)m ago"
     }
 }
 
@@ -7335,6 +7511,9 @@ private struct SessionView: View {
     @State private var groupSheetScope: SeshMode? = nil
     @State private var shareMode = false
     @State private var venueOpen = false
+    /// Drives the END confirmation alert in LiveSeshView — lifted here so the
+    /// END button can live in the shared top bar.
+    @State private var liveConfirmEnd = false
     /// Whether the invites inbox sheet is open. Pinned-banner tap opens
     /// it; accept/decline inside the sheet drains the banner naturally
     /// because each action removes the row from `invites.pending`.
@@ -7537,6 +7716,28 @@ private struct SessionView: View {
         return live.isActive
     }
 
+    /// When the current live sesh began — group first-drink (or session
+    /// creation) in a group, else the solo timeline's start. Feeds the
+    /// "Started Xm ago" line now shown in the top bar.
+    private var liveStartTime: Date? {
+        if liveGroup.isActive {
+            return liveGroup.firstDrinkTime(for: profile.id) ?? liveGroup.session?.createdAt
+        }
+        return live.startedAt
+    }
+
+    /// Count of things the user has actively added to tonight's journey —
+    /// check-ins, loose photos, loose/pre-game spots, and a pre-game note. A
+    /// rise in this signals the first real action and starts the live sesh
+    /// (see the onChange below). Drinks aren't counted here; they start the
+    /// sesh themselves via LiveSeshState.add.
+    private var journeyActivityCount: Int {
+        journey.stops.count
+            + journey.loosePhotos.count
+            + journey.looseSpots.count
+            + (journey.preGameNote == nil ? 0 : 1)
+    }
+
     var body: some View {
         ZStack {
             // The atmosphere accent shifts when the user is on LIVE so
@@ -7553,7 +7754,12 @@ private struct SessionView: View {
                     inboxCount: invites.pending.count + friends.incoming.count + friends.unseenActivityCount,
                     onTapInbox: { invitesSheetOpen = true; friends.markActivitySeen() },
                     onTapProfile: { profileOpen = true },
-                    onTapFriends: { friendsSheetOpen = true }
+                    onTapFriends: { friendsSheetOpen = true },
+                    liveStarted: liveStartTime,
+                    liveInGroup: liveGroup.isActive,
+                    liveMemberCount: liveGroup.members.count,
+                    liveCanEnd: !liveGroup.isActive && live.isActive,
+                    onEndLive: { liveConfirmEnd = true }
                 )
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
@@ -7563,12 +7769,15 @@ private struct SessionView: View {
                     planPage.tag(TopTab.plan)
                     livePage.tag(TopTab.live)
                     timelinePage.tag(TopTab.timeline)
+                    offersPage.tag(TopTab.offers)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 // Smooth horizontal swipe between modes; matches the
-                // ModeSwitcher's spring so tapping the pill and dragging
-                // the page feel like the same animation.
+                // bottom bar's spring so tapping a tab and dragging the
+                // page feel like the same animation.
                 .animation(.spring(response: 0.4, dampingFraction: 0.82), value: tab)
+
+                BottomTabBar(tab: $tab, liveActive: liveActive)
             }
 
             // Floating invite banner — pinned just below the ModeTopBar.
@@ -7622,6 +7831,16 @@ private struct SessionView: View {
                 // available) you can swipe to, photograph, and reorder.
                 journey.checkOut(coordinate: location.location?.coordinate)
             }
+        }
+        // Start the solo live sesh on the first real action — a check-in,
+        // photo, pre-game spot, or pre-game comment — rather than the moment
+        // the user lands on the LIVE tab. (Adding a drink starts it on its own
+        // via LiveSeshState.add; a live group is its own backing.) Each of
+        // those mutates the night journey, so a bump in its activity count is
+        // the trigger.
+        .onChange(of: journeyActivityCount) { old, new in
+            guard new > old, !liveGroup.isActive, !live.isActive else { return }
+            live.start()
         }
         // Group check-in: when a member moves the whole group, every
         // FOLLOWING member's local venue adopts it (which then records the
@@ -7691,17 +7910,6 @@ private struct SessionView: View {
             .presentationDragIndicator(.visible)
         }
         .preferredColorScheme(.dark)
-        .onChange(of: tab) { _, new in
-            // Auto-start the solo live timeline the first time the user
-            // swipes into LIVE — saves them from a "Start" → "Add" two-step.
-            // In a live group, the group itself is the live backing so we
-            // don't touch LiveSeshState.
-            if new == .live, !liveGroup.isActive, !live.isActive {
-                live.start()
-            }
-            // Feed loads once via TimelineFeedView.onAppear; pull-to-refresh
-            // updates it. (Avoids re-fetching/rebuilding cards on every switch.)
-        }
         .animation(.spring(response: 0.55, dampingFraction: 0.82), value: status)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: planGroup.isActive)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: liveGroup.isActive)
@@ -7892,6 +8100,33 @@ private struct SessionView: View {
         }
     }
 
+    /// DEALS — the venue-offers discovery map (Phase A). Embedded as a tab,
+    /// so it shows no close button; navigation is the bottom bar.
+    private var offersPage: some View {
+        OffersMapView(venues: venues, location: location)
+            // The interactive map swallows the TabView's horizontal page
+            // swipe, so a thin left-edge strip provides the "grab the edge to
+            // go back" gesture → back to Nightline (the previous section).
+            .overlay(alignment: .leading) {
+                Color.clear
+                    .frame(width: 24)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 12)
+                            .onEnded { value in
+                                if value.translation.width > 40,
+                                   abs(value.translation.height) < 70 {
+                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                                        tab = .timeline
+                                    }
+                                }
+                            }
+                    )
+                    .ignoresSafeArea()
+            }
+    }
+
     /// TIMELINE — the friends feed of posted nights.
     private var timelinePage: some View {
         TimelineFeedView(
@@ -7914,27 +8149,35 @@ private struct SessionView: View {
 
     private var planPage: some View {
         ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 24) {
-                GroupBar(
-                    scope: .plan,
-                    session: planGroup.session,
-                    memberCount: planGroup.members.count,
-                    onTap: { groupSheetScope = .plan }
-                )
-
-                VenueChip(
-                    location: location,
-                    venues: venues,
-                    onTap: { venueOpen = true }
-                )
-
-                BACReadout(
+            VStack(alignment: .leading, spacing: 16) {
+                // The readout leads — it's the number you open the app for.
+                // Same two cards as LIVE so the readout is identical in both.
+                BACNowCard(bac: bac, status: status)
+                SoberByCard(
                     bac: bac,
                     status: status,
-                    hoursUntilSober: hoursUntil(bacThreshold: 0.0),
-                    hoursUntilEULimit: hoursUntil(bacThreshold: 0.02),
-                    hoursUntilUSLimit: hoursUntil(bacThreshold: 0.08)
+                    hoursSober: hoursUntil(bacThreshold: 0.0),
+                    hoursEU: hoursUntil(bacThreshold: 0.02),
+                    hoursUS: hoursUntil(bacThreshold: 0.08)
                 )
+
+                // Group + check-in sit side by side beneath it — still one
+                // glance away, at half the vertical footprint.
+                HStack(spacing: 10) {
+                    GroupBar(
+                        scope: .plan,
+                        session: planGroup.session,
+                        memberCount: planGroup.members.count,
+                        compact: true,
+                        onTap: { groupSheetScope = .plan }
+                    )
+                    VenueChip(
+                        location: location,
+                        venues: venues,
+                        compact: true,
+                        onTap: { venueOpen = true }
+                    )
+                }
 
                 if planGroup.isActive {
                     GroupRoster(group: planGroup, selfId: profile.id, hours: hours)
@@ -8049,7 +8292,8 @@ private struct SessionView: View {
                 // Stay on the LIVE page — it resets to its fresh "ready
                 // when you are" state, which is where the user expects to
                 // land after wrapping a night (not back in PLAN).
-            }
+            },
+            confirmEnd: $liveConfirmEnd
         )
     }
 }
@@ -8166,7 +8410,7 @@ private struct BACReadout: View {
     private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 Text("HOW YOU'RE DOING")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
@@ -8179,8 +8423,8 @@ private struct BACReadout: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(bacUnit.formatted(bac))
-                        .font(.system(size: 68, weight: .black, design: .rounded))
-                        .tracking(-2.2)
+                        .font(.system(size: 54, weight: .black, design: .rounded))
+                        .tracking(-1.8)
                         .foregroundStyle(
                             LinearGradient(
                                 colors: [Color.cream, status.color.opacity(0.92)],
@@ -8219,8 +8463,8 @@ private struct BACReadout: View {
                 accent: status.color
             )
         }
-        .padding(.vertical, 22)
-        .padding(.horizontal, 22)
+        .padding(.vertical, 16)
+        .padding(.horizontal, 18)
         .background(
             RoundedRectangle(cornerRadius: 26, style: .continuous)
                 .fill(
@@ -8246,6 +8490,164 @@ private struct BACReadout: View {
         )
         .shadow(color: status.color.opacity(0.28), radius: 40, y: 18)
         .shadow(color: .black.opacity(0.55), radius: 24, y: 12)
+    }
+}
+
+// MARK: - Shared BAC + Sober-by cards
+//
+// One pair of cards used by BOTH plan and live so the readout is identical
+// across modes. Compact by design — these sit at the top of each page.
+
+/// "RIGHT NOW" — the live/projected BAC with the tier scale beneath it.
+private struct BACNowCard: View {
+    let bac: Double
+    let status: Status
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("RIGHT NOW")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.bronze)
+                Spacer()
+                StatusPill(status: status)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(bacUnit.formatted(bac))
+                    .font(.system(size: 46, weight: .black, design: .rounded))
+                    .tracking(-1.6)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [Color.cream, status.color.opacity(0.92)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+                    )
+                    .shadow(color: status.color.opacity(0.5), radius: 22, y: 8)
+                    .monospacedDigit()
+                    .contentTransition(.numericText(value: bac))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Text(bacUnit.caption)
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .tracking(2)
+                    .foregroundStyle(Color.bronze)
+                    .padding(.bottom, 8)
+            }
+            BACScale(bac: bac, status: status)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.cream.opacity(0.05), Color.cream.opacity(0.012)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(status.color.opacity(0.3), lineWidth: 1)
+        )
+        .shadow(color: status.color.opacity(0.3), radius: 30, y: 14)
+    }
+}
+
+/// "SOBER BY" — time-to-zero with optional EU/US drive-limit milestones.
+private struct SoberByCard: View {
+    let bac: Double
+    let status: Status
+    let hoursSober: Double
+    let hoursEU: Double
+    let hoursUS: Double
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+    private var soberAt: Date { Date().addingTimeInterval(hoursSober * 3600) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("SOBER BY")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.bronze)
+                Spacer()
+                if hoursSober > 0 {
+                    Text(soberAt, format: .dateTime.hour().minute())
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(1.0)
+                        .foregroundStyle(status.color)
+                        .contentTransition(.numericText())
+                }
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(Self.formatDuration(hoursSober))
+                    .font(.system(size: 26, weight: .black, design: .rounded))
+                    .italic()
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [Color.cream, status.color.opacity(0.85)],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                    )
+                    .monospacedDigit()
+                    .contentTransition(.numericText(value: hoursSober))
+                if hoursSober > 0 {
+                    Text("to \(bacUnit.formatted(0))")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(Color.bronze)
+                }
+            }
+            if hoursEU > 0 || hoursUS > 0 {
+                VStack(spacing: 4) {
+                    if hoursEU > 0 {
+                        limitRow(label: "EU LIMIT (\(bacUnit.formattedLimit(0.02))\(bacUnit.symbol))", hours: hoursEU, tint: status.color.opacity(0.95))
+                    }
+                    if hoursUS > 0 {
+                        limitRow(label: "US LIMIT (\(bacUnit.formattedLimit(0.08))\(bacUnit.symbol))", hours: hoursUS, tint: status.color.opacity(0.7))
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.cream.opacity(0.035))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(status.color.opacity(0.22), lineWidth: 1)
+        )
+    }
+
+    private func limitRow(label: String, hours: Double, tint: Color) -> some View {
+        HStack(spacing: 8) {
+            Circle().fill(tint).frame(width: 5, height: 5).shadow(color: tint.opacity(0.6), radius: 3)
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .tracking(1.5)
+                .foregroundStyle(Color.cream.opacity(0.55))
+            Spacer(minLength: 8)
+            Text(Self.formatDuration(hours))
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(tint)
+                .monospacedDigit()
+        }
+    }
+
+    static func formatDuration(_ hours: Double) -> String {
+        guard hours > 0 else { return "Sober" }
+        let mins = Int((hours * 60).rounded())
+        if mins < 60 { return "\(mins) min" }
+        let h = mins / 60, m = mins % 60
+        return m == 0 ? "\(h)h" : "\(h)h \(m)m"
     }
 }
 
@@ -10464,64 +10866,75 @@ private struct GroupBar: View {
     let scope: SeshMode
     let session: SeshSession?
     let memberCount: Int
+    /// Compact = the side-by-side variant used under the BAC readout: smaller
+    /// chrome, shortened idle copy, no chevron, lighter shadow.
+    var compact: Bool = false
     let onTap: () -> Void
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 12) {
+            HStack(spacing: compact ? 9 : 12) {
                 ZStack {
                     Circle()
                         .fill(Color.whiskey.opacity(session == nil ? 0.12 : 0.22))
-                        .frame(width: 32, height: 32)
+                        .frame(width: compact ? 28 : 32, height: compact ? 28 : 32)
                     Image(systemName: session == nil ? "person.2" : "person.2.fill")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: compact ? 12 : 13, weight: .bold))
                         .foregroundStyle(Color.whiskey)
                 }
 
-                if let s = session {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(scope.label) GROUP")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .tracking(2.2)
-                            .foregroundStyle(Color.whiskey)
-                        HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(scope.label) GROUP")
+                        .font(.system(size: compact ? 9 : 10, weight: .semibold, design: .monospaced))
+                        .tracking(compact ? 1.6 : 2.2)
+                        .foregroundStyle(session == nil ? Color.bronze : Color.whiskey)
+                        .lineLimit(1)
+                    if let s = session {
+                        if compact {
                             Text(s.joinCode)
-                                .font(.system(size: 15, weight: .black, design: .monospaced))
-                                .tracking(2.5)
+                                .font(.system(size: 14, weight: .black, design: .monospaced))
+                                .tracking(2)
                                 .foregroundStyle(Color.cream)
-                            Text("·")
-                                .foregroundStyle(Color.bronze)
-                            Text("\(memberCount) \(memberCount == 1 ? "person" : "people")")
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .foregroundStyle(Color.cream.opacity(0.72))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                        } else {
+                            HStack(spacing: 8) {
+                                Text(s.joinCode)
+                                    .font(.system(size: 15, weight: .black, design: .monospaced))
+                                    .tracking(2.5)
+                                    .foregroundStyle(Color.cream)
+                                Text("·")
+                                    .foregroundStyle(Color.bronze)
+                                Text("\(memberCount) \(memberCount == 1 ? "person" : "people")")
+                                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.72))
+                            }
                         }
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(scope.label) GROUP")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .tracking(2.2)
-                            .foregroundStyle(Color.bronze)
-                        Text("Drink together in \(scope.label.lowercased())")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    } else {
+                        Text(compact ? "Start a group" : "Drink together in \(scope.label.lowercased())")
+                            .font(.system(size: compact ? 13 : 14, weight: .semibold, design: .rounded))
                             .foregroundStyle(Color.cream)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
                 }
 
                 Spacer(minLength: 0)
 
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.bronze)
+                if !compact {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.bronze)
+                }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, compact ? 12 : 14)
+            .padding(.vertical, compact ? 10 : 12)
             .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
                     .fill(Color.inkElev.opacity(0.72))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
                     .strokeBorder(
                         session == nil
                             ? Color.cream.opacity(0.08)
@@ -10530,11 +10943,340 @@ private struct GroupBar: View {
                     )
             )
             .shadow(
-                color: (session == nil ? Color.black : Color.whiskey).opacity(0.18),
-                radius: 18, y: 10
+                color: (session == nil ? Color.black : Color.whiskey).opacity(compact ? 0.12 : 0.18),
+                radius: compact ? 10 : 18, y: compact ? 5 : 10
             )
         }
         .buttonStyle(PressScaleStyle())
+    }
+}
+
+// MARK: - Venue Offers (deals map)
+//
+// Phase A of venue marketing: a read-only "deals near you" map. Pins are
+// venues with live offers (venue_offers, migration 029, loaded by
+// VenueService). Tap a pin → that venue's offers; tap "Show at the bar" →
+// a live-ticking redeem card (no server validation yet — staff eyeball it).
+// Entry point is the DealsCard on the plan page.
+
+/// Bottom navigation bar — the section switcher (moved here from the top)
+/// plus the new DEALS tab. Four equal items, icon + label, whiskey when active.
+private struct BottomTabBar: View {
+    @Binding var tab: TopTab
+    let liveActive: Bool
+
+    var body: some View {
+        HStack(spacing: 0) {
+            item(.plan,     icon: "gauge.medium",                  label: "PLAN")
+            item(.live,     icon: "dot.radiowaves.left.and.right", label: "LIVE", pulse: liveActive)
+            item(.timeline, icon: "square.stack.fill",             label: "NIGHTLINE")
+            item(.offers,   icon: "map.fill",                      label: "DEALS")
+        }
+        .padding(.top, 10)
+        .padding(.bottom, 4)
+        .background(Color.ink.opacity(0.96))
+        .overlay(alignment: .top) {
+            Rectangle().fill(Color.cream.opacity(0.08)).frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func item(_ value: TopTab, icon: String, label: String, pulse: Bool = false) -> some View {
+        let on = tab == value
+        Button {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = value }
+        } label: {
+            VStack(spacing: 4) {
+                ZStack {
+                    Image(systemName: icon)
+                        .font(.system(size: 18, weight: on ? .bold : .semibold))
+                        .foregroundStyle(on ? Color.whiskey : Color.cream.opacity(0.55))
+                    // Live pulse, mirroring the old switcher's LIVE dot.
+                    if pulse {
+                        Circle()
+                            .fill(Color.whiskey)
+                            .frame(width: 6, height: 6)
+                            .offset(x: 12, y: -10)
+                    }
+                }
+                Text(label)
+                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                    .tracking(0.8)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .foregroundStyle(on ? Color.whiskey : Color.cream.opacity(0.5))
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Full-screen interactive map of venues with live offers.
+private struct OffersMapView: View {
+    @ObservedObject var venues: VenueService
+    @ObservedObject var location: LocationService
+    /// nil when embedded as a tab (navigation is the bottom bar); set when
+    /// presented modally so the header shows a close button.
+    var onClose: (() -> Void)? = nil
+
+    @State private var camera: MapCameraPosition = .automatic
+    @State private var selectedVenueId: UUID? = nil
+
+    /// Only surface offers within this radius of the user — a global dataset
+    /// shouldn't dump bars on the other side of the planet onto the map.
+    /// (Server-side geo-filtering is a Phase B concern; client-side is fine
+    /// for the small Phase A catalog.) Falls back to showing all when we have
+    /// no location fix yet.
+    private let radiusMeters: CLLocationDistance = 50_000
+
+    private var pins: [Venue] {
+        let all = venues.venuesWithOffers
+        guard let here = location.location else { return all }
+        return all.filter {
+            CLLocation(latitude: $0.lat, longitude: $0.lon).distance(from: here) <= radiusMeters
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.ink.ignoresSafeArea()
+
+            Map(position: $camera) {
+                UserAnnotation()
+                ForEach(pins) { venue in
+                    Annotation(
+                        venue.name,
+                        coordinate: CLLocationCoordinate2D(latitude: venue.lat, longitude: venue.lon)
+                    ) {
+                        OfferPin(count: venues.offers(for: venue).count,
+                                 selected: selectedVenueId == venue.id)
+                            .onTapGesture {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    selectedVenueId = venue.id
+                                }
+                            }
+                    }
+                }
+            }
+            .mapStyle(.standard(pointsOfInterest: .including([.nightlife, .restaurant, .brewery, .winery])))
+
+            header
+
+            if let id = selectedVenueId, let venue = pins.first(where: { $0.id == id }) {
+                offerSheet(for: venue)
+            }
+        }
+        .task {
+            await venues.refresh()
+            recenter()
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("DEALS NEARBY")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.bronze)
+                Text("\(pins.count) \(pins.count == 1 ? "spot" : "spots")")
+                    .font(.system(size: 22, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color.cream)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(Capsule().fill(Color.ink.opacity(0.6)))
+            Spacer()
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Color.cream)
+                        .frame(width: 40, height: 40)
+                        .background(Circle().fill(Color.ink.opacity(0.7)))
+                        .overlay(Circle().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private func offerSheet(for venue: Venue) -> some View {
+        VStack {
+            Spacer()
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(venue.name)
+                            .font(.system(size: 18, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        if !venue.displayLocation.isEmpty {
+                            Text(venue.displayLocation)
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        }
+                    }
+                    Spacer()
+                    Button {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            selectedVenueId = nil
+                        }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(Color.cream.opacity(0.4))
+                    }
+                    .buttonStyle(.plain)
+                }
+                ForEach(venues.offers(for: venue)) { offer in
+                    OfferRow(offer: offer)
+                }
+            }
+            .padding(18)
+            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.inkElev))
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.whiskey.opacity(0.25), lineWidth: 1))
+            .padding(.horizontal, 14)
+            .padding(.bottom, 24)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private func recenter() {
+        let span: CLLocationDistance = 4000
+        if let loc = location.location {
+            camera = .region(MKCoordinateRegion(center: loc.coordinate,
+                                                latitudinalMeters: span, longitudinalMeters: span))
+        } else if let first = pins.first {
+            camera = .region(MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: first.lat, longitude: first.lon),
+                latitudinalMeters: span, longitudinalMeters: span))
+        } else {
+            camera = .automatic
+        }
+    }
+}
+
+/// Whiskey map pin; grows + shows a count badge when a venue has >1 offer.
+private struct OfferPin: View {
+    let count: Int
+    let selected: Bool
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.whiskey)
+                .frame(width: selected ? 42 : 34, height: selected ? 42 : 34)
+                .shadow(color: Color.whiskey.opacity(0.6), radius: selected ? 10 : 5)
+            Image(systemName: "wineglass.fill")
+                .font(.system(size: selected ? 18 : 14, weight: .bold))
+                .foregroundStyle(Color.ink)
+        }
+        .overlay(alignment: .topTrailing) {
+            if count > 1 {
+                Text("\(count)")
+                    .font(.system(size: 9, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 16, height: 16)
+                    .background(Circle().fill(Color.cream))
+                    .offset(x: 5, y: -5)
+            }
+        }
+    }
+}
+
+/// One offer inside the venue card, with a tap-to-reveal "show at the bar"
+/// redeem state. No server validation in Phase A — the live clock just lets
+/// staff see it's genuine and not a screenshot.
+private struct OfferRow: View {
+    let offer: VenueOffer
+    @State private var revealed = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: offer.glyph)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Color.whiskey)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(offer.title)
+                        .font(.system(size: 15, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    if let d = offer.description {
+                        Text(d)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.7))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    HStack(spacing: 8) {
+                        if let w = offer.windowLabel { tag(w, system: "clock") }
+                        if let fp = offer.finePrint {
+                            Text(fp)
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Color.bronze)
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+
+            if revealed {
+                redeemBanner
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            } else {
+                Button {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { revealed = true }
+                } label: {
+                    Text("SHOW AT THE BAR")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(1.4)
+                        .foregroundStyle(Color.ink)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Capsule().fill(Color.whiskey))
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+    }
+
+    private var redeemBanner: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(offer.code ?? "SHOW THIS TO STAFF")
+                        .font(.system(size: 14, weight: .black, design: .monospaced))
+                        .foregroundStyle(Color.ink)
+                    Text(context.date, format: .dateTime.weekday().hour().minute().second())
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.ink.opacity(0.7))
+                }
+                Spacer()
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(Color.ink)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.whiskey))
+        }
+    }
+
+    private func tag(_ text: String, system: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: system).font(.system(size: 9, weight: .bold))
+            Text(text).font(.system(size: 10, weight: .black, design: .monospaced))
+        }
+        .foregroundStyle(Color.whiskey)
+        .padding(.horizontal, 7).padding(.vertical, 3)
+        .background(Capsule().fill(Color.whiskey.opacity(0.12)))
     }
 }
 
@@ -10548,6 +11290,12 @@ private struct GroupBar: View {
 private struct VenueChip: View {
     @ObservedObject var location: LocationService
     @ObservedObject var venues: VenueService
+    /// Compact = side-by-side variant under the BAC readout (see GroupBar).
+    var compact: Bool = false
+    /// When the venue name is already shown elsewhere (the LIVE Night Snaps
+    /// card), this chip drops the name and becomes a plain "change location"
+    /// control instead of repeating "TONIGHT AT · <venue>".
+    var nameShownElsewhere: Bool = false
     var onTap: () -> Void
 
     /// Subtitle shown when no venue is checked in. Matches whatever state
@@ -10563,73 +11311,101 @@ private struct VenueChip: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 12) {
+            HStack(spacing: compact ? 9 : 12) {
                 ZStack {
                     Circle()
                         .fill(Color.whiskey.opacity(venues.currentVenue == nil ? 0.14 : 0.32))
-                        .frame(width: 32, height: 32)
+                        .frame(width: compact ? 28 : 32, height: compact ? 28 : 32)
                     Image(systemName: venues.currentVenue == nil
                           ? "mappin.and.ellipse"
                           : "mappin.circle.fill")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: compact ? 12 : 13, weight: .bold))
                         .foregroundStyle(Color.whiskey)
                 }
 
                 if let v = venues.currentVenue {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text("TONIGHT AT")
-                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                                .tracking(2.2)
+                    if nameShownElsewhere {
+                        // Name lives in the Night Snaps card — here we're just
+                        // a "change location" control.
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("LOCATION")
+                                .font(.system(size: compact ? 9 : 10, weight: .semibold, design: .monospaced))
+                                .tracking(compact ? 1.6 : 2.2)
                                 .foregroundStyle(Color.whiskey)
-                            if v.isFeatured {
-                                Text("★")
-                                    .font(.system(size: 10, weight: .black))
-                                    .foregroundStyle(Color.whiskey)
-                            }
-                        }
-                        HStack(spacing: 8) {
-                            Text(v.name)
-                                .font(.system(size: 15, weight: .black, design: .rounded))
+                            Text("Change location")
+                                .font(.system(size: compact ? 13 : 14, weight: .semibold, design: .rounded))
                                 .foregroundStyle(Color.cream)
                                 .lineLimit(1)
-                            if !v.displayLocation.isEmpty {
-                                Text("·")
-                                    .foregroundStyle(Color.bronze)
-                                Text(v.displayLocation)
-                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                    .tracking(0.4)
-                                    .foregroundStyle(Color.cream.opacity(0.6))
+                                .minimumScaleFactor(0.8)
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text("TONIGHT AT")
+                                    .font(.system(size: compact ? 9 : 10, weight: .semibold, design: .monospaced))
+                                    .tracking(compact ? 1.6 : 2.2)
+                                    .foregroundStyle(Color.whiskey)
+                                if v.isFeatured {
+                                    Text("★")
+                                        .font(.system(size: 10, weight: .black))
+                                        .foregroundStyle(Color.whiskey)
+                                }
+                            }
+                            if compact {
+                                Text(v.name)
+                                    .font(.system(size: 14, weight: .black, design: .rounded))
+                                    .foregroundStyle(Color.cream)
                                     .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                            } else {
+                                HStack(spacing: 8) {
+                                    Text(v.name)
+                                        .font(.system(size: 15, weight: .black, design: .rounded))
+                                        .foregroundStyle(Color.cream)
+                                        .lineLimit(1)
+                                    if !v.displayLocation.isEmpty {
+                                        Text("·")
+                                            .foregroundStyle(Color.bronze)
+                                        Text(v.displayLocation)
+                                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                            .tracking(0.4)
+                                            .foregroundStyle(Color.cream.opacity(0.6))
+                                            .lineLimit(1)
+                                    }
+                                }
                             }
                         }
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("LOCATION")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .tracking(2.2)
+                            .font(.system(size: compact ? 9 : 10, weight: .semibold, design: .monospaced))
+                            .tracking(compact ? 1.6 : 2.2)
                             .foregroundStyle(Color.bronze)
-                        Text(prompt)
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        Text(compact ? "Check in" : prompt)
+                            .font(.system(size: compact ? 13 : 14, weight: .semibold, design: .rounded))
                             .foregroundStyle(Color.cream)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
                 }
 
                 Spacer(minLength: 0)
 
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.bronze)
+                if !compact {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.bronze)
+                }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, compact ? 12 : 14)
+            .padding(.vertical, compact ? 10 : 12)
             .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
                     .fill(Color.inkElev.opacity(0.72))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
                     .strokeBorder(
                         venues.currentVenue == nil
                             ? Color.cream.opacity(0.08)
@@ -10638,8 +11414,8 @@ private struct VenueChip: View {
                     )
             )
             .shadow(
-                color: (venues.currentVenue == nil ? Color.black : Color.whiskey).opacity(0.18),
-                radius: 18, y: 10
+                color: (venues.currentVenue == nil ? Color.black : Color.whiskey).opacity(compact ? 0.12 : 0.18),
+                radius: compact ? 10 : 18, y: compact ? 5 : 10
             )
         }
         .buttonStyle(PressScaleStyle())
@@ -13258,7 +14034,8 @@ private struct LiveSeshView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var menuOpen = false
-    @State private var confirmEnd = false
+    /// Driven by the shared top bar's END button (lifted to SessionView).
+    @Binding var confirmEnd: Bool
     @State private var venueOpen = false
     /// Whether the add-person form is up. One global `@State` is enough
     /// because we only ever add one ghost at a time.
@@ -13510,11 +14287,10 @@ private struct LiveSeshView: View {
             .presentationDragIndicator(.visible)
             .presentationBackground(Color.ink)
         }
-        .confirmationDialog(
-            "End Live Sesh?",
-            isPresented: $confirmEnd,
-            titleVisibility: .visible
-        ) {
+        // A centered alert (not a bottom confirmationDialog) — the END button
+        // is at the top of the screen, so the confirmation should appear with
+        // it rather than sliding up from the far bottom edge.
+        .alert("End Live Sesh?", isPresented: $confirmEnd) {
             Button("End sesh", role: .destructive) {
                 // Build the night's story BEFORE tearing anything down —
                 // live.end() clears the drinks the recap is made from.
@@ -13874,26 +14650,42 @@ private struct LiveSeshView: View {
     private func content(now: Date) -> some View {
         let bac = currentBAC(now: now)
         let status = statusFor(bac: bac)
-        VStack(alignment: .leading, spacing: 22) {
-            header(bac: bac, status: status, now: now)
-            // Live mode has its own group, independent of plan. Surfacing
-            // a GroupBar here lets the user join/leave/mirror without
-            // jumping back to PLAN. Only shown when embedded (i.e. as a
-            // tab page) — the legacy modal presentation has no parent
-            // group sheet to open.
-            if embedded, let onOpenGroupSheet {
-                GroupBar(
-                    scope: .live,
-                    session: group.session,
-                    memberCount: group.members.count,
-                    onTap: onOpenGroupSheet
+        VStack(alignment: .leading, spacing: 16) {
+            // When embedded (the LIVE tab), the live status + END live in the
+            // shared top bar, so the in-page header is suppressed and the
+            // readout leads. The modal path still shows its own header.
+            if !embedded {
+                header(bac: bac, status: status, now: now)
+            }
+            // Readout leads — same two cards as PLAN.
+            BACNowCard(bac: bac, status: status)
+            SoberByCard(
+                bac: bac,
+                status: status,
+                hoursSober: hoursUntil(threshold: 0.0, now: now),
+                hoursEU: hoursUntil(threshold: 0.02, now: now),
+                hoursUS: hoursUntil(threshold: 0.08, now: now)
+            )
+            // Group + check-in side by side beneath the readout — still one
+            // glance away at half the vertical footprint.
+            HStack(spacing: 10) {
+                if embedded, let onOpenGroupSheet {
+                    GroupBar(
+                        scope: .live,
+                        session: group.session,
+                        memberCount: group.members.count,
+                        compact: true,
+                        onTap: onOpenGroupSheet
+                    )
+                }
+                VenueChip(
+                    location: location,
+                    venues: venues,
+                    compact: true,
+                    nameShownElsewhere: true,
+                    onTap: { venueOpen = true }
                 )
             }
-            VenueChip(
-                location: location,
-                venues: venues,
-                onTap: { venueOpen = true }
-            )
             // Night snaps — every stop so far with its photos (plus the
             // "between bars" page when not checked in anywhere). Camera or
             // library, attach to any stop of the night; everything rides
@@ -13920,8 +14712,6 @@ private struct LiveSeshView: View {
                     }
                 }
             )
-            liveBACCard(bac: bac, status: status, now: now)
-            timeToSoberCard(bac: bac, status: status, now: now)
             if inGroup {
                 LiveGroupRoster(group: group, selfId: profile.id, now: now)
                 LiveRoastCard(group: group, profile: profile, now: now)
@@ -14047,8 +14837,8 @@ private struct LiveSeshView: View {
             }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(bacUnit.formatted(bac))
-                    .font(.system(size: 76, weight: .black, design: .rounded))
-                    .tracking(-2.5)
+                    .font(.system(size: 54, weight: .black, design: .rounded))
+                    .tracking(-1.8)
                     .foregroundStyle(
                         LinearGradient(
                             colors: [Color.cream, status.color.opacity(0.92)],
@@ -14068,7 +14858,7 @@ private struct LiveSeshView: View {
             }
             BACScale(bac: bac, status: status)
         }
-        .padding(20)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 26, style: .continuous)
@@ -14111,7 +14901,7 @@ private struct LiveSeshView: View {
             }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(formatDuration(hoursSober))
-                    .font(.system(size: 34, weight: .black, design: .rounded))
+                    .font(.system(size: 28, weight: .black, design: .rounded))
                     .italic()
                     .foregroundStyle(
                         LinearGradient(
@@ -14140,7 +14930,7 @@ private struct LiveSeshView: View {
                 .padding(.top, 2)
             }
         }
-        .padding(18)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)

@@ -2463,7 +2463,7 @@ struct LiveJourneyPhotosSection: View {
             // Sized to fit the title + photo strip + comment field (pre-game /
             // loose / non-bar stops also carry a location row → taller). Pages
             // top-align inside this frame so the title is never clipped.
-            .frame(height: (page < pages.count && isTall(pages[page])) ? 252 : 208)
+            .frame(height: (page < pages.count && isTall(pages[page])) ? 224 : 184)
             .animation(.spring(response: 0.45, dampingFraction: 0.85), value: page)
 
             if pages.count > 1 {
@@ -2895,6 +2895,8 @@ struct LiveJourneyPhotosSection: View {
 
     private func stopPage(_ stop: SeshStop, isCurrent: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Row 1 — stop name with its status badge pushed to the right
+            // (where the × used to sit).
             HStack(spacing: 8) {
                 Text(stop.kind == .food ? "🍔 \(stop.name)"
                      : stop.kind == .puke ? "🤮 \(stop.name)"
@@ -2903,6 +2905,7 @@ struct LiveJourneyPhotosSection: View {
                     .font(.system(size: 14, weight: .heavy, design: .rounded))
                     .foregroundStyle(Color.cream)
                     .lineLimit(1)
+                Spacer(minLength: 8)
                 if isCurrent && stop.kind == .bar && checkedIn {
                     Text("HERE NOW")
                         .font(.system(size: 8, weight: .black, design: .monospaced))
@@ -2931,7 +2934,11 @@ struct LiveJourneyPhotosSection: View {
                         .background(Capsule().fill(Color.cream.opacity(0.08)))
                         .overlay(Capsule().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
                 }
-                Spacer()
+            }
+
+            // Row 2 — nav chrome (reorder arrows, arrival time, remove)
+            // shifted down off the title row so name + badge read cleanly.
+            HStack(spacing: 8) {
                 // Reorder this stop in the journey (display only — its
                 // drinks/photos/time stay put). Shown when there's more
                 // than one stop to shuffle.
@@ -2945,6 +2952,7 @@ struct LiveJourneyPhotosSection: View {
                         page = min(pages.count - 1, page + 1)
                     }
                 }
+                Spacer(minLength: 8)
                 Text(stop.arrivedAt, format: .dateTime.hour().minute())
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(1.0)
@@ -3039,7 +3047,8 @@ private struct StopNoteEditor: View {
             TextField("Add a comment about this stop…", text: $text, axis: .vertical)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.cream)
-                .lineLimit(1...3)
+                // Starts as a single compact line and grows as you type.
+                .lineLimit(1...5)
                 .focused($focused)
                 .submitLabel(.done)
                 .onSubmit { focused = false; onCommit(text) }
