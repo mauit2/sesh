@@ -17,6 +17,7 @@ import AVFoundation
 import Combine
 import Supabase
 import SwiftUI
+import UIKit
 import Vision
 import VisionKit
 
@@ -350,6 +351,11 @@ struct BarcodeScanFlow: View {
 
     @StateObject private var lookup = BeverageLookupService()
     @State private var phase: Phase = .start
+    /// Set the instant a barcode is read. Drives the on-camera "scanned!"
+    /// confirmation (green frame + checkmark + haptic) before we leave the
+    /// camera for the lookup — so a successful read reads as a deliberate
+    /// beat, not an instant cut.
+    @State private var captured: String? = nil
 
     private enum Phase {
         case start
@@ -363,7 +369,7 @@ struct BarcodeScanFlow: View {
             Color.ink.ignoresSafeArea()
             switch phase {
             case .start:
-                Color.clear.onAppear { phase = .scanning }
+                Color.clear.onAppear { captured = nil; phase = .scanning }
             case .scanning:
                 scannerStage
             case .resolving(let code):
@@ -403,10 +409,12 @@ struct BarcodeScanFlow: View {
            DataScannerViewController.isAvailable {
             ZStack {
                 BarcodeCameraView { code in
-                    phase = .resolving(code)
+                    handleCapture(code)
                 }
                 .ignoresSafeArea()
-                scannerOverlay
+                ScannerReticle(captured: captured != nil)
+                    .allowsHitTesting(false)
+                scannerOverlay(captured: captured != nil)
             }
         } else {
             // Simulator or unsupported hardware — skip straight to manual.
@@ -414,7 +422,23 @@ struct BarcodeScanFlow: View {
         }
     }
 
-    private var scannerOverlay: some View {
+    /// A barcode was read. Confirm it on-camera (haptic + checkmark) and hold
+    /// for a short beat so the user registers the success, then hand off to
+    /// the lookup. The `captured` guard makes this idempotent — the camera
+    /// only reports the first read, but a held frame can re-deliver it.
+    private func handleCapture(_ code: String) {
+        guard captured == nil else { return }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            captured = code
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            if case .scanning = phase { phase = .resolving(code) }
+        }
+    }
+
+    private func scannerOverlay(captured: Bool) -> some View {
         VStack {
             HStack {
                 Button(action: onCancel) {
@@ -428,13 +452,14 @@ struct BarcodeScanFlow: View {
             }
             .padding()
             Spacer()
-            Text("Point at a can or bottle barcode")
+            Text(captured ? "Got it!" : "Point at a can or bottle barcode")
                 .font(.system(size: 14, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.cream)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .background(Capsule().fill(Color.ink.opacity(0.6)))
                 .padding(.bottom, 60)
+                .animation(.easeInOut(duration: 0.2), value: captured)
         }
     }
 
@@ -478,6 +503,80 @@ struct BarcodeScanFlow: View {
                 .foregroundStyle(Color.cream.opacity(0.6))
         }
         .padding(40)
+    }
+}
+
+// MARK: - Scan reticle + success confirmation
+
+/// Centered scan target drawn over the live camera. While hunting it shows a
+/// whiskey frame with a scan line sweeping top↔bottom; the moment a barcode is
+/// read (`captured`) the frame snaps green, the line drops away, and a
+/// checkmark springs in. Purely cosmetic — `allowsHitTesting(false)` at the
+/// call site keeps the cancel button + camera fully tappable.
+private struct ScannerReticle: View {
+    let captured: Bool
+
+    private let frameW: CGFloat = 280
+    private let frameH: CGFloat = 168
+    /// The brand "clear/sober" green — reused so success reads as on-brand.
+    private let success = Color(red: 0.61, green: 0.74, blue: 0.55)
+
+    @State private var sweepDown = false
+    @State private var checkScale: CGFloat = 0.3
+    @State private var checkOpacity: Double = 0
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(
+                    captured ? success : Color.whiskey,
+                    style: StrokeStyle(lineWidth: captured ? 4 : 2.5)
+                )
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(captured ? success.opacity(0.12) : Color.clear)
+                )
+                .frame(width: frameW, height: frameH)
+                .overlay {
+                    // Sweeping scan line, clipped to the frame. Hidden once
+                    // we've captured so it doesn't fight the checkmark.
+                    if !captured {
+                        Rectangle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.whiskey.opacity(0), Color.whiskey, Color.whiskey.opacity(0)],
+                                    startPoint: .leading, endPoint: .trailing
+                                )
+                            )
+                            .frame(height: 2.5)
+                            .shadow(color: Color.whiskey, radius: 6)
+                            .padding(.horizontal, 12)
+                            .offset(y: sweepDown ? frameH / 2 - 14 : -frameH / 2 + 14)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .shadow(color: (captured ? success : Color.whiskey).opacity(0.45), radius: 14)
+                .scaleEffect(captured ? 1.04 : 1)
+
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 60, weight: .bold))
+                .foregroundStyle(success)
+                .shadow(color: success.opacity(0.6), radius: 14)
+                .scaleEffect(checkScale)
+                .opacity(checkOpacity)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                sweepDown = true
+            }
+        }
+        .onChange(of: captured) { _, isCaptured in
+            guard isCaptured else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.55)) {
+                checkScale = 1.0
+                checkOpacity = 1.0
+            }
+        }
     }
 }
 

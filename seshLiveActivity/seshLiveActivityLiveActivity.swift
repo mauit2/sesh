@@ -130,6 +130,10 @@ struct seshLiveActivityLiveActivity: Widget {
                 .monospacedDigit()
                 .contentTransition(.numericText(value: state.bac))
         }
+        // The expanded region sits flush against the rounded island top/edge,
+        // which was clipping the small-caps "BAC" label — inset it clear.
+        .padding(.top, 7)
+        .padding(.leading, 4)
     }
 
     @ViewBuilder
@@ -150,6 +154,9 @@ struct seshLiveActivityLiveActivity: Widget {
                     .foregroundStyle(Color.seshCream)
             }
         }
+        // Match the leading inset so "SOBER BY" clears the rounded top/edge.
+        .padding(.top, 7)
+        .padding(.trailing, 4)
     }
 
     @ViewBuilder
