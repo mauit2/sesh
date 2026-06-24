@@ -7308,7 +7308,9 @@ private struct ModeTopBar: View {
     /// replacing the old in-page header; elsewhere it's the section name.
     @ViewBuilder
     private var sectionLeading: some View {
-        if tab == .live {
+        // Show the live status only once a sesh has actually started; before
+        // that the LIVE tab just reads "Live" like PLAN / NIGHTLINE / DEALS.
+        if tab == .live, liveStarted != nil {
             TimelineView(.periodic(from: .now, by: 30)) { ctx in
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 7) {
