@@ -9592,6 +9592,7 @@ private struct ProfileSheet: View {
     @State private var saving = false
     @State private var errorMessage: String?
     @State private var adminPanelOpen = false
+    @State private var offersAdminOpen = false
     @State private var friendsOpen = false
 
     /// Friends roster + incoming requests — shared with SessionView so the
@@ -9905,6 +9906,42 @@ private struct ProfileSheet: View {
                             )
                         }
                         .buttonStyle(PressScaleStyle())
+
+                        // Manage venue specials — add/remove curated offers
+                        // from the app (no SQL). Admin-only.
+                        Button {
+                            offersAdminOpen = true
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "tag.fill")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(Color.whiskey)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("MANAGE SPECIALS")
+                                        .font(.system(size: 12, weight: .black, design: .monospaced))
+                                        .tracking(2.0)
+                                        .foregroundStyle(Color.cream)
+                                    Text("Add or remove venue offers on the map")
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.55))
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(Color.bronze)
+                            }
+                            .padding(.vertical, 14)
+                            .padding(.horizontal, 18)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(Color.whiskey.opacity(0.08))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(PressScaleStyle())
                     }
 
                     // Support contact — opens the mail composer pre-addressed
@@ -9982,6 +10019,11 @@ private struct ProfileSheet: View {
         .sheet(isPresented: $adminPanelOpen) {
             AdminPanelView(admin: admin)
                 .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+        .sheet(isPresented: $offersAdminOpen) {
+            OffersAdminView()
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
@@ -10174,6 +10216,571 @@ private struct AdminPanelView: View {
             } else {
                 toast = "No account found for that email"
             }
+        }
+    }
+}
+
+// MARK: - Admin: manage venue specials
+//
+// Owner/admin-only. Look a bar up on the map, drop an offer on it, choose when
+// it runs (days + time window + optional end date). Backed by the admin RPCs
+// in migration 030 — no SQL needed to add or remove a special.
+
+private func offerKindLabel(_ k: String) -> String {
+    switch k {
+    case "happy_hour": return "Happy hour"
+    case "free_entry": return "Free entry"
+    case "bundle":     return "Bundle"
+    case "event":      return "Event"
+    default:           return "Price deal"
+    }
+}
+
+struct AdminOffer: Decodable, Identifiable {
+    let id: UUID
+    let venueId: UUID
+    let venueName: String
+    let lat: Double
+    let lon: Double
+    let kind: String
+    let title: String
+    let description: String?
+    let finePrint: String?
+    let redeem: String
+    let startsAt: Date?
+    let endsAt: Date?
+    let activeDays: [Int]?
+    let startMinute: Int?
+    let endMinute: Int?
+    let isActive: Bool
+    let approved: Bool
+    let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case venueId = "venue_id"
+        case venueName = "venue_name"
+        case lat, lon, kind, title, description
+        case finePrint = "fine_print"
+        case redeem
+        case startsAt = "starts_at"
+        case endsAt = "ends_at"
+        case activeDays = "active_days"
+        case startMinute = "start_minute"
+        case endMinute = "end_minute"
+        case isActive = "is_active"
+        case approved
+        case createdAt = "created_at"
+    }
+
+    /// "Mon Tue · 16:00–19:00 · until 30 Jun" style line for the admin list.
+    var scheduleSummary: String {
+        var parts: [String] = []
+        let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        if let days = activeDays, !days.isEmpty {
+            parts.append(days.sorted().compactMap { (0..<7).contains($0) ? names[$0] : nil }.joined(separator: " "))
+        } else {
+            parts.append("Every day")
+        }
+        if let s = startMinute, let e = endMinute {
+            func hhmm(_ m: Int) -> String { String(format: "%02d:%02d", m / 60, m % 60) }
+            parts.append("\(hhmm(s))–\(hhmm(e))")
+        }
+        if let end = endsAt {
+            let f = DateFormatter(); f.dateFormat = "d MMM"
+            parts.append("until \(f.string(from: end))")
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+@MainActor
+final class OffersAdminService: ObservableObject {
+    @Published private(set) var offers: [AdminOffer] = []
+    @Published private(set) var loading = false
+    /// Surfaced to the add-offer form so a failed save isn't silent.
+    @Published var lastError: String?
+
+    func load() async {
+        loading = true; defer { loading = false }
+        do {
+            offers = try await supabase.rpc("admin_list_offers").execute().value
+        } catch {
+            // leave the previous list on a transient failure
+        }
+    }
+
+    @discardableResult
+    func create(
+        venue: MapKitVenueResult,
+        kind: String, title: String, description: String, finePrint: String,
+        startsAt: Date, endsAt: Date?, activeDays: [Int]?, startMinute: Int?, endMinute: Int?
+    ) async -> Bool {
+        struct P: Encodable {
+            let p_name: String
+            let p_address: String?
+            let p_city: String?
+            let p_lat: Double
+            let p_lon: Double
+            let p_external_id: String?
+            let p_kind: String
+            let p_title: String
+            let p_description: String?
+            let p_fine_print: String?
+            let p_redeem: String
+            let p_code: String?
+            let p_starts_at: String
+            let p_ends_at: String?
+            let p_active_days: [Int]?
+            let p_start_minute: Int?
+            let p_end_minute: Int?
+        }
+        let iso = ISO8601DateFormatter()
+        lastError = nil
+        do {
+            _ = try await supabase.rpc("admin_create_offer", params: P(
+                p_name: venue.name,
+                p_address: venue.address,
+                p_city: venue.city,
+                p_lat: venue.lat,
+                p_lon: venue.lon,
+                p_external_id: venue.id,
+                p_kind: kind,
+                p_title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                p_description: description.isEmpty ? nil : description,
+                p_fine_print: finePrint.isEmpty ? nil : finePrint,
+                p_redeem: "show",
+                p_code: nil,
+                p_starts_at: iso.string(from: startsAt),
+                p_ends_at: endsAt.map { iso.string(from: $0) },
+                p_active_days: activeDays,
+                p_start_minute: startMinute,
+                p_end_minute: endMinute
+            )).execute()
+            await load()
+            return true
+        } catch {
+            lastError = String(describing: error)
+            return false
+        }
+    }
+
+    func delete(_ id: UUID) async {
+        struct P: Encodable { let p_offer_id: String }
+        do {
+            _ = try await supabase.rpc("admin_delete_offer", params: P(p_offer_id: id.uuidString.lowercased())).execute()
+            await load()
+        } catch {
+            // no-op
+        }
+    }
+}
+
+/// The management list — every curated offer + an entry point to add one.
+struct OffersAdminView: View {
+    @StateObject private var svc = OffersAdminService()
+    @State private var addOpen = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("ADMIN")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .tracking(2.4)
+                                .foregroundStyle(Color.bronze)
+                            Text("Venue specials")
+                                .font(.system(size: 26, weight: .heavy, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                        }
+                        Spacer()
+                        Button(action: { dismiss() }) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(Color.cream.opacity(0.6))
+                                .frame(width: 34, height: 34)
+                                .background(Circle().fill(Color.cream.opacity(0.06)))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+
+                    Button { addOpen = true } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundStyle(Color.ink)
+                            Text("Add a special")
+                                .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                .foregroundStyle(Color.ink)
+                            Spacer()
+                        }
+                        .padding(.vertical, 14).padding(.horizontal, 16)
+                        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.whiskey))
+                    }
+                    .buttonStyle(PressScaleStyle())
+
+                    if svc.offers.isEmpty {
+                        Text(svc.loading ? "Loading…" : "No specials yet. Add one above.")
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.5))
+                            .padding(.vertical, 24)
+                    } else {
+                        ForEach(svc.offers) { offer in
+                            adminOfferRow(offer)
+                        }
+                    }
+                    Spacer(minLength: 24)
+                }
+                .padding(20)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .task { await svc.load() }
+        .sheet(isPresented: $addOpen) {
+            AddOfferSheet(svc: svc) { addOpen = false }
+                .presentationBackground(Color.ink)
+        }
+    }
+
+    private func adminOfferRow(_ o: AdminOffer) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(o.title)
+                        .font(.system(size: 15, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .lineLimit(1)
+                    Text(offerKindLabel(o.kind).uppercased())
+                        .font(.system(size: 8, weight: .black, design: .monospaced))
+                        .tracking(0.8)
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(Capsule().fill(Color.whiskey))
+                }
+                Text(o.venueName)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.7))
+                Text(o.scheduleSummary)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.bronze)
+            }
+            Spacer(minLength: 0)
+            Button {
+                Task { await svc.delete(o.id) }
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Color(red: 0.85, green: 0.40, blue: 0.34))
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(Color.cream.opacity(0.05)))
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.cream.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+    }
+}
+
+/// The add-offer form: pick a bar on the map, write the offer, choose when.
+private struct AddOfferSheet: View {
+    @ObservedObject var svc: OffersAdminService
+    var onDone: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @StateObject private var location = LocationService()
+    @StateObject private var search = MapKitVenueSearch()
+    @State private var query = ""
+    @State private var camera: MapCameraPosition = .userLocation(fallback: .automatic)
+    @State private var selected: MapKitVenueResult?
+
+    @State private var kind = "price"
+    @State private var title = ""
+    @State private var desc = ""
+    @State private var finePrint = ""
+    @State private var days: Set<Int> = []
+    @State private var allDay = true
+    @State private var startTime = Calendar.current.date(bySettingHour: 16, minute: 0, second: 0, of: Date()) ?? Date()
+    @State private var endTime = Calendar.current.date(bySettingHour: 19, minute: 0, second: 0, of: Date()) ?? Date()
+    @State private var hasEnd = false
+    @State private var endDate = Date().addingTimeInterval(7 * 24 * 3600)
+    @State private var saving = false
+
+    private let kinds = ["price", "happy_hour", "free_entry", "bundle", "event"]
+    private let dayLabels = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
+
+    private var canSave: Bool {
+        selected != nil && !title.trimmingCharacters(in: .whitespaces).isEmpty && !saving
+    }
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack {
+                        Text("New special")
+                            .font(.system(size: 24, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        Spacer()
+                        Button(action: { dismiss() }) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(Color.cream.opacity(0.6))
+                                .frame(width: 34, height: 34)
+                                .background(Circle().fill(Color.cream.opacity(0.06)))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+
+                    venuePicker
+                    if selected != nil { offerForm }
+                    Spacer(minLength: 24)
+                }
+                .padding(20)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .task { location.requestAccess() }
+        .task(id: query) {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            search.search(query: query, origin: location.location)
+        }
+    }
+
+    @ViewBuilder
+    private var venuePicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            kicker("VENUE")
+            if let v = selected {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(v.name)
+                            .font(.system(size: 16, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        if let a = v.address {
+                            Text(a)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        }
+                    }
+                    Spacer()
+                    Button("Change") { withAnimation { selected = nil } }
+                        .font(.system(size: 12, weight: .black, design: .monospaced))
+                        .foregroundStyle(Color.whiskey)
+                }
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.whiskey.opacity(0.1)))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1))
+                Map(initialPosition: .region(MKCoordinateRegion(center: v.coordinate, latitudinalMeters: 800, longitudinalMeters: 800))) {
+                    Marker(v.name, systemImage: "wineglass.fill", coordinate: v.coordinate)
+                        .tint(Color.whiskey)
+                }
+                .frame(height: 150)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .allowsHitTesting(false)
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(Color.cream.opacity(0.5))
+                    TextField("Search a bar…", text: $query)
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .tint(Color.whiskey)
+                        .autocorrectionDisabled()
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.05)))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+
+                Map(position: $camera) {
+                    UserAnnotation()
+                    ForEach(search.results) { r in
+                        Annotation(r.name, coordinate: r.coordinate) {
+                            ZStack {
+                                Circle().fill(Color.whiskey).frame(width: 30, height: 30)
+                                    .shadow(color: Color.whiskey.opacity(0.6), radius: 5)
+                                Image(systemName: "mappin").font(.system(size: 13, weight: .bold)).foregroundStyle(Color.ink)
+                            }
+                            .onTapGesture { withAnimation { selected = r } }
+                        }
+                    }
+                }
+                .mapStyle(.standard(elevation: .flat, pointsOfInterest: .including([.nightlife, .restaurant, .brewery, .winery])))
+                .frame(height: 200)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                ForEach(search.results.prefix(6)) { r in
+                    Button { withAnimation { selected = r } } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "mappin.circle.fill").font(.system(size: 16)).foregroundStyle(Color.whiskey)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(r.name).font(.system(size: 14, weight: .bold, design: .rounded)).foregroundStyle(Color.cream).lineLimit(1)
+                                if let a = r.address {
+                                    Text(a).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Color.cream.opacity(0.5)).lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 9)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.cream.opacity(0.03)))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var offerForm: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 7) {
+                kicker("TYPE")
+                Menu {
+                    ForEach(kinds, id: \.self) { k in
+                        Button(offerKindLabel(k)) { kind = k }
+                    }
+                } label: {
+                    HStack {
+                        Text(offerKindLabel(kind)).foregroundStyle(Color.cream)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.bronze)
+                    }
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .padding(.horizontal, 14).padding(.vertical, 12)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.cream.opacity(0.05)))
+                }
+            }
+
+            formField("HEADLINE", text: $title, placeholder: "39 kr stora stark")
+            formField("DESCRIPTION", text: $desc, placeholder: "Show this at the bar", multiline: true)
+            formField("FINE PRINT (optional)", text: $finePrint, placeholder: "20+ · one per guest")
+
+            VStack(alignment: .leading, spacing: 8) {
+                kicker("ON WHICH DAYS")
+                HStack(spacing: 6) {
+                    ForEach(0..<7, id: \.self) { d in
+                        Button {
+                            if days.contains(d) { days.remove(d) } else { days.insert(d) }
+                        } label: {
+                            Text(dayLabels[d])
+                                .font(.system(size: 11, weight: .black, design: .monospaced))
+                                .foregroundStyle(days.contains(d) ? Color.ink : Color.cream.opacity(0.6))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 9)
+                                .background(Capsule().fill(days.contains(d) ? Color.whiskey : Color.cream.opacity(0.05)))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                Text(days.isEmpty ? "Empty = every day" : "Selected days only")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.cream.opacity(0.4))
+            }
+
+            Toggle(isOn: $allDay) {
+                Text("Runs all day").font(.system(size: 14, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream)
+            }
+            .tint(Color.whiskey)
+            if !allDay {
+                HStack(spacing: 14) {
+                    DatePicker("From", selection: $startTime, displayedComponents: .hourAndMinute)
+                    DatePicker("To", selection: $endTime, displayedComponents: .hourAndMinute)
+                }
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.7))
+                .tint(Color.whiskey)
+            }
+
+            Toggle(isOn: $hasEnd) {
+                Text("Has an end date").font(.system(size: 14, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream)
+            }
+            .tint(Color.whiskey)
+            if hasEnd {
+                DatePicker("Ends", selection: $endDate, displayedComponents: .date)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.7))
+                    .tint(Color.whiskey)
+            }
+
+            Button(action: save) {
+                HStack {
+                    if saving { ProgressView().tint(Color.ink) }
+                    Text(saving ? "Saving…" : "Save special")
+                        .font(.system(size: 15, weight: .black, design: .rounded))
+                        .foregroundStyle(Color.ink)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(canSave ? Color.whiskey : Color.cream.opacity(0.12)))
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(!canSave)
+            .padding(.top, 4)
+
+            if let err = svc.lastError {
+                Text(err)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color(red: 0.85, green: 0.40, blue: 0.34))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func save() {
+        guard let venue = selected else { return }
+        saving = true
+        func minutes(_ d: Date) -> Int {
+            let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+            return (c.hour ?? 0) * 60 + (c.minute ?? 0)
+        }
+        Task {
+            let ok = await svc.create(
+                venue: venue,
+                kind: kind,
+                title: title,
+                description: desc,
+                finePrint: finePrint,
+                startsAt: Date(),
+                endsAt: hasEnd ? endDate : nil,
+                activeDays: days.isEmpty ? nil : days.sorted(),
+                startMinute: allDay ? nil : minutes(startTime),
+                endMinute: allDay ? nil : minutes(endTime)
+            )
+            saving = false
+            if ok { onDone(); dismiss() }
+        }
+    }
+
+    private func kicker(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .tracking(2.0)
+            .foregroundStyle(Color.bronze)
+    }
+
+    @ViewBuilder
+    private func formField(_ label: String, text: Binding<String>, placeholder: String, multiline: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            kicker(label)
+            Group {
+                if multiline {
+                    TextField("", text: text, prompt: Text(placeholder).foregroundStyle(Color.cream.opacity(0.35)), axis: .vertical)
+                        .lineLimit(1...3)
+                } else {
+                    TextField("", text: text, prompt: Text(placeholder).foregroundStyle(Color.cream.opacity(0.35)))
+                }
+            }
+            .font(.system(size: 15, weight: .medium, design: .rounded))
+            .foregroundStyle(Color.cream)
+            .tint(Color.whiskey)
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.cream.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
         }
     }
 }
