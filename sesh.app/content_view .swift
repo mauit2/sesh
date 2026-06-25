@@ -2292,23 +2292,22 @@ struct MapKitVenueResult: Identifiable, Hashable {
 
     init(mapItem: MKMapItem, from origin: CLLocation?) {
         self.mapItem = mapItem
-        // iOS 26+ APIs: `location` for coordinates, `address` for the
-        // short street line, `addressRepresentations` for structured
-        // city/region. Replaces the deprecated `placemark` accessors.
-        let coord = mapItem.location.coordinate
+        // Read location + address from the placemark (available since iOS 9)
+        // rather than the iOS-26-only `location` / `address` accessors, so the
+        // app can deploy back to iOS 18.
+        let placemark = mapItem.placemark
+        let coord = placemark.coordinate
         let extID = mapItem.identifier?.rawValue
         self.id = extID
             ?? "\(coord.latitude),\(coord.longitude)|\(mapItem.name ?? "")"
         self.name = mapItem.name ?? "Unknown"
-        // shortAddress is the compact "Vasagatan 1" form when available;
-        // fall back to fullAddress so we never show nothing on rows that
-        // do have an address.
-        if let addr = mapItem.address {
-            self.address = addr.shortAddress ?? addr.fullAddress
+        // Compact street line ("Järntorgsgatan 12") from the placemark.
+        if let street = placemark.thoroughfare {
+            self.address = placemark.subThoroughfare.map { "\(street) \($0)" } ?? street
         } else {
             self.address = nil
         }
-        self.city = mapItem.addressRepresentations?.cityName
+        self.city = placemark.locality
         self.lat = coord.latitude
         self.lon = coord.longitude
         if let origin {
@@ -2422,7 +2421,13 @@ final class VenueService: ObservableObject {
     @Published private(set) var specialsByVenue: [UUID: [VenueSpecial]] = [:]
     /// Live promotional offers grouped by venue (Phase A "deals near you").
     @Published private(set) var offersByVenue: [UUID: [VenueOffer]] = [:]
+    /// Real Apple Maps coordinates resolved per venue (the seeded lat/lon can
+    /// be approximate). Resolved once and cached to disk — see
+    /// resolveOfferCoordinates() — so map pins are accurate without paying a
+    /// MapKit lookup (or its memory) on every open.
+    @Published private(set) var resolvedCoords: [UUID: CLLocationCoordinate2D] = [:]
     @Published private(set) var loading = false
+    private let coordCacheKey = "sesh.venueCoords.v1"
 
     /// User-selected current venue. Persisted across launches via
     /// UserDefaults so a "check-in" survives an app restart. The chip in
@@ -2480,6 +2485,56 @@ final class VenueService: ObservableObject {
     /// the deals map.
     var venuesWithOffers: [Venue] {
         venues.filter { !(offersByVenue[$0.id]?.isEmpty ?? true) }
+    }
+
+    /// Where to pin a venue — the MapKit-resolved coordinate if we have it,
+    /// else the stored (possibly approximate) lat/lon.
+    func coordinate(for venue: Venue) -> CLLocationCoordinate2D {
+        resolvedCoords[venue.id] ?? CLLocationCoordinate2D(latitude: venue.lat, longitude: venue.lon)
+    }
+
+    /// Resolve real Apple Maps coordinates for every venue with a live offer,
+    /// once, cached to disk. Idempotent + cheap after the first run (cache
+    /// hit), so both the deals map and the check-in map can call it freely.
+    func resolveOfferCoordinates() async {
+        loadCoordCache()
+        for venue in venuesWithOffers where resolvedCoords[venue.id] == nil {
+            if let c = await geocode(venue) {
+                resolvedCoords[venue.id] = c
+                saveCoordCache()
+            }
+        }
+    }
+
+    private func geocode(_ venue: Venue) async -> CLLocationCoordinate2D? {
+        let request = MKLocalSearch.Request()
+        let parts = [venue.name] + [venue.address, venue.city].compactMap { $0 }
+        request.naturalLanguageQuery = parts.joined(separator: ", ")
+        request.resultTypes = [.pointOfInterest, .address]
+        // Bias to the seeded area so a common bar name resolves to the right
+        // city.
+        request.region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: venue.lat, longitude: venue.lon),
+            latitudinalMeters: 30_000, longitudinalMeters: 30_000)
+        guard let response = try? await MKLocalSearch(request: request).start() else { return nil }
+        return response.mapItems.first?.placemark.coordinate
+    }
+
+    private func loadCoordCache() {
+        guard resolvedCoords.isEmpty,
+              let dict = UserDefaults.standard.dictionary(forKey: coordCacheKey) as? [String: [Double]]
+        else { return }
+        for (key, pair) in dict where pair.count == 2 {
+            if let id = UUID(uuidString: key) {
+                resolvedCoords[id] = CLLocationCoordinate2D(latitude: pair[0], longitude: pair[1])
+            }
+        }
+    }
+
+    private func saveCoordCache() {
+        var dict: [String: [Double]] = [:]
+        for (id, c) in resolvedCoords { dict[id.uuidString] = [c.latitude, c.longitude] }
+        UserDefaults.standard.set(dict, forKey: coordCacheKey)
     }
 
     /// Specials for the currently-checked-in venue, mapped to DrinkOptions
@@ -6292,7 +6347,10 @@ private func nightPhotos(_ recap: NightRecap) -> [NightPhoto] {
 private enum RemoteImageCache {
     static let shared: NSCache<NSString, UIImage> = {
         let c = NSCache<NSString, UIImage>()
-        c.countLimit = 120
+        c.countLimit = 80
+        // Hard ceiling on decoded-image memory regardless of count — without a
+        // cost limit the cache can balloon well past what the count implies.
+        c.totalCostLimit = 48 * 1024 * 1024   // 48 MB
         return c
     }()
 }
@@ -6334,7 +6392,8 @@ private struct DownsampledAsyncImage: View {
         }
         guard let (data, _) = try? await URLSession.shared.data(from: url),
               let down = Self.downsample(data: data, maxPixels: maxPixels) else { return }
-        RemoteImageCache.shared.setObject(down, forKey: key)
+        let cost = down.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
+        RemoteImageCache.shared.setObject(down, forKey: key, cost: cost)
         if !Task.isCancelled { image = down }
     }
 
@@ -8104,29 +8163,40 @@ private struct SessionView: View {
 
     /// DEALS — the venue-offers discovery map (Phase A). Embedded as a tab,
     /// so it shows no close button; navigation is the bottom bar.
+    ///
+    /// Only build the MapKit map while the DEALS tab is actually selected. A
+    /// SwiftUI Map is by far the heaviest view in the app (tile/texture memory
+    /// that keeps growing as it renders), and a paged TabView keeps every page
+    /// alive — so an always-resident map quietly costs ~150MB+ in the
+    /// background. Gating it tears the map down the moment you leave the tab.
+    @ViewBuilder
     private var offersPage: some View {
-        OffersMapView(venues: venues, location: location)
-            // The interactive map swallows the TabView's horizontal page
-            // swipe, so a thin left-edge strip provides the "grab the edge to
-            // go back" gesture → back to Nightline (the previous section).
-            .overlay(alignment: .leading) {
-                Color.clear
-                    .frame(width: 24)
-                    .frame(maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 12)
-                            .onEnded { value in
-                                if value.translation.width > 40,
-                                   abs(value.translation.height) < 70 {
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
-                                        tab = .timeline
+        if tab == .offers {
+            OffersMapView(venues: venues, location: location)
+                // The interactive map swallows the TabView's horizontal page
+                // swipe, so a thin left-edge strip provides the "grab the edge
+                // to go back" gesture → back to Nightline.
+                .overlay(alignment: .leading) {
+                    Color.clear
+                        .frame(width: 24)
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 12)
+                                .onEnded { value in
+                                    if value.translation.width > 40,
+                                       abs(value.translation.height) < 70 {
+                                        withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                                            tab = .timeline
+                                        }
                                     }
                                 }
-                            }
-                    )
-                    .ignoresSafeArea()
-            }
+                        )
+                        .ignoresSafeArea()
+                }
+        } else {
+            Color.clear
+        }
     }
 
     /// TIMELINE — the friends feed of posted nights.
@@ -11037,7 +11107,8 @@ private struct OffersMapView: View {
         let all = venues.venuesWithOffers
         guard let here = location.location else { return all }
         return all.filter {
-            CLLocation(latitude: $0.lat, longitude: $0.lon).distance(from: here) <= radiusMeters
+            let c = venues.coordinate(for: $0)
+            return CLLocation(latitude: c.latitude, longitude: c.longitude).distance(from: here) <= radiusMeters
         }
     }
 
@@ -11050,7 +11121,7 @@ private struct OffersMapView: View {
                 ForEach(pins) { venue in
                     Annotation(
                         venue.name,
-                        coordinate: CLLocationCoordinate2D(latitude: venue.lat, longitude: venue.lon)
+                        coordinate: venues.coordinate(for: venue)
                     ) {
                         OfferPin(count: venues.offers(for: venue).count,
                                  selected: selectedVenueId == venue.id)
@@ -11062,7 +11133,7 @@ private struct OffersMapView: View {
                     }
                 }
             }
-            .mapStyle(.standard(pointsOfInterest: .including([.nightlife, .restaurant, .brewery, .winery])))
+            .mapStyle(.standard(elevation: .flat, pointsOfInterest: .including([.nightlife, .restaurant, .brewery, .winery])))
 
             header
 
@@ -11072,6 +11143,8 @@ private struct OffersMapView: View {
         }
         .task {
             await venues.refresh()
+            recenter()
+            await venues.resolveOfferCoordinates()
             recenter()
         }
     }
@@ -11154,7 +11227,7 @@ private struct OffersMapView: View {
                                                 latitudinalMeters: span, longitudinalMeters: span))
         } else if let first = pins.first {
             camera = .region(MKCoordinateRegion(
-                center: CLLocationCoordinate2D(latitude: first.lat, longitude: first.lon),
+                center: venues.coordinate(for: first),
                 latitudinalMeters: span, longitudinalMeters: span))
         } else {
             camera = .automatic
@@ -11485,6 +11558,29 @@ private struct VenueSheet: View {
         return String(format: "%.1f km away", m / 1000)
     }
 
+    /// The curated offer-venue a search hit corresponds to (matched by being
+    /// at essentially the same spot as the venue's resolved coordinate), if
+    /// any. Lets us flag the search row as having a special and suppress the
+    /// duplicate plain pin on the map (the offer pin already covers it).
+    private func offerVenue(for result: MapKitVenueResult) -> Venue? {
+        let hit = CLLocation(latitude: result.lat, longitude: result.lon)
+        return venues.venuesWithOffers.first { venue in
+            let c = venues.coordinate(for: venue)
+            return CLLocation(latitude: c.latitude, longitude: c.longitude).distance(from: hit) < 100
+        }
+    }
+
+    /// True when an offer-venue is one of the current search hits — so its
+    /// deal pin can enlarge to point out "this is the bar you searched".
+    private func matchesSearch(_ venue: Venue) -> Bool {
+        guard !search.results.isEmpty else { return false }
+        let c = venues.coordinate(for: venue)
+        let vLoc = CLLocation(latitude: c.latitude, longitude: c.longitude)
+        return search.results.contains {
+            CLLocation(latitude: $0.lat, longitude: $0.lon).distance(from: vLoc) < 100
+        }
+    }
+
     var body: some View {
         ZStack {
             AtmosphereBackground(accent: .whiskey)
@@ -11539,10 +11635,13 @@ private struct VenueSheet: View {
 
                     venueMapSection
 
+                    // Curated specials are NOT listed here (that would crowd
+                    // the check-in sheet) — bars with offers show as deal pins
+                    // on the map above, and the DEALS tab is the place to
+                    // browse all nearby offers. Only the live Apple Maps search
+                    // results list below, when the user is searching.
                     if !trimmedQuery.isEmpty {
                         searchSection
-                    } else {
-                        featuredSection
                     }
 
                     Spacer(minLength: 24)
@@ -11556,6 +11655,8 @@ private struct VenueSheet: View {
         .task {
             await venues.refresh()
             location.requestAccess()
+            // Accurate pins for bars with specials (cached after first run).
+            await venues.resolveOfferCoordinates()
         }
         // Default the toggle to whatever the user is currently doing —
         // following ⇒ "whole group", broken away ⇒ "just me".
@@ -11602,10 +11703,26 @@ private struct VenueSheet: View {
         VStack(spacing: 10) {
             Map(position: $camera, selection: $mapSelection) {
                 UserAnnotation()
+                // Bars with live specials — a deal pin (same as the DEALS map)
+                // so you can spot, at a glance, which bars have an offer. Tap
+                // to preview + check in from the card.
+                ForEach(venues.venuesWithOffers) { venue in
+                    Annotation(
+                        venue.name,
+                        coordinate: venues.coordinate(for: venue)
+                    ) {
+                        OfferPin(count: venues.offers(for: venue).count,
+                                 selected: selectedVenue?.venue?.id == venue.id
+                                     || matchesSearch(venue))
+                            .onTapGesture { selectVenue(venue) }
+                    }
+                }
                 // Search-result pins — selectable (Marker(item:) feeds the
-                // MapSelection binding).
+                // MapSelection binding). Skip any hit that's already a curated
+                // offer venue: the deal pin above covers it, so a special bar
+                // shows ONE (special) pin, not a duplicate plain one.
                 ForEach(search.results) { result in
-                    if let item = result.mapItem {
+                    if let item = result.mapItem, offerVenue(for: result) == nil {
                         Marker(result.name, systemImage: "wineglass.fill", coordinate: result.coordinate)
                             .tint(venues.currentVenue?.externalId == result.id ? Color.green : Color.whiskey)
                             .tag(MapSelection(item))
@@ -11618,7 +11735,7 @@ private struct VenueSheet: View {
                         .tint(Color.green)
                 }
             }
-            .mapStyle(.standard(pointsOfInterest: .including([.nightlife, .restaurant, .brewery, .winery])))
+            .mapStyle(.standard(elevation: .flat, pointsOfInterest: .including([.nightlife, .restaurant, .brewery, .winery])))
             .mapControls {
                 MapUserLocationButton()
                 MapCompass()
@@ -11651,7 +11768,7 @@ private struct VenueSheet: View {
             if let r = search.results.first(where: { $0.mapItem == item }) {
                 return SelectedVenue(name: r.name, lat: r.lat, lon: r.lon, result: r, venue: nil)
             }
-            let c = item.location.coordinate
+            let c = item.placemark.coordinate
             return SelectedVenue(name: item.name ?? "Bar", lat: c.latitude, lon: c.longitude, result: nil, venue: nil)
         }
         if let feature = sel.feature {
@@ -11767,9 +11884,12 @@ private struct VenueSheet: View {
     /// Select a curated venue row → preview on the map + confirm card.
     private func selectVenue(_ venue: Venue) {
         mapSelection = nil
-        let coord = CLLocationCoordinate2D(latitude: venue.lat, longitude: venue.lon)
+        // Use the resolved (real Apple Maps) coordinate — the same spot the
+        // deal pin is drawn at — so the camera centres on the pin instead of
+        // the seeded approximate point.
+        let coord = venues.coordinate(for: venue)
         selectedVenue = SelectedVenue(
-            name: venue.name, lat: venue.lat, lon: venue.lon, result: nil, venue: venue
+            name: venue.name, lat: coord.latitude, lon: coord.longitude, result: nil, venue: venue
         )
         withAnimation(.easeInOut(duration: 0.5)) {
             camera = .region(regionFitting(coordinate: coord))
@@ -11882,7 +12002,7 @@ private struct VenueSheet: View {
         VStack(alignment: .leading, spacing: 10) {
             sectionHeader(
                 "ANY BAR",
-                caption: search.isSearching ? "Searching…" : "From Apple Maps · no specials"
+                caption: search.isSearching ? "Searching…" : "From Apple Maps"
             )
             if search.isSearching && search.results.isEmpty {
                 HStack(spacing: 10) {
@@ -11900,16 +12020,25 @@ private struct VenueSheet: View {
                     .padding(.vertical, 14)
             } else {
                 ForEach(search.results) { result in
+                    let offer = offerVenue(for: result)
                     MapKitResultRow(
                         result: result,
                         distance: distanceLabel(metres: result.distance),
                         isPending: checkInInFlight == result.id,
                         isCurrent: venues.currentVenue?.externalId == result.id
                             || selectedVenue?.result?.id == result.id
+                            || (offer != nil && selectedVenue?.venue?.id == offer?.id),
+                        offerCount: offer.map { venues.offers(for: $0).count } ?? 0
                     ) {
                         // Preview on the map first — don't check in yet.
-                        // Confirm (or pick another) from the card.
-                        selectResult(result)
+                        // A curated offer bar previews the curated venue (so
+                        // its specials attach on check-in); anything else
+                        // previews the raw Apple Maps hit.
+                        if let offer {
+                            selectVenue(offer)
+                        } else {
+                            selectResult(result)
+                        }
                     }
                 }
             }
@@ -12230,36 +12359,58 @@ private struct VenueRow: View {
 
 /// Row for a MapKit search hit. Visually muted compared to VenueRow so
 /// the user reads "this is not a curated bar, just any place that exists
-/// on the map." No FEATURED badge, no specials affordance, no star —
-/// just name, address, and distance. Tapping triggers a check-in flow
-/// that may need a network round-trip, hence the spinner state.
+/// on the map" — UNLESS the hit is one of our curated offer venues, in
+/// which case it gets the whiskey treatment + a SPECIAL badge. Tapping
+/// triggers a check-in flow that may need a network round-trip, hence the
+/// spinner state.
 private struct MapKitResultRow: View {
     let result: MapKitVenueResult
     let distance: String?
     let isPending: Bool
     let isCurrent: Bool
+    /// >0 when this hit is a curated offer venue — drives the special styling.
+    var offerCount: Int = 0
     let action: () -> Void
+
+    private var hasOffer: Bool { offerCount > 0 }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 14) {
                 ZStack {
                     Circle()
-                        .fill(isCurrent ? Color.whiskey.opacity(0.32) : Color.cream.opacity(0.05))
+                        .fill(hasOffer ? Color.whiskey
+                              : (isCurrent ? Color.whiskey.opacity(0.32) : Color.cream.opacity(0.05)))
                         .frame(width: 44, height: 44)
                     if isPending {
                         ProgressView().tint(Color.cream.opacity(0.8))
                     } else {
-                        Image(systemName: "mappin")
+                        Image(systemName: hasOffer ? "wineglass.fill" : "mappin")
                             .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(isCurrent ? Color.whiskey : Color.cream.opacity(0.6))
+                            .foregroundStyle(hasOffer ? Color.ink
+                                             : (isCurrent ? Color.whiskey : Color.cream.opacity(0.6)))
                     }
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(result.name)
-                        .font(.system(size: 15, weight: .heavy, design: .rounded))
-                        .foregroundStyle(Color.cream)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(result.name)
+                            .font(.system(size: 15, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .lineLimit(1)
+                        if hasOffer {
+                            HStack(spacing: 3) {
+                                Image(systemName: "tag.fill")
+                                    .font(.system(size: 8, weight: .black))
+                                Text(offerCount == 1 ? "SPECIAL" : "\(offerCount) SPECIALS")
+                                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                                    .tracking(1.0)
+                            }
+                            .foregroundStyle(Color.ink)
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(Capsule().fill(Color.whiskey))
+                            .shadow(color: Color.whiskey.opacity(0.5), radius: 4)
+                        }
+                    }
                     HStack(spacing: 8) {
                         if let addr = result.address, !addr.isEmpty {
                             Text(addr)
@@ -12299,15 +12450,18 @@ private struct MapKitResultRow: View {
             .padding(.vertical, 11)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(isCurrent ? Color.whiskey.opacity(0.10) : Color.cream.opacity(0.025))
+                    .fill(hasOffer ? Color.whiskey.opacity(0.15)
+                          : (isCurrent ? Color.whiskey.opacity(0.10) : Color.cream.opacity(0.025)))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(
-                        isCurrent ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.06),
-                        lineWidth: 1
+                        hasOffer ? Color.whiskey.opacity(0.6)
+                        : (isCurrent ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.06)),
+                        lineWidth: hasOffer ? 1.5 : 1
                     )
             )
+            .shadow(color: hasOffer ? Color.whiskey.opacity(0.28) : .clear, radius: 12, y: 4)
             .opacity(isPending ? 0.7 : 1)
         }
         .buttonStyle(PressScaleStyle())
