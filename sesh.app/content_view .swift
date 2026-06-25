@@ -1749,7 +1749,7 @@ final class SessionService: ObservableObject {
     /// with the call sites — we don't actually use it anymore (the
     /// per-mode flags decouple the two stores at the DB level), but
     /// callers still pass it and that's fine.
-    func leave(cousinSessionId: UUID? = nil) async {
+    func leave(cousinSessionId: UUID? = nil, captureRecap: Bool = true) async {
         _ = cousinSessionId  // intentionally unused under the per-mode model
         guard let sid = session?.id, let uid = myId else { clearLocal(); return }
         // Two concrete Encodable patches so we match the rest of the
@@ -1778,8 +1778,11 @@ final class SessionService: ObservableObject {
             // Swallow — same semantics as the previous `try?`. We
             // still go idle locally; the user can retry next session.
         }
-        // Leaving a live group ends my night → hand off the recap.
-        captureLiveEnd(drinks: drinks, members: members, ghosts: ghosts)
+        // Ending → hand off the recap. "Just leaving" (to go join another
+        // sesh) skips the recap; the night isn't saved.
+        if captureRecap {
+            captureLiveEnd(drinks: drinks, members: members, ghosts: ghosts)
+        }
         clearLocal()
     }
 
@@ -1790,7 +1793,7 @@ final class SessionService: ObservableObject {
     /// their next refresh tick (within ~3s) and goes idle locally. The
     /// OTHER mode keeps running as if nothing happened — the cousin
     /// store on every phone (including the host's) is none the wiser.
-    func end(cousinSessionId: UUID? = nil) async {
+    func end(cousinSessionId: UUID? = nil, captureRecap: Bool = true) async {
         _ = cousinSessionId  // intentionally unused under the per-mode model
         guard let sid = session?.id else { clearLocal(); return }
         struct ActivePlanPatch: Encodable { let active_plan: Bool }
@@ -1810,8 +1813,11 @@ final class SessionService: ObservableObject {
         } catch {
             // Swallow — same semantics as the previous `try?`.
         }
-        // Host ending a live group ends everyone's night → recap for me too.
-        captureLiveEnd(drinks: drinks, members: members, ghosts: ghosts)
+        // Host ending a live group ends everyone's night → recap for me too,
+        // unless the host is just leaving to keep their night going elsewhere.
+        if captureRecap {
+            captureLiveEnd(drinks: drinks, members: members, ghosts: ghosts)
+        }
         clearLocal()
     }
 
@@ -1820,33 +1826,58 @@ final class SessionService: ObservableObject {
     /// stamps `live = true`. Plan and live drinks are mutually exclusive
     /// per row so the two ledgers never bleed into each other even when
     /// both stores happen to track the same underlying session.
-    func addDrink(_ option: DrinkOption, shared: Bool = false) async {
+    func addDrink(_ option: DrinkOption, shared: Bool = false, consumedAt: Date? = nil) async {
         guard let sid = session?.id, let uid = myId else { return }
-        struct D: Encodable {
-            let session_id: String
-            let profile_id: String
-            let drink_name: String
-            let volume_ml: Double
-            let abv: Double
-            let shared: Bool
-            let live: Bool
-        }
-        let payload = D(
-            session_id: sid.uuidString.lowercased(),
-            profile_id: uid.uuidString.lowercased(),
-            drink_name: option.name,
-            volume_ml: option.volumeML,
-            abv: option.abv,
-            shared: shared,
-            live: scopeLive
-        )
         do {
-            let inserted: SessionDrink = try await supabase.from("session_drinks")
-                .insert(payload)
-                .select()
-                .single()
-                .execute()
-                .value
+            let inserted: SessionDrink
+            if let consumedAt {
+                // Carrying a drink across stores (joining a group with a night
+                // already underway) — preserve its original time so BAC stays
+                // accurate. A normal pour omits created_at and the DB stamps now().
+                struct DT: Encodable {
+                    let session_id: String
+                    let profile_id: String
+                    let drink_name: String
+                    let volume_ml: Double
+                    let abv: Double
+                    let shared: Bool
+                    let live: Bool
+                    let created_at: String
+                }
+                inserted = try await supabase.from("session_drinks")
+                    .insert(DT(
+                        session_id: sid.uuidString.lowercased(),
+                        profile_id: uid.uuidString.lowercased(),
+                        drink_name: option.name,
+                        volume_ml: option.volumeML,
+                        abv: option.abv,
+                        shared: shared,
+                        live: scopeLive,
+                        created_at: ISO8601DateFormatter().string(from: consumedAt)
+                    ))
+                    .select().single().execute().value
+            } else {
+                struct D: Encodable {
+                    let session_id: String
+                    let profile_id: String
+                    let drink_name: String
+                    let volume_ml: Double
+                    let abv: Double
+                    let shared: Bool
+                    let live: Bool
+                }
+                inserted = try await supabase.from("session_drinks")
+                    .insert(D(
+                        session_id: sid.uuidString.lowercased(),
+                        profile_id: uid.uuidString.lowercased(),
+                        drink_name: option.name,
+                        volume_ml: option.volumeML,
+                        abv: option.abv,
+                        shared: shared,
+                        live: scopeLive
+                    ))
+                    .select().single().execute().value
+            }
             drinks.append(inserted)
         } catch {
             await refresh()
@@ -2007,7 +2038,7 @@ final class SessionService: ObservableObject {
         persistSessionID(nil)
     }
 
-    private func refresh() async {
+    func refresh() async {
         guard let sid = session?.id else { return }
         do {
             // Per-mode roster: only fetch members whose `in_<scope>`
@@ -7281,25 +7312,38 @@ private struct ModeTopBar: View {
     /// to confirm via the shared binding.
     var liveCanEnd: Bool = false
     var onEndLive: () -> Void = {}
+    /// Group-live exit, surfaced at the top so you don't have to dig into the
+    /// group sheet. Host ends for everyone; a member can leave (to join
+    /// another sesh) or end their own night.
+    var liveIsHost: Bool = false
+    var onEndGroup: () -> Void = {}
+    var onLeaveGroup: () -> Void = {}
+    var onEndMyGroupNight: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 10) {
             sectionLeading
             Spacer(minLength: 6)
-            // END moves up here next to the status (solo live only).
+            // Exit control — solo END, or a group end/leave menu.
             if liveCanEnd {
                 Button(action: onEndLive) {
-                    Text("END")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .tracking(2.0)
-                        .foregroundStyle(Color.cream)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(Capsule().fill(Color.cream.opacity(0.06)))
-                        .overlay(Capsule().strokeBorder(Color.cream.opacity(0.2), lineWidth: 1))
+                    exitPill("END")
                 }
                 .buttonStyle(PressScaleStyle())
                 .accessibilityLabel("End live sesh")
+            } else if liveInGroup {
+                Menu {
+                    if liveIsHost {
+                        Button("Leave & keep my night") { onLeaveGroup() }
+                        Button("End sesh for everyone", role: .destructive) { onEndGroup() }
+                    } else {
+                        Button("Leave group sesh") { onLeaveGroup() }
+                        Button("End my sesh", role: .destructive) { onEndMyGroupNight() }
+                    }
+                } label: {
+                    exitPill(liveIsHost ? "END" : "EXIT")
+                }
+                .accessibilityLabel(liveIsHost ? "End group sesh" : "Leave or end group sesh")
             }
             // Friends — set your @username, search + add friends, invite
             // them to a sesh. Always present.
@@ -7361,6 +7405,18 @@ private struct ModeTopBar: View {
             .buttonStyle(PressScaleStyle())
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: inboxCount > 0)
+    }
+
+    /// The shared whiskey-outline pill used for the END / EXIT control.
+    private func exitPill(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .bold, design: .monospaced))
+            .tracking(2.0)
+            .foregroundStyle(Color.cream)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(Color.cream.opacity(0.06)))
+            .overlay(Capsule().strokeBorder(Color.cream.opacity(0.2), lineWidth: 1))
     }
 
     /// Top-left content. On LIVE it's the sesh status (dot + label + elapsed),
@@ -7787,6 +7843,62 @@ private struct SessionView: View {
         return live.startedAt
     }
 
+    /// Leave the live group but keep the night going. The drinks live in the
+    /// group session, so a plain leave would reset them to 0 — instead, copy
+    /// my drinks into the solo live sesh first, then leave without a recap.
+    /// The checked-in venue stays. Now I can go join another sesh with my BAC
+    /// still counting. (Shared rounds copy whole, which over-counts slightly —
+    /// erring high is the safe direction for a BAC readout.)
+    /// Carry my solo night INTO a group I just joined so my drink count
+    /// doesn't reset to 0 — preserving each drink's original time so BAC stays
+    /// accurate. Clears the solo store once they're safely in the group.
+    /// (Combined with the group→solo transfer on leave, my night follows me
+    /// across every transition: solo↔group and group→group.)
+    private func carrySoloNightIntoGroup() {
+        guard !live.drinks.isEmpty else { return }
+        let carried = live.drinks.sorted(by: { $0.consumedAt < $1.consumedAt })
+        Task {
+            for d in carried {
+                await liveGroup.addDrink(d.option(), shared: false, consumedAt: d.consumedAt)
+            }
+            // Re-sync from the DB so a concurrent enter() refresh can't drop
+            // the just-carried rows, THEN clear the solo store.
+            await liveGroup.refresh()
+            live.end()
+        }
+    }
+
+    /// Re-add a set of drinks (captured from the group we just left during a
+    /// direct group→group switch) into the group that's now current, keeping
+    /// their original times. The source rows stay in the old group's ledger;
+    /// these copies make the count follow me into the new group.
+    private func carryDrinksIntoCurrentGroup(_ previous: [SessionDrink]) {
+        guard !previous.isEmpty else { return }
+        let carried = previous.sorted(by: { $0.createdAt < $1.createdAt })
+        Task {
+            for d in carried {
+                await liveGroup.addDrink(venues.resolveOption(for: d), shared: false, consumedAt: d.createdAt)
+            }
+            await liveGroup.refresh()
+        }
+    }
+
+    private func leaveGroupKeepingNight() {
+        for d in liveGroup.liveTimeline(for: profile.id).sorted(by: { $0.createdAt < $1.createdAt }) {
+            live.add(venues.resolveOption(for: d), at: d.createdAt)
+        }
+        // A host can't "leave" their own group, so leaving-to-keep-night ends
+        // it for everyone (no recap for me — my drinks moved to the solo sesh).
+        let host = liveGroup.isHost
+        Task {
+            if host {
+                await liveGroup.end(cousinSessionId: planGroup.session?.id, captureRecap: false)
+            } else {
+                await liveGroup.leave(cousinSessionId: planGroup.session?.id, captureRecap: false)
+            }
+        }
+    }
+
     /// Count of things the user has actively added to tonight's journey —
     /// check-ins, loose photos, loose/pre-game spots, and a pre-game note. A
     /// rise in this signals the first real action and starts the live sesh
@@ -7820,7 +7932,15 @@ private struct SessionView: View {
                     liveInGroup: liveGroup.isActive,
                     liveMemberCount: liveGroup.members.count,
                     liveCanEnd: !liveGroup.isActive && live.isActive,
-                    onEndLive: { liveConfirmEnd = true }
+                    onEndLive: { liveConfirmEnd = true },
+                    liveIsHost: liveGroup.isHost,
+                    onEndGroup: {
+                        Task { await liveGroup.end(cousinSessionId: planGroup.session?.id) }
+                    },
+                    onLeaveGroup: { leaveGroupKeepingNight() },
+                    onEndMyGroupNight: {
+                        Task { await liveGroup.leave(cousinSessionId: planGroup.session?.id, captureRecap: true) }
+                    }
                 )
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
@@ -8069,10 +8189,24 @@ private struct SessionView: View {
         //     (covers every group-end path, not just the solo END button
         //     — that was the original "stale ghosts" bug).
         .onChange(of: liveGroup.session?.id) { old, new in
-            if old == nil && new != nil {
+            if new != nil {
                 ghosts.hydrate(liveGroup.ghosts)
                 ghosts.syncSink = { [weak liveGroup] members in
                     Task { @MainActor in await liveGroup?.syncGhosts(members) }
+                }
+                if old == nil {
+                    // Solo → group: carry my running solo night into the group.
+                    carrySoloNightIntoGroup()
+                } else if let oldId = old, oldId != new {
+                    // Group → group switch (joined another group without
+                    // leaving first). enter() hasn't yet swapped `drinks` to
+                    // the new group, so the timeline still holds the PREVIOUS
+                    // group's rows — capture mine NOW (filtered to the old
+                    // session id so we can't accidentally re-add the new
+                    // group's own drinks) and re-add them to the new group.
+                    let previous = liveGroup.liveTimeline(for: profile.id)
+                        .filter { $0.sessionId == oldId }
+                    carryDrinksIntoCurrentGroup(previous)
                 }
             } else if old != nil && new == nil {
                 ghosts.syncSink = nil
@@ -14101,7 +14235,7 @@ private struct GroupSheet: View {
                 Button {
                     confirmLeave = true
                 } label: {
-                    Text("LEAVE SESH")
+                    Text("END SESH")
                         .font(.system(size: 12, weight: .black, design: .monospaced))
                         .tracking(1.8)
                         .foregroundStyle(Color.cream.opacity(0.72))
@@ -14118,18 +14252,16 @@ private struct GroupSheet: View {
                 }
                 .buttonStyle(PressScaleStyle())
                 .confirmationDialog(
-                    "Leave \(group.scope.label.lowercased()) sesh?",
+                    "End your \(group.scope.label.lowercased()) sesh?",
                     isPresented: $confirmLeave,
                     titleVisibility: .visible
                 ) {
-                    Button("Leave \(group.scope.label.lowercased())", role: .destructive) {
+                    // "Leave & keep my night going" lives in the top-bar menu
+                    // (it needs the solo live store to move drinks into); the
+                    // sheet just ends the night with a recap.
+                    Button("End my sesh", role: .destructive) {
                         Task {
-                            // The cousin id is no longer used by
-                            // `leave()` under the per-mode model — the
-                            // DB-level `in_<scope>` flag decouples the
-                            // two stores. Kept in the call for ABI
-                            // compatibility; the parameter is ignored.
-                            await group.leave(cousinSessionId: cousin.session?.id)
+                            await group.leave(cousinSessionId: cousin.session?.id, captureRecap: true)
                             dismiss()
                         }
                     }
