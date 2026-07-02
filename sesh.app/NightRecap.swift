@@ -463,6 +463,7 @@ final class NightJourneyStore: ObservableObject {
     func setPreGameNote(_ note: String) {
         let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
         preGameNote = trimmed.isEmpty ? nil : trimmed
+        StoreOwner.stamp(ownerKey)
         if let preGameNote {
             UserDefaults.standard.set(preGameNote, forKey: preGameNoteKey)
         } else {
@@ -487,7 +488,13 @@ final class NightJourneyStore: ObservableObject {
         )
     }
 
+    /// Which account this journey belongs to (see StoreOwner). Covers the
+    /// stops, staged photos, loose spots, and the pre-game note in one stamp
+    /// — they're all fragments of the same night.
+    private let ownerKey = "sesh.nightJourney.owner.v1"
+
     private func load() {
+        guard StoreOwner.mayLoad(ownerKey) else { return }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         if let data = UserDefaults.standard.data(forKey: key) {
@@ -503,6 +510,7 @@ final class NightJourneyStore: ObservableObject {
     }
 
     private func save() {
+        StoreOwner.stamp(ownerKey)
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         if let data = try? enc.encode(stops) {
@@ -514,6 +522,7 @@ final class NightJourneyStore: ObservableObject {
     }
 
     private func saveLooseSpots() {
+        StoreOwner.stamp(ownerKey)
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         if let data = try? enc.encode(looseSpots) {
@@ -2357,6 +2366,10 @@ struct LiveJourneyPhotosSection: View {
     /// Fired when the CURRENT-moment loose spot changes, so the owner can
     /// broadcast it to the group (no-op when solo / broken away).
     var onLooseSpotChanged: (LooseSpot?) -> Void = { _ in }
+    /// Fired with the raw image data of every photo the user adds (camera
+    /// or library), AFTER it lands in the local journey. The live page uses
+    /// it to mirror snaps to the group when a live group sesh is running.
+    var onPhotoAdded: ((Data) -> Void)? = nil
 
     /// Which page is showing. Follows new stops automatically (jumps to
     /// the newest) until the user swipes elsewhere.
@@ -2433,7 +2446,7 @@ struct LiveJourneyPhotosSection: View {
                 Image(systemName: "camera.fill")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(Color.whiskey)
-                Text("NIGHT SNAPS")
+                Text("NIGHT SCHNAPS")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .tracking(2.4)
                     .foregroundStyle(Color.bronze)
@@ -2571,6 +2584,7 @@ struct LiveJourneyPhotosSection: View {
                     } else {
                         journey.addPhoto(data, toStop: stopId)
                     }
+                    onPhotoAdded?(data)
                 }
                 pickerItem = nil
                 libraryTargetStopId = nil
@@ -2583,6 +2597,7 @@ struct LiveJourneyPhotosSection: View {
                 } else {
                     journey.addPhoto(data, toStop: target.id)
                 }
+                onPhotoAdded?(data)
             }
             .ignoresSafeArea()
         }

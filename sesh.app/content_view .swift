@@ -1457,6 +1457,13 @@ final class SessionService: ObservableObject {
     /// group recap's leaderboard. Nil for a solo sesh / single member.
     @Published var endedGroupLeaderboard: [GroupMemberStat]? = nil
 
+    /// True only when the session was just entered by the user tapping
+    /// join/create — as opposed to resumeIfAny restoring it on launch.
+    /// SessionView's session observer reads (and resets) this to decide
+    /// whether to carry the solo night in: carrying on a mere resume
+    /// would dump leftover solo drinks into the group on every relaunch.
+    var entryWasUserInitiated = false
+
     /// Snapshot my events before a live-end clears them. No-op for the
     /// plan store, or when I logged nothing worth replaying.
     private func captureLiveEnd(
@@ -1630,8 +1637,16 @@ final class SessionService: ObservableObject {
                 .execute()
                 .value
             {
-                await enter(session: row)
-                return
+                if isFresh(row) {
+                    await enter(session: row)
+                    return
+                }
+                // The night is long over but the session was never ended
+                // (host killed the app, switched groups, etc.). Detach
+                // quietly instead of resurrecting a days-old sesh — and
+                // never recap it: entering + recapping stale sessions is
+                // exactly the phantom-recap-on-launch bug.
+                await silentlyRelease(row)
             }
             // Persisted session is stale (ended for my mode, or I left
             // from another device) — clear it so we don't keep hitting
@@ -1639,17 +1654,20 @@ final class SessionService: ObservableObject {
             persistSessionID(nil)
         }
 
-        // 2. Fallback: scan all my memberships in this mode, enter the
-        //    first one whose session is still active in this mode.
-        //    Single-mode users land here on first launch after upgrade.
+        // 2. Fallback: scan all my memberships in this mode, most recent
+        //    first, and enter the first FRESH one whose session is still
+        //    active in this mode. Older leftovers get released as we go,
+        //    so the scan doubles as launch-time garbage collection.
         do {
             let myMemberships: [SessionMember] = try await supabase
                 .from("session_members")
                 .select()
                 .eq("profile_id", value: uid.uuidString.lowercased())
                 .eq(inColumnForScope, value: true)
+                .order("joined_at", ascending: false)
                 .execute()
                 .value
+            var entered = false
             for m in myMemberships {
                 if let row: SeshSession = try? await supabase
                     .from("sessions")
@@ -1659,8 +1677,12 @@ final class SessionService: ObservableObject {
                     .single()
                     .execute()
                     .value {
-                    await enter(session: row)
-                    return
+                    if !entered && isFresh(row) {
+                        await enter(session: row)
+                        entered = true
+                    } else {
+                        await silentlyRelease(row)
+                    }
                 }
             }
         } catch {
@@ -1701,6 +1723,13 @@ final class SessionService: ObservableObject {
                     in_live: scopeLive
                 ))
                 .execute()
+            // Creating a new group while still in another = a direct
+            // switch. Detach from the old one (no recap — the night
+            // carries over) so its membership can't resurrect later.
+            if let old = session, old.id != row.id {
+                await silentlyRelease(old)
+            }
+            entryWasUserInitiated = true
             await enter(session: row)
         } catch {
             self.error = error.localizedDescription
@@ -1727,6 +1756,13 @@ final class SessionService: ObservableObject {
                 .single()
                 .execute()
                 .value
+            // Joining while still in another group = a direct switch.
+            // Detach from the old one (no recap — the night carries
+            // over) so its membership can't resurrect later.
+            if let old = session, old.id != row.id {
+                await silentlyRelease(old)
+            }
+            entryWasUserInitiated = true
             await enter(session: row)
         } catch {
             self.error = "Couldn't join. Check the code."
@@ -1819,6 +1855,58 @@ final class SessionService: ObservableObject {
             captureLiveEnd(drinks: drinks, members: members, ghosts: ghosts)
         }
         clearLocal()
+    }
+
+    /// A group session is only worth resuming for ~a night. Anything
+    /// older is a leftover (host never pressed END, app was killed
+    /// mid-switch, etc.) — resurrecting it produces phantom "seshes I
+    /// never started" and surprise recaps on launch.
+    private func isFresh(_ row: SeshSession) -> Bool {
+        Date().timeIntervalSince(row.createdAt) < 24 * 3600
+    }
+
+    /// Quietly detach from a session without ending my night or handing
+    /// off a recap: flip my `in_<scope>` flag, and if I host it, end it
+    /// for this scope too (a hostless group would just linger). Used for
+    /// garbage-collecting stale sessions on launch and for abandoning
+    /// the old group during a direct group→group switch — neither is an
+    /// END, so `captureLiveEnd` is deliberately never called here.
+    private func silentlyRelease(_ row: SeshSession) async {
+        guard let uid = myId else { return }
+        struct InPlanPatch: Encodable { let in_plan: Bool }
+        struct InLivePatch: Encodable { let in_live: Bool }
+        struct ActivePlanPatch: Encodable { let active_plan: Bool }
+        struct ActiveLivePatch: Encodable { let active_live: Bool }
+        do {
+            if scopeLive {
+                _ = try await supabase.from("session_members")
+                    .update(InLivePatch(in_live: false))
+                    .eq("session_id", value: row.id.uuidString.lowercased())
+                    .eq("profile_id", value: uid.uuidString.lowercased())
+                    .execute()
+                if row.hostId == uid {
+                    _ = try await supabase.from("sessions")
+                        .update(ActiveLivePatch(active_live: false))
+                        .eq("id", value: row.id.uuidString.lowercased())
+                        .execute()
+                }
+            } else {
+                _ = try await supabase.from("session_members")
+                    .update(InPlanPatch(in_plan: false))
+                    .eq("session_id", value: row.id.uuidString.lowercased())
+                    .eq("profile_id", value: uid.uuidString.lowercased())
+                    .execute()
+                if row.hostId == uid {
+                    _ = try await supabase.from("sessions")
+                        .update(ActivePlanPatch(active_plan: false))
+                        .eq("id", value: row.id.uuidString.lowercased())
+                        .execute()
+                }
+            }
+        } catch {
+            // Best-effort cleanup; a failure just means we try again on
+            // the next launch's garbage-collection pass.
+        }
     }
 
     /// Adds a drink to the session. The `live` flag is derived from the
@@ -2643,6 +2731,7 @@ final class VenueService: ObservableObject {
             offersByVenue = groupedOffers
             attachLocalSpecials()
             reconcileCurrent()
+            lastRefreshedAt = Date()
         } catch {
             // Network or schema problem. Don't seed any venues —
             // discovery is MapKit-driven. Still attach local specials
@@ -2650,6 +2739,18 @@ final class VenueService: ObservableObject {
             // checked-in MapKit row that we've kept locally).
             attachLocalSpecials()
         }
+    }
+
+    /// When the catalog was pulled successfully; nil until the first fetch.
+    private var lastRefreshedAt: Date? = nil
+
+    /// Skip the round-trip when the catalog is recent. Entering the DEALS
+    /// tab is a hot path — it fires mid page-swipe, and an unconditional
+    /// refetch there both janks the transition and hammers the DB on every
+    /// visit. Offers change on the order of days, not seconds.
+    func refreshIfStale(maxAge: TimeInterval = 5 * 60) async {
+        if let last = lastRefreshedAt, Date().timeIntervalSince(last) < maxAge { return }
+        await refresh()
     }
 
     // MARK: - MapKit check-in
@@ -2815,7 +2916,10 @@ final class VenueService: ObservableObject {
 
     // MARK: - Persistence
 
+    private let currentOwnerKey = "sesh.currentVenue.owner.v1"
+
     private func persistCurrent() {
+        StoreOwner.stamp(currentOwnerKey)
         guard let v = currentVenue else {
             UserDefaults.standard.removeObject(forKey: currentKey)
             return
@@ -2826,6 +2930,7 @@ final class VenueService: ObservableObject {
     }
 
     private func loadCurrent() {
+        guard StoreOwner.mayLoad(currentOwnerKey) else { return }
         guard let data = UserDefaults.standard.data(forKey: currentKey),
               let v = try? JSONDecoder().decode(Venue.self, from: data)
         else { return }
@@ -3740,7 +3845,10 @@ final class RecentDrinksStore: ObservableObject {
         recents.map { $0.option }
     }
 
+    private let ownerKey = "sesh.recents.owner.v1"
+
     private func load() {
+        guard StoreOwner.mayLoad(ownerKey) else { return }
         if let data = UserDefaults.standard.data(forKey: key),
            let arr = try? JSONDecoder().decode([RecentDrink].self, from: data) {
             recents = arr
@@ -3758,6 +3866,7 @@ final class RecentDrinksStore: ObservableObject {
     }
 
     private func save() {
+        StoreOwner.stamp(ownerKey)
         if let data = try? JSONEncoder().encode(recents) {
             UserDefaults.standard.set(data, forKey: key)
         }
@@ -3801,7 +3910,10 @@ final class SavedDrinksStore: ObservableObject {
         isSaved(option) ? remove(option) : save(option)
     }
 
+    private let ownerKey = "sesh.savedDrinks.owner.v1"
+
     private func load() {
+        guard StoreOwner.mayLoad(ownerKey) else { return }
         if let data = UserDefaults.standard.data(forKey: key),
            let arr = try? JSONDecoder().decode([RecentDrink].self, from: data) {
             items = arr
@@ -3809,6 +3921,7 @@ final class SavedDrinksStore: ObservableObject {
     }
 
     private func persist() {
+        StoreOwner.stamp(ownerKey)
         if let data = try? JSONEncoder().encode(items) {
             UserDefaults.standard.set(data, forKey: key)
         }
@@ -3859,6 +3972,40 @@ struct LiveDrink: Identifiable, Codable, Equatable {
     }
 }
 
+/// Per-account ownership stamp for device-local stores. UserDefaults is
+/// device-global, so every persisted store records which account wrote it;
+/// a different account signing in on the same phone sees an empty store
+/// instead of inheriting the previous user's night (drinks, check-in,
+/// photos, guests, saved groups, …). The data itself stays on disk
+/// untouched, so the original owner gets it back on their next sign-in —
+/// until the new account's first save takes ownership and overwrites.
+enum StoreOwner {
+    static var currentUID: String? {
+        supabase.auth.currentUser?.id.uuidString.lowercased()
+    }
+
+    /// True when the current account may read the store stamped at `key`
+    /// (no stamp yet, no signed-in user, or the stamp matches). Claims
+    /// unstamped data for the current account as a side effect — pre-stamp
+    /// legacy data can't be attributed, so the first account to load it
+    /// after the update owns it; every other account then sees it empty
+    /// immediately instead of waiting for someone's first save.
+    static func mayLoad(_ key: String) -> Bool {
+        guard let uid = currentUID else { return true }
+        guard let owner = UserDefaults.standard.string(forKey: key) else {
+            UserDefaults.standard.set(uid, forKey: key)
+            return true
+        }
+        return owner == uid
+    }
+
+    static func stamp(_ key: String) {
+        if let uid = currentUID {
+            UserDefaults.standard.set(uid, forKey: key)
+        }
+    }
+}
+
 /// Holds the user's currently-running Live Sesh: a list of timestamped
 /// drinks and a start time. State persists across app launches via
 /// UserDefaults so the user doesn't lose context if they background the
@@ -3870,6 +4017,11 @@ final class LiveSeshState: ObservableObject {
 
     private let drinksKey = "sesh.live.drinks.v1"
     private let startKey  = "sesh.live.startedAt.v1"
+    /// Which account the persisted night belongs to. UserDefaults is
+    /// device-global, so without this stamp a sign-out/sign-in handed one
+    /// user's solo drinks to the next account on the same phone (and
+    /// PresenceService then broadcast them to that account's friends).
+    private let ownerKey  = "sesh.live.owner.v1"
     private let eliminationRate = 0.015
 
     var isActive: Bool { startedAt != nil }
@@ -4011,9 +4163,17 @@ final class LiveSeshState: ObservableObject {
         } else {
             UserDefaults.standard.removeObject(forKey: startKey)
         }
+        StoreOwner.stamp(ownerKey)
     }
 
     private func load() {
+        // Persisted night belongs to a different account (multi-account
+        // device) → don't surface it. See StoreOwner.
+        guard StoreOwner.mayLoad(ownerKey) else {
+            drinks = []
+            startedAt = nil
+            return
+        }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         if let data = UserDefaults.standard.data(forKey: drinksKey),
@@ -4229,7 +4389,10 @@ final class GhostMembersStore: ObservableObject {
         if !isHydrating { syncSink?(members) }
     }
 
+    private let ownerKey = "sesh.live.ghosts.owner.v1"
+
     private func persist() {
+        StoreOwner.stamp(ownerKey)
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         if let data = try? enc.encode(members) {
@@ -4238,6 +4401,7 @@ final class GhostMembersStore: ObservableObject {
     }
 
     private func load() {
+        guard StoreOwner.mayLoad(ownerKey) else { return }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         if let data = UserDefaults.standard.data(forKey: storeKey),
@@ -4424,7 +4588,10 @@ final class SavedGroupsStore: ObservableObject {
         persist()
     }
 
+    private let ownerKey = "sesh.savedGroups.owner.v1"
+
     private func persist() {
+        StoreOwner.stamp(ownerKey)
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         guard let data = try? enc.encode(groups) else { return }
@@ -4432,6 +4599,7 @@ final class SavedGroupsStore: ObservableObject {
     }
 
     private func load() {
+        guard StoreOwner.mayLoad(ownerKey) else { return }
         guard let data = UserDefaults.standard.data(forKey: key) else { return }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
@@ -6298,11 +6466,649 @@ private func recapStopEmoji(_ kind: RecapStopKind) -> String {
     }
 }
 
+// MARK: - Friends live pulse
+//
+// Friends see each other's night in real time: live or not, drink count,
+// current BAC, check-in venue, and — for group seshes — who they're with
+// and those people's BACs. Solo sesh data is device-local, so PresenceService
+// publishes a compact presence row while a night runs; FriendsPulseService
+// reads everyone back through one SECURITY DEFINER RPC that computes all
+// BACs server-side (no one's weight/sex ever leaves the database).
+
+/// One friend's live status as returned by the friends_live_pulse RPC.
+struct FriendPulse: Decodable, Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    let username: String?
+    let avatarUrl: String?
+    let live: Bool
+    var bac: Double? = nil
+    var drinks: Int? = nil
+    var venue: String? = nil
+    var venueLat: Double? = nil
+    var venueLon: Double? = nil
+    var startedEpoch: Double? = nil
+    var members: [PulseMember]? = nil
+
+    var startedAt: Date? { startedEpoch.map { Date(timeIntervalSince1970: $0) } }
+    var venueCoordinate: CLLocationCoordinate2D? {
+        guard let lat = venueLat, let lon = venueLon else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, username, live, bac, drinks, venue, members
+        case avatarUrl = "avatar_url"
+        case venueLat = "venue_lat"
+        case venueLon = "venue_lon"
+        case startedEpoch = "started_epoch"
+    }
+}
+
+/// A co-member of a friend's group sesh (name + their BAC + drink count).
+struct PulseMember: Decodable, Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    let avatarUrl: String?
+    let bac: Double
+    let drinks: Int
+    enum CodingKeys: String, CodingKey {
+        case id, name, bac, drinks
+        case avatarUrl = "avatar_url"
+    }
+}
+
+/// Publishes MY live status so friends can see it. Solo nights upload a
+/// compact [{t, g}] drink array (they exist only on-device otherwise);
+/// group nights just point at the session — the drinks are already
+/// server-side. The row is deleted the moment the night ends. Payloads
+/// are deduped so poll-driven onChange storms don't spam the table.
+@MainActor
+final class PresenceService: ObservableObject {
+    private var lastKey = ""
+    private var myId: UUID? { supabase.auth.currentUser?.id }
+
+    private struct DrinkEvent: Encodable { let t: String; let g: Double }
+    private struct Row: Encodable {
+        let user_id: String
+        let started_at: String
+        let venue_name: String?
+        let venue_lat: Double?
+        let venue_lon: Double?
+        let session_id: String?
+        let drinks: [DrinkEvent]
+        let updated_at: String
+    }
+
+    func publish(startedAt: Date?, drinks: [LiveDrink], venueName: String?,
+                 venueLat: Double? = nil, venueLon: Double? = nil, sessionId: UUID?) async {
+        guard let uid = myId else { return }
+        // Not live in any form → tear the presence row down.
+        guard startedAt != nil || sessionId != nil else {
+            if lastKey != "off" {
+                lastKey = "off"
+                _ = try? await supabase.from("live_presence").delete()
+                    .eq("user_id", value: uid.uuidString.lowercased())
+                    .execute()
+            }
+            return
+        }
+        let started = startedAt ?? Date()
+        let key = "\(started.timeIntervalSince1970)|\(drinks.count)|\(venueName ?? "")|\(sessionId?.uuidString ?? "")"
+        guard key != lastKey else { return }
+        lastKey = key
+        let iso = ISO8601DateFormatter()
+        let row = Row(
+            user_id: uid.uuidString.lowercased(),
+            started_at: iso.string(from: started),
+            venue_name: venueName,
+            venue_lat: venueLat,
+            venue_lon: venueLon,
+            session_id: sessionId?.uuidString.lowercased(),
+            drinks: drinks.map { DrinkEvent(t: iso.string(from: $0.consumedAt), g: $0.grams) },
+            updated_at: iso.string(from: Date())
+        )
+        _ = try? await supabase.from("live_presence").upsert(row).execute()
+    }
+}
+
+/// Pulls every friend's pulse. Polled while the Nightline tab is visible
+/// (BACs decay, drinks land) and stopped the moment the user swipes away.
+@MainActor
+final class FriendsPulseService: ObservableObject {
+    @Published private(set) var pulses: [FriendPulse] = []
+    private var pollTask: Task<Void, Never>? = nil
+
+    func refresh() async {
+        do {
+            let all: [FriendPulse] = try await supabase
+                .rpc("friends_live_pulse")
+                .execute()
+                .value
+            // Live friends first (highest BAC leading), then the rest A–Z.
+            pulses = all.sorted { a, b in
+                if a.live != b.live { return a.live }
+                if a.live { return (a.bac ?? 0) > (b.bac ?? 0) }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+        } catch {
+            // Keep the previous pulse on a transient failure.
+        }
+    }
+
+    func startPolling(every seconds: TimeInterval = 30) {
+        stopPolling()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refresh()
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            }
+        }
+    }
+
+    func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+}
+
+/// Stories-style strip at the top of Nightline: live friends glow with
+/// their BAC; everyone else sits dimmed behind them. Hidden entirely when
+/// the user has no friends yet (the feed's empty state covers onboarding).
+private struct FriendsPulseStrip: View {
+    @ObservedObject var pulse: FriendsPulseService
+    let onOpen: (FriendPulse) -> Void
+
+    var body: some View {
+        if !pulse.pulses.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("TONIGHT")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.bronze)
+                    .padding(.horizontal, 22)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 14) {
+                        ForEach(pulse.pulses) { p in
+                            PulseAvatar(pulse: p)
+                                .onTapGesture { if p.live { onOpen(p) } }
+                        }
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+    }
+}
+
+/// One avatar in the strip: live friends get a status-coloured ring +
+/// BAC pill; offline friends are dimmed with no badge.
+private struct PulseAvatar: View {
+    let pulse: FriendPulse
+    /// BAC arrives on the raw %-scale; display follows the VIEWER's unit
+    /// preference (percent vs promille), same as everywhere else in the app.
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var unit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
+    private var status: Status {
+        switch pulse.bac ?? 0 {
+        case ..<0.02: return .sober
+        case 0.02..<0.05: return .buzzed
+        case 0.05..<0.08: return .impaired
+        case 0.08..<0.15: return .drunk
+        default: return .danger
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack(alignment: .bottomTrailing) {
+                AvatarView(urlString: pulse.avatarUrl,
+                           initial: String(pulse.name.prefix(1)).uppercased(),
+                           size: 54)
+                    .overlay(
+                        Circle().strokeBorder(
+                            pulse.live ? status.color : Color.clear,
+                            lineWidth: 2.5
+                        )
+                        .padding(-3)
+                    )
+                    .opacity(pulse.live ? 1 : 0.45)
+                if pulse.live {
+                    Text(unit.formatted(pulse.bac ?? 0))
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(Capsule().fill(status.color))
+                        .offset(x: 6, y: 6)
+                }
+            }
+            // Breathing room for the parts that render OUTSIDE the 54pt
+            // circle — the ring (3pt up/sides) and the BAC pill (below,
+            // right) — so the ScrollView doesn't crop them.
+            .padding(.top, 4)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 9)
+            Text(pulse.name.split(separator: " ").first.map(String.init) ?? pulse.name)
+                .font(.system(size: 11, weight: pulse.live ? .bold : .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(pulse.live ? 0.95 : 0.45))
+                .lineLimit(1)
+        }
+        .frame(width: 72)
+    }
+}
+
+/// Detail sheet for a live friend: BAC + status, drinks, venue, elapsed
+/// time — and, for a group sesh, everyone they're with + those BACs.
+private struct FriendPulseSheet: View {
+    let pulse: FriendPulse
+    /// Display in the VIEWER's unit (percent vs promille) — the RPC always
+    /// sends the raw %-scale value.
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var unit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+    /// Expanded mini-map for the check-in venue.
+    @State private var venueMapOpen = false
+
+    private func statusFor(_ bac: Double) -> Status {
+        switch bac {
+        case ..<0.02: return .sober
+        case 0.02..<0.05: return .buzzed
+        case 0.05..<0.08: return .impaired
+        case 0.08..<0.15: return .drunk
+        default: return .danger
+        }
+    }
+
+    var body: some View {
+        let bac = pulse.bac ?? 0
+        let status = statusFor(bac)
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 12) {
+                    AvatarView(urlString: pulse.avatarUrl,
+                               initial: String(pulse.name.prefix(1)).uppercased(),
+                               size: 46)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pulse.name)
+                            .font(.system(size: 19, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        HStack(spacing: 5) {
+                            Circle().fill(status.color).frame(width: 7, height: 7)
+                            Text(liveLine)
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.6))
+                        }
+                    }
+                    Spacer()
+                }
+
+                // The number you opened this for.
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("BAC NOW")
+                        .font(.system(size: 10, weight: .black, design: .monospaced))
+                        .tracking(2.2).foregroundStyle(Color.bronze)
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(unit.formatted(bac))
+                            .font(.system(size: 46, weight: .black, design: .rounded))
+                            .foregroundStyle(status.color)
+                        Text(unit.caption)
+                            .font(.system(size: 12, weight: .black, design: .monospaced))
+                            .tracking(1.6)
+                            .foregroundStyle(status.color.opacity(0.6))
+                        Text(status.label.uppercased())
+                            .font(.system(size: 12, weight: .black, design: .monospaced))
+                            .tracking(1.6)
+                            .foregroundStyle(status.color.opacity(0.85))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.cream.opacity(0.05)))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+
+                HStack(spacing: 10) {
+                    statChip(icon: "wineglass.fill", label: "\(pulse.drinks ?? 0) \(pulse.drinks == 1 ? "drink" : "drinks")")
+                    if let venue = pulse.venue, !venue.isEmpty {
+                        if pulse.venueCoordinate != nil {
+                            Button {
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                                    venueMapOpen.toggle()
+                                }
+                            } label: {
+                                statChip(icon: "mappin.circle.fill", label: venue,
+                                         trailing: venueMapOpen ? "chevron.up" : "chevron.down")
+                            }
+                            .buttonStyle(PressScaleStyle())
+                        } else {
+                            statChip(icon: "mappin.circle.fill", label: venue)
+                        }
+                    }
+                }
+
+                if venueMapOpen, let coord = pulse.venueCoordinate {
+                    Map(initialPosition: .region(MKCoordinateRegion(
+                        center: coord,
+                        latitudinalMeters: 900, longitudinalMeters: 900
+                    ))) {
+                        Marker(pulse.venue ?? "", systemImage: "wineglass.fill", coordinate: coord)
+                            .tint(Color.whiskey)
+                    }
+                    .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll))
+                    .frame(height: 190)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
+                if let members = pulse.members, !members.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("GROUP SESH · WITH \(members.count)")
+                            .font(.system(size: 10, weight: .black, design: .monospaced))
+                            .tracking(2.2).foregroundStyle(Color.bronze)
+                        ForEach(members) { m in
+                            let ms = statusFor(m.bac)
+                            HStack(spacing: 10) {
+                                AvatarView(urlString: m.avatarUrl,
+                                           initial: String(m.name.prefix(1)).uppercased(),
+                                           size: 34)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(m.name)
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .foregroundStyle(Color.cream)
+                                    Text("\(m.drinks) \(m.drinks == 1 ? "drink" : "drinks")")
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.5))
+                                }
+                                Spacer()
+                                Text(unit.formatted(m.bac))
+                                    .font(.system(size: 14, weight: .black, design: .monospaced))
+                                    .foregroundStyle(ms.color)
+                            }
+                            .padding(10)
+                            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.04)))
+                        }
+                    }
+                }
+            }
+            .padding(20)
+            .padding(.top, 6)
+        }
+        .background(Color.ink)
+    }
+
+    private var liveLine: String {
+        guard let started = pulse.startedAt else { return "Live now" }
+        let mins = max(0, Int(Date().timeIntervalSince(started) / 60))
+        if mins < 60 { return "Live · started \(mins)m ago" }
+        return "Live · started \(mins / 60)h \(mins % 60)m ago"
+    }
+
+    private func statChip(icon: String, label: String, trailing: String? = nil) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color.whiskey)
+            Text(label)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .lineLimit(1)
+            if let trailing {
+                Image(systemName: trailing)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color.cream.opacity(0.5))
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Capsule().fill(Color.cream.opacity(0.06)))
+        .overlay(Capsule().strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+    }
+}
+
+// MARK: - Group snaps
+//
+// Members of a live group sesh share their Night Snaps photos with the
+// group. Uploads are heavily compressed (~1280px JPEG) and EPHEMERAL —
+// a daily server job purges anything older than 48h — so the feature
+// stays nearly free on storage (a big night ≈ a few MB, gone in two days).
+
+struct SessionSnap: Decodable, Identifiable, Equatable {
+    let id: UUID
+    let sessionId: UUID
+    let profileId: UUID
+    let stopName: String?
+    let storagePath: String
+    let createdAt: Date
+
+    var url: URL? {
+        try? supabase.storage.from("session-snaps").getPublicURL(path: storagePath)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case sessionId = "session_id"
+        case profileId = "profile_id"
+        case stopName = "stop_name"
+        case storagePath = "storage_path"
+        case createdAt = "created_at"
+    }
+}
+
+@MainActor
+final class SessionSnapsService: ObservableObject {
+    @Published private(set) var snaps: [SessionSnap] = []
+    private var myId: UUID? { supabase.auth.currentUser?.id }
+
+    func refresh(sessionId: UUID) async {
+        do {
+            let rows: [SessionSnap] = try await supabase.from("session_snaps")
+                .select()
+                .eq("session_id", value: sessionId.uuidString.lowercased())
+                .order("created_at", ascending: false)
+                .execute()
+                .value
+            snaps = rows
+        } catch {
+            // Keep the previous list on a transient failure.
+        }
+    }
+
+    func clear() { snaps = [] }
+
+    /// Compress + upload one photo and register it for the group. The
+    /// 1280px/q0.62 target lands around 150–250 KB per snap — the lever
+    /// that keeps the whole feature nearly free on storage.
+    func upload(imageData: Data, stopName: String?, sessionId: UUID) async {
+        guard let uid = myId,
+              let jpeg = RecapPhotoUtil.compressedJPEG(imageData, maxDimension: 1280, quality: 0.62)
+        else { return }
+        let path = "\(sessionId.uuidString.lowercased())/\(UUID().uuidString.lowercased()).jpg"
+        struct Row: Encodable {
+            let session_id: String
+            let profile_id: String
+            let stop_name: String?
+            let storage_path: String
+        }
+        do {
+            _ = try await supabase.storage.from("session-snaps")
+                .upload(path, data: jpeg, options: FileOptions(contentType: "image/jpeg"))
+            let inserted: SessionSnap = try await supabase.from("session_snaps")
+                .insert(Row(
+                    session_id: sessionId.uuidString.lowercased(),
+                    profile_id: uid.uuidString.lowercased(),
+                    stop_name: stopName,
+                    storage_path: path
+                ))
+                .select()
+                .single()
+                .execute()
+                .value
+            snaps.insert(inserted, at: 0)
+        } catch {
+            // Photo still lives in the user's own journey; group copy just
+            // didn't land. Next snap tries again.
+        }
+    }
+}
+
+/// Horizontal strip of the group's shared snaps, shown on the LIVE page
+/// while in a group. Polls while visible; tap a snap for the full-screen
+/// viewer with the uploader's name.
+struct GroupSnapsStrip: View {
+    @ObservedObject var snaps: SessionSnapsService
+    let sessionId: UUID
+    /// Resolves an uploader id to a display name (group roster lookup).
+    let nameFor: (UUID) -> String
+    @State private var viewer: SessionSnap? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "photo.stack.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.whiskey)
+                Text("SQUAD SCHNAPS")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(2.2)
+                    .foregroundStyle(Color.bronze)
+                Spacer()
+            }
+            if snaps.snaps.isEmpty {
+                Text("Every schnap the group takes tonight shows up here.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.45))
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(snaps.snaps) { snap in
+                            Button { viewer = snap } label: {
+                                // Uniform square tiles (same format as the
+                                // NIGHT SCHNAPS strip above) — mixed aspect
+                                // ratios made the strip look ragged. The
+                                // full uncropped photo is one tap away.
+                                DownsampledAsyncImage(url: snap.url, targetPoints: 96)
+                                    .frame(width: 96, height: 96)
+                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                    .overlay(alignment: .bottomLeading) {
+                                        Text(String(nameFor(snap.profileId).prefix(1)).uppercased())
+                                            .font(.system(size: 10, weight: .black, design: .rounded))
+                                            .foregroundStyle(Color.ink)
+                                            .frame(width: 18, height: 18)
+                                            .background(Circle().fill(Color.whiskey))
+                                            .padding(5)
+                                    }
+                                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+                            }
+                            .buttonStyle(PressScaleStyle())
+                        }
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.cream.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+        // Structured poll: starts on appear / session change, dies with the
+        // view — no dangling timers when the group ends or the tab unloads.
+        .task(id: sessionId) {
+            while !Task.isCancelled {
+                await snaps.refresh(sessionId: sessionId)
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+            }
+        }
+        .fullScreenCover(item: $viewer) { snap in
+            GroupSnapViewer(snap: snap, name: nameFor(snap.profileId)) { viewer = nil }
+        }
+    }
+}
+
+/// Full-screen viewer for one shared snap.
+private struct GroupSnapViewer: View {
+    let snap: SessionSnap
+    let name: String
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            DownsampledAsyncImage(url: snap.url, targetPoints: 700, fill: false)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack {
+                Spacer()
+                HStack(spacing: 8) {
+                    Text(name)
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    if let stop = snap.stopName, !stop.isEmpty {
+                        Text("· \(stop)")
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.6))
+                    }
+                    Text(snap.createdAt, style: .time)
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                }
+                .padding(.bottom, 26)
+            }
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.cream)
+                    .frame(width: 40, height: 40)
+                    .background(Circle().fill(Color.ink.opacity(0.7)))
+            }
+            .buttonStyle(PressScaleStyle())
+            .padding(16)
+        }
+    }
+}
+
+/// Wires the friends-pulse feature into SessionView as ONE modifier:
+/// publishes my presence on anything a friend could notice (drink logged,
+/// sesh started/ended, group joined/left, check-in), polls friends' pulse
+/// only while the Nightline tab is on screen, and hosts the detail sheet.
+private struct PulseWiringModifier: ViewModifier {
+    @ObservedObject var live: LiveSeshState
+    @ObservedObject var liveGroup: SessionService
+    @ObservedObject var venues: VenueService
+    @ObservedObject var friendsPulse: FriendsPulseService
+    @Binding var openPulse: FriendPulse?
+    let tab: TopTab
+    let publish: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: live.drinks) { _, _ in publish() }
+            .onChange(of: live.startedAt) { _, _ in publish() }
+            .onChange(of: liveGroup.session?.id) { _, _ in publish() }
+            .onChange(of: venues.currentVenue?.id) { _, _ in publish() }
+            .task {
+                publish()
+                // Slow app-wide poll so the NIGHTLINE tab dot can light up
+                // when a friend goes live, wherever the user is.
+                friendsPulse.startPolling(every: 120)
+            }
+            .onChange(of: tab) { _, newTab in
+                // Fast while the TONIGHT strip is on screen, slow otherwise.
+                friendsPulse.startPolling(every: newTab == .timeline ? 30 : 120)
+            }
+            .sheet(item: $openPulse) { p in
+                FriendPulseSheet(pulse: p)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(Color.ink)
+            }
+    }
+}
+
 /// The TIMELINE tab — a scrollable feed of friends' posted nights.
 private struct TimelineFeedView: View {
     @ObservedObject var feed: FeedService
+    @ObservedObject var pulse: FriendsPulseService
     let onOpenPost: (TimelinePost) -> Void
     let onOpenAuthor: (TimelinePost) -> Void
+    let onOpenPulse: (FriendPulse) -> Void
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -6311,6 +7117,8 @@ private struct TimelineFeedView: View {
                     .font(.system(size: 11, weight: .black, design: .monospaced))
                     .tracking(2.4).foregroundStyle(Color.bronze)
                     .padding(.horizontal, 22).padding(.top, 6)
+
+                FriendsPulseStrip(pulse: pulse, onOpen: onOpenPulse)
 
                 if feed.posts.isEmpty {
                     emptyState
@@ -6326,7 +7134,10 @@ private struct TimelineFeedView: View {
             }
             .padding(.bottom, 40)
         }
-        .refreshable { await feed.refresh() }
+        .refreshable {
+            await feed.refresh()
+            await pulse.refresh()
+        }
         // Re-fetch whenever the timeline appears so newly posted (or deleted)
         // nights show up. Stable post/photo ids keep this from resetting the
         // carousels, and downsampled images keep it cheap.
@@ -7639,6 +8450,10 @@ private struct SessionView: View {
     /// Friends roster + incoming requests. App-wide so the bell badge and
     /// the unified inbox stay current; polls every 8s while signed in.
     @StateObject private var friends = FriendsService()
+    @StateObject private var presence = PresenceService()
+    @StateObject private var friendsPulse = FriendsPulseService()
+    /// A live friend tapped in the Nightline pulse strip → detail sheet.
+    @State private var openPulse: FriendPulse? = nil
     /// The friends timeline (loaded when the TIMELINE tab is first shown).
     @StateObject private var feed = FeedService()
     /// A friend's post opened full-screen.
@@ -7958,7 +8773,8 @@ private struct SessionView: View {
                 // page feel like the same animation.
                 .animation(.spring(response: 0.4, dampingFraction: 0.82), value: tab)
 
-                BottomTabBar(tab: $tab, liveActive: liveActive)
+                BottomTabBar(tab: $tab, liveActive: liveActive,
+                             friendsLive: friendsPulse.pulses.contains { $0.live })
             }
 
             // Floating invite banner — pinned just below the ModeTopBar.
@@ -8181,6 +8997,19 @@ private struct SessionView: View {
         .onChange(of: liveGroup.members) { _, _ in
             recordSavedGroup(from: liveGroup)
         }
+        // ---- Friends live pulse ----
+        // All wiring lives in one ViewModifier so the (already enormous)
+        // modifier chain here grows by a single entry — the type-checker
+        // times out otherwise.
+        .modifier(PulseWiringModifier(
+            live: live,
+            liveGroup: liveGroup,
+            venues: venues,
+            friendsPulse: friendsPulse,
+            openPulse: $openPulse,
+            tab: tab,
+            publish: publishPresence
+        ))
         // Bridge the device-local guest store to the shared session roster
         // as the user enters / leaves a LIVE group:
         //   • Enter  → adopt the session's shared guests and start
@@ -8194,19 +9023,24 @@ private struct SessionView: View {
                 ghosts.syncSink = { [weak liveGroup] members in
                     Task { @MainActor in await liveGroup?.syncGhosts(members) }
                 }
-                if old == nil {
-                    // Solo → group: carry my running solo night into the group.
-                    carrySoloNightIntoGroup()
-                } else if let oldId = old, oldId != new {
-                    // Group → group switch (joined another group without
-                    // leaving first). enter() hasn't yet swapped `drinks` to
-                    // the new group, so the timeline still holds the PREVIOUS
-                    // group's rows — capture mine NOW (filtered to the old
-                    // session id so we can't accidentally re-add the new
-                    // group's own drinks) and re-add them to the new group.
-                    let previous = liveGroup.liveTimeline(for: profile.id)
-                        .filter { $0.sessionId == oldId }
-                    carryDrinksIntoCurrentGroup(previous)
+                // Carry drinks ONLY when the user actively joined/created —
+                // resumeIfAny restoring the session on launch must not shove
+                // solo leftovers into the group on every app open.
+                let userInitiated = liveGroup.entryWasUserInitiated
+                liveGroup.entryWasUserInitiated = false
+                if userInitiated {
+                    if old == nil {
+                        // Solo → group: carry my running solo night in.
+                        carrySoloNightIntoGroup()
+                    } else if let oldId = old, oldId != new {
+                        // Group → group switch. enter() hasn't yet swapped
+                        // `drinks` to the new group, so the timeline still
+                        // holds the PREVIOUS group's rows — capture mine now
+                        // (filtered to the old session id) and re-add them.
+                        let previous = liveGroup.liveTimeline(for: profile.id)
+                            .filter { $0.sessionId == oldId }
+                        carryDrinksIntoCurrentGroup(previous)
+                    }
                 }
             } else if old != nil && new == nil {
                 ghosts.syncSink = nil
@@ -8298,38 +9132,14 @@ private struct SessionView: View {
     /// DEALS — the venue-offers discovery map (Phase A). Embedded as a tab,
     /// so it shows no close button; navigation is the bottom bar.
     ///
-    /// Only build the MapKit map while the DEALS tab is actually selected. A
-    /// SwiftUI Map is by far the heaviest view in the app (tile/texture memory
-    /// that keeps growing as it renders), and a paged TabView keeps every page
-    /// alive — so an always-resident map quietly costs ~150MB+ in the
-    /// background. Gating it tears the map down the moment you leave the tab.
-    @ViewBuilder
+    /// The DEALS page defers its heavy MapKit map to after the page-swipe
+    /// animation settles (see DeferredOffersPage) — mounting it mid-swipe
+    /// was hitching the transition, and the memory gating still applies.
     private var offersPage: some View {
-        if tab == .offers {
-            OffersMapView(venues: venues, location: location)
-                // The interactive map swallows the TabView's horizontal page
-                // swipe, so a thin left-edge strip provides the "grab the edge
-                // to go back" gesture → back to Nightline.
-                .overlay(alignment: .leading) {
-                    Color.clear
-                        .frame(width: 24)
-                        .frame(maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                        .gesture(
-                            DragGesture(minimumDistance: 12)
-                                .onEnded { value in
-                                    if value.translation.width > 40,
-                                       abs(value.translation.height) < 70 {
-                                        withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
-                                            tab = .timeline
-                                        }
-                                    }
-                                }
-                        )
-                        .ignoresSafeArea()
-                }
-        } else {
-            Color.clear
+        DeferredOffersPage(active: tab == .offers, venues: venues, location: location) {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                tab = .timeline
+            }
         }
     }
 
@@ -8337,14 +9147,39 @@ private struct SessionView: View {
     private var timelinePage: some View {
         TimelineFeedView(
             feed: feed,
+            pulse: friendsPulse,
             onOpenPost: { openPost = $0 },
             onOpenAuthor: { post in
                 openProfileUser = ProfileRef(
                     id: post.authorId, name: post.authorName,
                     username: post.authorUsername, avatar: post.authorAvatar
                 )
-            }
+            },
+            onOpenPulse: { openPulse = $0 }
         )
+    }
+
+    /// Push my current live status (or its absence) up to `live_presence`.
+    /// Called from a handful of observers so any change a friend could see
+    /// — drink logged, check-in, group joined/left, night ended — lands
+    /// within a beat. PresenceService dedupes unchanged payloads.
+    private func publishPresence() {
+        let sessionId = liveGroup.session?.id
+        let started: Date? = sessionId != nil
+            ? (liveGroup.session?.createdAt ?? Date())
+            : live.startedAt
+        let venue = venues.currentVenue ?? liveGroup.liveVenue
+        let soloDrinks = sessionId != nil ? [] : live.drinks
+        Task {
+            await presence.publish(
+                startedAt: started,
+                drinks: soloDrinks,
+                venueName: venue?.name,
+                venueLat: venue?.lat,
+                venueLon: venue?.lon,
+                sessionId: sessionId
+            )
+        }
     }
 
     // MARK: - Pages
@@ -11777,12 +12612,16 @@ private struct GroupBar: View {
 private struct BottomTabBar: View {
     @Binding var tab: TopTab
     let liveActive: Bool
+    /// At least one friend is currently in a live sesh — green dot on
+    /// NIGHTLINE so the user knows the TONIGHT strip has something to show.
+    var friendsLive: Bool = false
 
     var body: some View {
         HStack(spacing: 0) {
             item(.plan,     icon: "gauge.medium",                  label: "PLAN")
             item(.live,     icon: "dot.radiowaves.left.and.right", label: "LIVE", pulse: liveActive)
-            item(.timeline, icon: "square.stack.fill",             label: "NIGHTLINE")
+            item(.timeline, icon: "square.stack.fill",             label: "NIGHTLINE",
+                 pulse: friendsLive, pulseColor: Color(red: 0.51, green: 0.72, blue: 0.48))
             item(.offers,   icon: "map.fill",                      label: "DEALS")
         }
         .padding(.top, 10)
@@ -11794,7 +12633,8 @@ private struct BottomTabBar: View {
     }
 
     @ViewBuilder
-    private func item(_ value: TopTab, icon: String, label: String, pulse: Bool = false) -> some View {
+    private func item(_ value: TopTab, icon: String, label: String,
+                      pulse: Bool = false, pulseColor: Color = .whiskey) -> some View {
         let on = tab == value
         Button {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = value }
@@ -11807,7 +12647,7 @@ private struct BottomTabBar: View {
                     // Live pulse, mirroring the old switcher's LIVE dot.
                     if pulse {
                         Circle()
-                            .fill(Color.whiskey)
+                            .fill(pulseColor)
                             .frame(width: 6, height: 6)
                             .offset(x: 12, y: -10)
                     }
@@ -11827,6 +12667,78 @@ private struct BottomTabBar: View {
 }
 
 /// Full-screen interactive map of venues with live offers.
+/// Hosts the DEALS map inside the paged TabView without hitching the page
+/// swipe. A SwiftUI Map is the heaviest view in the app, and both building
+/// and tearing it down synchronously with the tab change landed exactly in
+/// the middle of the swipe animation — the source of the "deals tab is
+/// laggy" jank. So the map mounts a beat AFTER the swipe settles (behind a
+/// cheap ink placeholder) and unmounts a beat after leaving, keeping the
+/// transition itself at full frame rate. The memory gating survives: the
+/// map is still torn down whenever the user is off the tab.
+private struct DeferredOffersPage: View {
+    let active: Bool
+    @ObservedObject var venues: VenueService
+    @ObservedObject var location: LocationService
+    let onBack: () -> Void
+
+    @State private var mounted = false
+    /// Debounce token: bumped on every activation flip so a stale sleep
+    /// (user swiped in and straight back out) can't apply an old decision.
+    @State private var generation = 0
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            if mounted {
+                OffersMapView(venues: venues, location: location)
+                    // The interactive map swallows the TabView's horizontal
+                    // page swipe, so a thin left-edge strip provides the
+                    // "grab the edge to go back" gesture → back to Nightline.
+                    .overlay(alignment: .leading) { backEdge }
+                    .transition(.opacity)
+            } else {
+                ProgressView()
+                    .tint(Color.bronze)
+            }
+        }
+        .onChange(of: active) { _, isActive in
+            generation += 1
+            let g = generation
+            if isActive {
+                // Let the page-swipe spring (~0.4s response) land first.
+                Task {
+                    try? await Task.sleep(nanoseconds: 350_000_000)
+                    guard g == generation else { return }
+                    withAnimation(.easeIn(duration: 0.15)) { mounted = true }
+                }
+            } else {
+                Task {
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    guard g == generation else { return }
+                    mounted = false
+                }
+            }
+        }
+    }
+
+    private var backEdge: some View {
+        Color.clear
+            .frame(width: 24)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 12)
+                    .onEnded { value in
+                        if value.translation.width > 40,
+                           abs(value.translation.height) < 70 {
+                            onBack()
+                        }
+                    }
+            )
+            .ignoresSafeArea()
+    }
+}
+
 private struct OffersMapView: View {
     @ObservedObject var venues: VenueService
     @ObservedObject var location: LocationService
@@ -11883,8 +12795,8 @@ private struct OffersMapView: View {
             }
         }
         .task {
-            await venues.refresh()
             recenter()
+            await venues.refreshIfStale()
             await venues.resolveOfferCoordinates()
             recenter()
         }
@@ -14912,6 +15824,9 @@ private struct LiveSeshView: View {
     /// The night's recorded bar check-ins. Owned by SessionView (same
     /// lifetime as ghosts); consumed here at END time to build the recap.
     @ObservedObject var journey: NightJourneyStore
+    /// Group-shared snaps for the current live session. Owned here — the
+    /// live page is its only consumer (strip + uploads).
+    @StateObject private var groupSnaps = SessionSnapsService()
     let profile: Profile
     /// True when this view is hosted inline as a TabView page (not a
     /// modal). Suppresses the duplicate close header and the "Started…"
@@ -15605,8 +16520,20 @@ private struct LiveSeshView: View {
                     if inGroup, group.followingGroupVenue {
                         Task { await group.setGroupLooseSpot(spot) }
                     }
+                },
+                onPhotoAdded: { data in
+                    // Mirror every snap to the group while a live group
+                    // sesh runs (compressed server-side copy, 48h TTL).
+                    guard inGroup, let sid = group.session?.id else { return }
+                    let stop = venues.currentVenue?.name
+                    Task { await groupSnaps.upload(imageData: data, stopName: stop, sessionId: sid) }
                 }
             )
+            if inGroup, let sid = group.session?.id {
+                GroupSnapsStrip(snaps: groupSnaps, sessionId: sid) { pid in
+                    group.memberProfiles[pid]?.name ?? "?"
+                }
+            }
             if inGroup {
                 LiveGroupRoster(group: group, selfId: profile.id, now: now)
                 LiveRoastCard(group: group, profile: profile, now: now)
