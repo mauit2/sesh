@@ -1216,10 +1216,15 @@ struct LightboxContext: Identifiable {
     let id = UUID()
     let urls: [URL]
     let startIndex: Int
+    /// Deletes the photo at the given index from its backing store. When
+    /// set, the lightbox shows a trash button — the visible counterpart to
+    /// the strips' (hard-to-discover) long-press remove.
+    var onDelete: ((Int) -> Void)? = nil
 }
 
 /// Full-screen photo viewer — swipe between a stop's photos, tap X (or
-/// swipe down) to leave.
+/// swipe down) to leave; trash deletes the current photo when the context
+/// allows it.
 struct PhotoLightbox: View {
     let context: LightboxContext
     let onClose: () -> Void
@@ -1244,16 +1249,31 @@ struct PhotoLightbox: View {
             }
             .tabViewStyle(.page(indexDisplayMode: context.urls.count > 1 ? .automatic : .never))
 
-            Button {
-                onClose()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 38, height: 38)
-                    .background(Circle().fill(Color.white.opacity(0.15)))
+            HStack(spacing: 10) {
+                if let onDelete = context.onDelete {
+                    Button {
+                        onDelete(current)
+                        onClose()
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Color.white)
+                            .frame(width: 38, height: 38)
+                            .background(Circle().fill(Color.white.opacity(0.15)))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 38, height: 38)
+                        .background(Circle().fill(Color.white.opacity(0.15)))
+                }
+                .buttonStyle(PressScaleStyle())
             }
-            .buttonStyle(PressScaleStyle())
             .padding(18)
         }
         .preferredColorScheme(.dark)
@@ -2057,7 +2077,15 @@ struct NightRecapView: View {
                 onTapPhoto: { index in
                     lightbox = LightboxContext(
                         urls: stop.photoFilenames.map { history.photoURL($0, in: recap.id) },
-                        startIndex: index
+                        startIndex: index,
+                        onDelete: { i in
+                            guard i < stop.photoFilenames.count else { return }
+                            if let updated = history.removePhoto(
+                                stop.photoFilenames[i], fromStop: stop.id, in: recap.id
+                            ) {
+                                withAnimation(stageSpring) { recap = updated }
+                            }
+                        }
                     )
                 },
                 onDeletePhoto: { index in
@@ -2366,10 +2394,6 @@ struct LiveJourneyPhotosSection: View {
     /// Fired when the CURRENT-moment loose spot changes, so the owner can
     /// broadcast it to the group (no-op when solo / broken away).
     var onLooseSpotChanged: (LooseSpot?) -> Void = { _ in }
-    /// Fired with the raw image data of every photo the user adds (camera
-    /// or library), AFTER it lands in the local journey. The live page uses
-    /// it to mirror snaps to the group when a live group sesh is running.
-    var onPhotoAdded: ((Data) -> Void)? = nil
 
     /// Which page is showing. Follows new stops automatically (jumps to
     /// the newest) until the user swipes elsewhere.
@@ -2584,7 +2608,6 @@ struct LiveJourneyPhotosSection: View {
                     } else {
                         journey.addPhoto(data, toStop: stopId)
                     }
-                    onPhotoAdded?(data)
                 }
                 pickerItem = nil
                 libraryTargetStopId = nil
@@ -2597,7 +2620,6 @@ struct LiveJourneyPhotosSection: View {
                 } else {
                     journey.addPhoto(data, toStop: target.id)
                 }
-                onPhotoAdded?(data)
             }
             .ignoresSafeArea()
         }
@@ -2649,7 +2671,11 @@ struct LiveJourneyPhotosSection: View {
                 onTapPhoto: { index in
                     lightbox = LightboxContext(
                         urls: journey.preGamePhotos.map { journey.photoURL($0.filename) },
-                        startIndex: index
+                        startIndex: index,
+                        onDelete: { i in
+                            guard i < journey.preGamePhotos.count else { return }
+                            journey.removeLoosePhoto(journey.preGamePhotos[i].filename)
+                        }
                     )
                 },
                 onDeletePhoto: { index in
@@ -2705,7 +2731,11 @@ struct LiveJourneyPhotosSection: View {
                 onTapPhoto: { index in
                     lightbox = LightboxContext(
                         urls: windowPhotos.map { journey.photoURL($0.filename) },
-                        startIndex: index
+                        startIndex: index,
+                        onDelete: { i in
+                            guard i < windowPhotos.count else { return }
+                            journey.removeLoosePhoto(windowPhotos[i].filename)
+                        }
                     )
                 },
                 onDeletePhoto: { index in
@@ -3005,7 +3035,11 @@ struct LiveJourneyPhotosSection: View {
                 onTapPhoto: { index in
                     lightbox = LightboxContext(
                         urls: stop.photoFilenames.map { journey.photoURL($0) },
-                        startIndex: index
+                        startIndex: index,
+                        onDelete: { i in
+                            guard i < stop.photoFilenames.count else { return }
+                            journey.removePhoto(stop.photoFilenames[i], fromStop: stop.id)
+                        }
                     )
                 },
                 onDeletePhoto: { index in

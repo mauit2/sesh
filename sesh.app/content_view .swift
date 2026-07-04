@@ -1857,6 +1857,23 @@ final class SessionService: ObservableObject {
         clearLocal()
     }
 
+    /// Remove MY personal (non-shared) drink rows from a session I'm
+    /// walking away from. The rows have just been copied into whichever
+    /// store the night continues in — leaving the originals behind would
+    /// double-count them on a later rejoin (leave→rejoin used to double
+    /// the count every cycle). Shared rounds stay; they belong to the
+    /// whole group, not to me.
+    func deleteMyPersonalDrinks(in sessionId: UUID) async {
+        guard let uid = myId else { return }
+        _ = try? await supabase.from("session_drinks")
+            .delete()
+            .eq("session_id", value: sessionId.uuidString.lowercased())
+            .eq("profile_id", value: uid.uuidString.lowercased())
+            .eq("shared", value: false)
+            .eq("live", value: scopeLive)
+            .execute()
+    }
+
     /// A group session is only worth resuming for ~a night. Anything
     /// older is a leftover (host never pressed END, app was killed
     /// mid-switch, etc.) — resurrecting it produces phantom "seshes I
@@ -6612,33 +6629,141 @@ final class FriendsPulseService: ObservableObject {
     }
 }
 
-/// Stories-style strip at the top of Nightline: live friends glow with
-/// their BAC; everyone else sits dimmed behind them. Hidden entirely when
-/// the user has no friends yet (the feed's empty state covers onboarding).
+/// Stories-style strip at the top of Nightline: your own story bubble
+/// first (post with the +), then friends — live ones glow with their BAC,
+/// story-holders get a bronze ring, everyone else sits dimmed. Tapping a
+/// friend opens their stories when they have any, else their live pulse.
 private struct FriendsPulseStrip: View {
     @ObservedObject var pulse: FriendsPulseService
+    @ObservedObject var stories: StoriesService
+    let profile: Profile
+    /// My BAC / location at the moment of posting (nil = nothing to stamp).
+    let storyBAC: () -> Double?
+    let storyStamp: () -> String?
     let onOpen: (FriendPulse) -> Void
 
+    @State private var cameraOpen = false
+    @State private var libraryOpen = false
+    @State private var pickerItem: PhotosPickerItem? = nil
+    @State private var staged: StagedStoryImage? = nil
+    @State private var viewerCtx: StoryViewerContext? = nil
+
     var body: some View {
-        if !pulse.pulses.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("TONIGHT")
-                    .font(.system(size: 10, weight: .black, design: .monospaced))
-                    .tracking(2.4)
-                    .foregroundStyle(Color.bronze)
-                    .padding(.horizontal, 22)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 14) {
-                        ForEach(pulse.pulses) { p in
-                            PulseAvatar(pulse: p)
-                                .onTapGesture { if p.live { onOpen(p) } }
-                        }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("TONIGHT")
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .tracking(2.4)
+                .foregroundStyle(Color.bronze)
+                .padding(.horizontal, 22)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    myBubble
+                    ForEach(pulse.pulses) { p in
+                        let theirStories = stories.stories(for: p.id)
+                        PulseAvatar(pulse: p, hasStory: !theirStories.isEmpty)
+                            .onTapGesture {
+                                if !theirStories.isEmpty {
+                                    viewerCtx = StoryViewerContext(
+                                        stories: theirStories, name: p.name,
+                                        avatarUrl: p.avatarUrl, canDelete: false
+                                    )
+                                } else if p.live {
+                                    onOpen(p)
+                                }
+                            }
                     }
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 2)
                 }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 2)
             }
         }
+        .fullScreenCover(isPresented: $cameraOpen) {
+            CameraCaptureView { data in staged = StagedStoryImage(data: data) }
+                .ignoresSafeArea()
+        }
+        .photosPicker(isPresented: $libraryOpen, selection: $pickerItem, matching: .images)
+        .onChange(of: pickerItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self) {
+                    staged = StagedStoryImage(data: data)
+                }
+                pickerItem = nil
+            }
+        }
+        .sheet(item: $staged) { img in
+            StoryComposer(
+                imageData: img.data,
+                bac: storyBAC(),
+                stamp: storyStamp(),
+                onPost: { caption, bac, stamp in
+                    staged = nil
+                    Task { await stories.post(imageData: img.data, caption: caption, bac: bac, stamp: stamp) }
+                },
+                onCancel: { staged = nil }
+            )
+            .presentationDetents([.large])
+            .presentationBackground(Color.ink)
+        }
+        .fullScreenCover(item: $viewerCtx) { ctx in
+            StoryViewer(
+                ctx: ctx,
+                onDelete: { story in Task { await stories.delete(story) } },
+                onClose: { viewerCtx = nil }
+            )
+        }
+    }
+
+    /// My avatar: bronze ring when I have live stories (tap to review /
+    /// delete), whiskey "+" badge to post a new one (camera, else library).
+    private var myBubble: some View {
+        VStack(spacing: 4) {
+            ZStack(alignment: .bottomTrailing) {
+                AvatarView(urlString: profile.avatarURL,
+                           initial: String(profile.name.prefix(1)).uppercased(),
+                           size: 54)
+                    .overlay(
+                        Circle().strokeBorder(
+                            stories.mine.isEmpty ? Color.clear : Color.bronze,
+                            lineWidth: 2.5
+                        )
+                        .padding(-3)
+                    )
+                    .onTapGesture {
+                        let mine = stories.mine
+                        if mine.isEmpty {
+                            openCapture()
+                        } else {
+                            viewerCtx = StoryViewerContext(
+                                stories: mine, name: profile.name,
+                                avatarUrl: profile.avatarURL, canDelete: true
+                            )
+                        }
+                    }
+                Button(action: openCapture) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .black))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 19, height: 19)
+                        .background(Circle().fill(Color.whiskey))
+                        .overlay(Circle().strokeBorder(Color.ink, lineWidth: 2))
+                }
+                .buttonStyle(PressScaleStyle())
+                .offset(x: 4, y: 4)
+            }
+            .padding(.top, 4)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 9)
+            Text("Your story")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.6))
+                .lineLimit(1)
+        }
+        .frame(width: 72)
+    }
+
+    private func openCapture() {
+        if CameraCaptureView.isAvailable { cameraOpen = true } else { libraryOpen = true }
     }
 }
 
@@ -6646,6 +6771,9 @@ private struct FriendsPulseStrip: View {
 /// BAC pill; offline friends are dimmed with no badge.
 private struct PulseAvatar: View {
     let pulse: FriendPulse
+    /// They have fresh stories → bronze ring, full opacity, tappable even
+    /// when not live.
+    var hasStory: Bool = false
     /// BAC arrives on the raw %-scale; display follows the VIEWER's unit
     /// preference (percent vs promille), same as everywhere else in the app.
     @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
@@ -6669,12 +6797,12 @@ private struct PulseAvatar: View {
                            size: 54)
                     .overlay(
                         Circle().strokeBorder(
-                            pulse.live ? status.color : Color.clear,
+                            pulse.live ? status.color : (hasStory ? Color.bronze : Color.clear),
                             lineWidth: 2.5
                         )
                         .padding(-3)
                     )
-                    .opacity(pulse.live ? 1 : 0.45)
+                    .opacity((pulse.live || hasStory) ? 1 : 0.45)
                 if pulse.live {
                     Text(unit.formatted(pulse.bac ?? 0))
                         .font(.system(size: 9, weight: .black, design: .monospaced))
@@ -6945,21 +7073,42 @@ final class SessionSnapsService: ObservableObject {
                 .value
             snaps.insert(inserted, at: 0)
         } catch {
-            // Photo still lives in the user's own journey; group copy just
-            // didn't land. Next snap tries again.
+            // Nothing local to roll back; the next schnap tries again.
         }
+    }
+
+    /// Only the uploader can delete their schnap (RLS enforces the same
+    /// rule server-side on both the row and the storage object).
+    func canDelete(_ snap: SessionSnap) -> Bool {
+        snap.profileId == myId
+    }
+
+    func delete(_ snap: SessionSnap) async {
+        guard canDelete(snap) else { return }
+        _ = try? await supabase.storage.from("session-snaps").remove(paths: [snap.storagePath])
+        _ = try? await supabase.from("session_snaps").delete()
+            .eq("id", value: snap.id.uuidString.lowercased())
+            .execute()
+        snaps.removeAll { $0.id == snap.id }
     }
 }
 
 /// Horizontal strip of the group's shared snaps, shown on the LIVE page
-/// while in a group. Polls while visible; tap a snap for the full-screen
-/// viewer with the uploader's name.
+/// while in a group. Squad schnaps are captured HERE (camera/library) and
+/// go only to the group — deliberately separate from the personal Night
+/// Schnaps journey so they never appear in recaps or Nightline posts.
+/// Polls while visible; tap a snap for the full-screen viewer.
 struct GroupSnapsStrip: View {
     @ObservedObject var snaps: SessionSnapsService
     let sessionId: UUID
+    /// Current check-in label stamped onto uploads (nil = between bars).
+    let stopName: () -> String?
     /// Resolves an uploader id to a display name (group roster lookup).
     let nameFor: (UUID) -> String
     @State private var viewer: SessionSnap? = nil
+    @State private var cameraOpen = false
+    @State private var libraryOpen = false
+    @State private var pickerItem: PhotosPickerItem? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -6972,9 +7121,13 @@ struct GroupSnapsStrip: View {
                     .tracking(2.2)
                     .foregroundStyle(Color.bronze)
                 Spacer()
+                captureButton(icon: "camera.fill") {
+                    if CameraCaptureView.isAvailable { cameraOpen = true } else { libraryOpen = true }
+                }
+                captureButton(icon: "photo.on.rectangle") { libraryOpen = true }
             }
             if snaps.snaps.isEmpty {
-                Text("Every schnap the group takes tonight shows up here.")
+                Text("Schnap one here to share it with the group — squad schnaps stay out of your recap.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.45))
             } else {
@@ -7018,15 +7171,53 @@ struct GroupSnapsStrip: View {
             }
         }
         .fullScreenCover(item: $viewer) { snap in
-            GroupSnapViewer(snap: snap, name: nameFor(snap.profileId)) { viewer = nil }
+            GroupSnapViewer(
+                snap: snap,
+                name: nameFor(snap.profileId),
+                onDelete: snaps.canDelete(snap) ? {
+                    Task { await snaps.delete(snap) }
+                    viewer = nil
+                } : nil,
+                onClose: { viewer = nil }
+            )
         }
+        .fullScreenCover(isPresented: $cameraOpen) {
+            CameraCaptureView { data in
+                Task { await snaps.upload(imageData: data, stopName: stopName(), sessionId: sessionId) }
+            }
+            .ignoresSafeArea()
+        }
+        .photosPicker(isPresented: $libraryOpen, selection: $pickerItem, matching: .images)
+        .onChange(of: pickerItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self) {
+                    await snaps.upload(imageData: data, stopName: stopName(), sessionId: sessionId)
+                }
+                pickerItem = nil
+            }
+        }
+    }
+
+    private func captureButton(icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color.whiskey)
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(Color.cream.opacity(0.07)))
+                .overlay(Circle().strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
     }
 }
 
-/// Full-screen viewer for one shared snap.
+/// Full-screen viewer for one shared snap. `onDelete` is non-nil only for
+/// the uploader's own schnaps.
 private struct GroupSnapViewer: View {
     let snap: SessionSnap
     let name: String
+    var onDelete: (() -> Void)? = nil
     let onClose: () -> Void
 
     var body: some View {
@@ -7051,16 +7242,361 @@ private struct GroupSnapViewer: View {
                 }
                 .padding(.bottom, 26)
             }
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Color.cream)
-                    .frame(width: 40, height: 40)
-                    .background(Circle().fill(Color.ink.opacity(0.7)))
+            HStack(spacing: 10) {
+                if let onDelete {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Color.cream)
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(Color.ink.opacity(0.7)))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Color.cream)
+                        .frame(width: 40, height: 40)
+                        .background(Circle().fill(Color.ink.opacity(0.7)))
+                }
+                .buttonStyle(PressScaleStyle())
             }
-            .buttonStyle(PressScaleStyle())
             .padding(16)
         }
+    }
+}
+
+// MARK: - Live stories
+//
+// A photo posted to the TONIGHT strip for your friends, optionally stamped
+// with your at-the-moment BAC, a caption, and where you are (check-in,
+// pre-game, or between-bars). Ephemeral: visible for 24h (RLS filters
+// reads), then purged by the daily cleanup job (rows + storage).
+
+struct LiveStory: Decodable, Identifiable, Equatable {
+    let id: UUID
+    let profileId: UUID
+    let storagePath: String
+    let caption: String?
+    let bac: Double?
+    let stamp: String?
+    let createdAt: Date
+
+    var url: URL? {
+        try? supabase.storage.from("stories").getPublicURL(path: storagePath)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, caption, bac, stamp
+        case profileId = "profile_id"
+        case storagePath = "storage_path"
+        case createdAt = "created_at"
+    }
+}
+
+@MainActor
+final class StoriesService: ObservableObject {
+    /// Every fresh story visible to me (mine + friends'), newest first.
+    /// RLS enforces both the friendship gate and the 24h window.
+    @Published private(set) var stories: [LiveStory] = []
+    private var myId: UUID? { supabase.auth.currentUser?.id }
+
+    var mine: [LiveStory] {
+        guard let uid = myId else { return [] }
+        return stories(for: uid)
+    }
+
+    /// One user's fresh stories, oldest first (viewing order).
+    func stories(for profileId: UUID) -> [LiveStory] {
+        stories.filter { $0.profileId == profileId }.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    func refresh() async {
+        do {
+            let rows: [LiveStory] = try await supabase.from("live_stories")
+                .select()
+                .order("created_at", ascending: false)
+                .execute()
+                .value
+            stories = rows
+        } catch {
+            // Keep the previous list on a transient failure.
+        }
+    }
+
+    /// Compress + upload + register one story. Same storage discipline as
+    /// group schnaps (~1280px JPEG, a couple hundred KB).
+    func post(imageData: Data, caption: String?, bac: Double?, stamp: String?) async {
+        guard let uid = myId,
+              let jpeg = RecapPhotoUtil.compressedJPEG(imageData, maxDimension: 1280, quality: 0.65)
+        else { return }
+        let path = "\(uid.uuidString.lowercased())/\(UUID().uuidString.lowercased()).jpg"
+        struct Row: Encodable {
+            let profile_id: String
+            let storage_path: String
+            let caption: String?
+            let bac: Double?
+            let stamp: String?
+        }
+        let trimmed = caption?.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            _ = try await supabase.storage.from("stories")
+                .upload(path, data: jpeg, options: FileOptions(contentType: "image/jpeg"))
+            let inserted: LiveStory = try await supabase.from("live_stories")
+                .insert(Row(
+                    profile_id: uid.uuidString.lowercased(),
+                    storage_path: path,
+                    caption: (trimmed?.isEmpty ?? true) ? nil : trimmed,
+                    bac: bac,
+                    stamp: stamp
+                ))
+                .select()
+                .single()
+                .execute()
+                .value
+            stories.insert(inserted, at: 0)
+        } catch {
+            // Next post retries; nothing local to roll back.
+        }
+    }
+
+    func delete(_ story: LiveStory) async {
+        guard story.profileId == myId else { return }
+        _ = try? await supabase.storage.from("stories").remove(paths: [story.storagePath])
+        _ = try? await supabase.from("live_stories").delete()
+            .eq("id", value: story.id.uuidString.lowercased())
+            .execute()
+        stories.removeAll { $0.id == story.id }
+    }
+}
+
+/// Image staged for the story composer (Identifiable for sheet(item:)).
+private struct StagedStoryImage: Identifiable {
+    let id = UUID()
+    let data: Data
+}
+
+/// Everything the full-screen story viewer needs.
+private struct StoryViewerContext: Identifiable {
+    let id = UUID()
+    let stories: [LiveStory]
+    let name: String
+    let avatarUrl: String?
+    let canDelete: Bool
+}
+
+/// Compose sheet: photo preview + caption + toggleable BAC / location
+/// stamps captured at post time.
+private struct StoryComposer: View {
+    let imageData: Data
+    let bac: Double?
+    let stamp: String?
+    let onPost: (_ caption: String?, _ bac: Double?, _ stamp: String?) -> Void
+    let onCancel: () -> Void
+
+    @State private var caption = ""
+    @State private var includeBAC = true
+    @State private var includeStamp = true
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var unit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            HStack {
+                Button("Cancel", action: onCancel)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.6))
+                Spacer()
+                Text("YOUR STORY")
+                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                    .tracking(2.2)
+                    .foregroundStyle(Color.bronze)
+                Spacer()
+                Button {
+                    onPost(caption,
+                           includeBAC ? bac : nil,
+                           includeStamp ? stamp : nil)
+                } label: {
+                    Text("POST")
+                        .font(.system(size: 13, weight: .black, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                        .background(Capsule().fill(Color.whiskey))
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+
+            if let img = UIImage(data: imageData) {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxHeight: 340)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+
+            // What gets stamped on the story — tap to include/exclude.
+            HStack(spacing: 10) {
+                if let bac {
+                    stampChip(
+                        icon: "gauge.medium",
+                        label: "\(unit.formatted(bac))\(unit.symbol)",
+                        on: includeBAC
+                    ) { includeBAC.toggle() }
+                }
+                if let stamp, !stamp.isEmpty {
+                    stampChip(icon: "mappin.circle.fill", label: stamp, on: includeStamp) {
+                        includeStamp.toggle()
+                    }
+                }
+                Spacer()
+            }
+
+            TextField("Add a caption…", text: $caption, axis: .vertical)
+                .lineLimit(1...3)
+                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.06)))
+
+            Spacer()
+        }
+        .padding(18)
+        .background(Color.ink)
+    }
+
+    private func stampChip(icon: String, label: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: on ? "checkmark.circle.fill" : icon)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(on ? Color.ink : Color.whiskey)
+                Text(label)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(on ? Color.ink : Color.cream.opacity(0.7))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 11).padding(.vertical, 7)
+            .background(Capsule().fill(on ? Color.whiskey : Color.cream.opacity(0.06)))
+            .overlay(Capsule().strokeBorder(Color.whiskey.opacity(on ? 0 : 0.4), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
+/// Full-screen story pager: swipe through one user's fresh stories with
+/// their caption, BAC (in the VIEWER's unit) and location stamp.
+private struct StoryViewer: View {
+    let ctx: StoryViewerContext
+    let onDelete: (LiveStory) -> Void
+    let onClose: () -> Void
+
+    @State private var index = 0
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var unit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black.ignoresSafeArea()
+            TabView(selection: $index) {
+                ForEach(Array(ctx.stories.enumerated()), id: \.element.id) { i, story in
+                    storyPage(story).tag(i)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: ctx.stories.count > 1 ? .automatic : .never))
+
+            HStack(spacing: 10) {
+                AvatarView(urlString: ctx.avatarUrl,
+                           initial: String(ctx.name.prefix(1)).uppercased(),
+                           size: 34)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(ctx.name)
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    if ctx.stories.indices.contains(index) {
+                        Text(timeAgo(ctx.stories[index].createdAt))
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Color.cream.opacity(0.55))
+                    }
+                }
+                Spacer()
+                if ctx.canDelete, ctx.stories.indices.contains(index) {
+                    Button {
+                        let victim = ctx.stories[index]
+                        onDelete(victim)
+                        onClose()
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Color.cream)
+                            .frame(width: 38, height: 38)
+                            .background(Circle().fill(Color.ink.opacity(0.7)))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.cream)
+                        .frame(width: 38, height: 38)
+                        .background(Circle().fill(Color.ink.opacity(0.7)))
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+        }
+    }
+
+    @ViewBuilder
+    private func storyPage(_ story: LiveStory) -> some View {
+        ZStack {
+            DownsampledAsyncImage(url: story.url, targetPoints: 700, fill: false)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack {
+                Spacer()
+                VStack(spacing: 10) {
+                    HStack(spacing: 8) {
+                        if let bac = story.bac {
+                            storyBadge(icon: "gauge.medium",
+                                       text: "\(unit.formatted(bac))\(unit.symbol)")
+                        }
+                        if let stamp = story.stamp, !stamp.isEmpty {
+                            storyBadge(icon: "mappin.circle.fill", text: stamp)
+                        }
+                    }
+                    if let caption = story.caption, !caption.isEmpty {
+                        Text(caption)
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .background(Capsule().fill(Color.ink.opacity(0.65)))
+                    }
+                }
+                .padding(.bottom, 42)
+            }
+        }
+    }
+
+    private func storyBadge(icon: String, text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color.whiskey)
+            Text(text)
+                .font(.system(size: 12, weight: .black, design: .monospaced))
+                .foregroundStyle(Color.cream)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Capsule().fill(Color.ink.opacity(0.7)))
+    }
+
+    private func timeAgo(_ date: Date) -> String {
+        let mins = max(0, Int(Date().timeIntervalSince(date) / 60))
+        if mins < 60 { return "\(mins)m ago" }
+        return "\(mins / 60)h \(mins % 60)m ago"
     }
 }
 
@@ -7073,6 +7609,7 @@ private struct PulseWiringModifier: ViewModifier {
     @ObservedObject var liveGroup: SessionService
     @ObservedObject var venues: VenueService
     @ObservedObject var friendsPulse: FriendsPulseService
+    @ObservedObject var stories: StoriesService
     @Binding var openPulse: FriendPulse?
     let tab: TopTab
     let publish: () -> Void
@@ -7088,10 +7625,14 @@ private struct PulseWiringModifier: ViewModifier {
                 // Slow app-wide poll so the NIGHTLINE tab dot can light up
                 // when a friend goes live, wherever the user is.
                 friendsPulse.startPolling(every: 120)
+                await stories.refresh()
             }
             .onChange(of: tab) { _, newTab in
                 // Fast while the TONIGHT strip is on screen, slow otherwise.
                 friendsPulse.startPolling(every: newTab == .timeline ? 30 : 120)
+                if newTab == .timeline {
+                    Task { await stories.refresh() }
+                }
             }
             .sheet(item: $openPulse) { p in
                 FriendPulseSheet(pulse: p)
@@ -7106,6 +7647,10 @@ private struct PulseWiringModifier: ViewModifier {
 private struct TimelineFeedView: View {
     @ObservedObject var feed: FeedService
     @ObservedObject var pulse: FriendsPulseService
+    @ObservedObject var stories: StoriesService
+    let profile: Profile
+    let storyBAC: () -> Double?
+    let storyStamp: () -> String?
     let onOpenPost: (TimelinePost) -> Void
     let onOpenAuthor: (TimelinePost) -> Void
     let onOpenPulse: (FriendPulse) -> Void
@@ -7118,7 +7663,14 @@ private struct TimelineFeedView: View {
                     .tracking(2.4).foregroundStyle(Color.bronze)
                     .padding(.horizontal, 22).padding(.top, 6)
 
-                FriendsPulseStrip(pulse: pulse, onOpen: onOpenPulse)
+                FriendsPulseStrip(
+                    pulse: pulse,
+                    stories: stories,
+                    profile: profile,
+                    storyBAC: storyBAC,
+                    storyStamp: storyStamp,
+                    onOpen: onOpenPulse
+                )
 
                 if feed.posts.isEmpty {
                     emptyState
@@ -7137,6 +7689,7 @@ private struct TimelineFeedView: View {
         .refreshable {
             await feed.refresh()
             await pulse.refresh()
+            await stories.refresh()
         }
         // Re-fetch whenever the timeline appears so newly posted (or deleted)
         // nights show up. Stable post/photo ids keep this from resetting the
@@ -8452,6 +9005,7 @@ private struct SessionView: View {
     @StateObject private var friends = FriendsService()
     @StateObject private var presence = PresenceService()
     @StateObject private var friendsPulse = FriendsPulseService()
+    @StateObject private var liveStories = StoriesService()
     /// A live friend tapped in the Nightline pulse strip → detail sheet.
     @State private var openPulse: FriendPulse? = nil
     /// The friends timeline (loaded when the TIMELINE tab is first shown).
@@ -8683,24 +9237,51 @@ private struct SessionView: View {
         }
     }
 
+    /// A carried drink scaled to MY share. Shared rounds count grams/heads
+    /// in the group BAC math — copying one across as a full personal drink
+    /// would multiply its alcohol by the old group's headcount (the "BAC
+    /// way too high after leaving a group" bug). Personal drinks pass
+    /// through untouched.
+    private func carriedOption(for d: SessionDrink, headCount: Int) -> DrinkOption {
+        let opt = venues.resolveOption(for: d)
+        guard d.shared, headCount > 1 else { return opt }
+        return DrinkOption(
+            category: opt.category,
+            name: opt.name,
+            detail: opt.detail,
+            volumeML: opt.volumeML / Double(headCount),
+            abv: opt.abv,
+            customGlyph: opt.customGlyph
+        )
+    }
+
     /// Re-add a set of drinks (captured from the group we just left during a
     /// direct group→group switch) into the group that's now current, keeping
-    /// their original times. The source rows stay in the old group's ledger;
-    /// these copies make the count follow me into the new group.
-    private func carryDrinksIntoCurrentGroup(_ previous: [SessionDrink]) {
+    /// their original times. My personal rows are then DELETED from the old
+    /// group so a later return can't double-count them; shared rounds stay
+    /// with the old group (they belong to everyone).
+    private func carryDrinksIntoCurrentGroup(
+        _ previous: [SessionDrink], headCount: Int, from oldSessionId: UUID
+    ) {
         guard !previous.isEmpty else { return }
         let carried = previous.sorted(by: { $0.createdAt < $1.createdAt })
         Task {
             for d in carried {
-                await liveGroup.addDrink(venues.resolveOption(for: d), shared: false, consumedAt: d.createdAt)
+                await liveGroup.addDrink(
+                    carriedOption(for: d, headCount: headCount),
+                    shared: false, consumedAt: d.createdAt
+                )
             }
+            await liveGroup.deleteMyPersonalDrinks(in: oldSessionId)
             await liveGroup.refresh()
         }
     }
 
     private func leaveGroupKeepingNight() {
+        let heads = max(liveGroup.members.count + liveGroup.ghosts.count, 1)
+        let oldId = liveGroup.session?.id
         for d in liveGroup.liveTimeline(for: profile.id).sorted(by: { $0.createdAt < $1.createdAt }) {
-            live.add(venues.resolveOption(for: d), at: d.createdAt)
+            live.add(carriedOption(for: d, headCount: heads), at: d.createdAt)
         }
         // A host can't "leave" their own group, so leaving-to-keep-night ends
         // it for everyone (no recap for me — my drinks moved to the solo sesh).
@@ -8709,6 +9290,11 @@ private struct SessionView: View {
             if host {
                 await liveGroup.end(cousinSessionId: planGroup.session?.id, captureRecap: false)
             } else {
+                // Copies live in my solo store now — clear my personal rows
+                // out of the group so rejoining can't double-count them.
+                if let oldId {
+                    await liveGroup.deleteMyPersonalDrinks(in: oldId)
+                }
                 await liveGroup.leave(cousinSessionId: planGroup.session?.id, captureRecap: false)
             }
         }
@@ -9006,6 +9592,7 @@ private struct SessionView: View {
             liveGroup: liveGroup,
             venues: venues,
             friendsPulse: friendsPulse,
+            stories: liveStories,
             openPulse: $openPulse,
             tab: tab,
             publish: publishPresence
@@ -9034,12 +9621,14 @@ private struct SessionView: View {
                         carrySoloNightIntoGroup()
                     } else if let oldId = old, oldId != new {
                         // Group → group switch. enter() hasn't yet swapped
-                        // `drinks` to the new group, so the timeline still
-                        // holds the PREVIOUS group's rows — capture mine now
-                        // (filtered to the old session id) and re-add them.
+                        // `drinks`/roster to the new group, so the timeline
+                        // (and headcount for the shared-round split) still
+                        // reflect the PREVIOUS group — capture mine now and
+                        // re-add them to the new group.
                         let previous = liveGroup.liveTimeline(for: profile.id)
                             .filter { $0.sessionId == oldId }
-                        carryDrinksIntoCurrentGroup(previous)
+                        let heads = max(liveGroup.members.count + liveGroup.ghosts.count, 1)
+                        carryDrinksIntoCurrentGroup(previous, headCount: heads, from: oldId)
                     }
                 }
             } else if old != nil && new == nil {
@@ -9148,6 +9737,10 @@ private struct SessionView: View {
         TimelineFeedView(
             feed: feed,
             pulse: friendsPulse,
+            stories: liveStories,
+            profile: profile,
+            storyBAC: { currentStoryBAC() },
+            storyStamp: { currentStoryStamp() },
             onOpenPost: { openPost = $0 },
             onOpenAuthor: { post in
                 openProfileUser = ProfileRef(
@@ -9157,6 +9750,30 @@ private struct SessionView: View {
             },
             onOpenPulse: { openPulse = $0 }
         )
+    }
+
+    /// My BAC at the instant a story is posted — group math when in a live
+    /// group, solo Widmark otherwise, nil when no night is running (the
+    /// composer then simply offers no BAC stamp).
+    private func currentStoryBAC() -> Double? {
+        if liveGroup.isActive {
+            return liveGroup.liveBAC(for: profile.id)
+        }
+        if live.isActive {
+            return live.bac(profile: profile)
+        }
+        return nil
+    }
+
+    /// Where I am for the story stamp: checked-in venue first, then the
+    /// group's shared venue, then the current pre-game / between-bars spot.
+    private func currentStoryStamp() -> String? {
+        if let name = venues.currentVenue?.name { return name }
+        if let name = liveGroup.liveVenue?.name { return name }
+        if let spot = journey.currentLooseSpot {
+            return spot.name ?? (journey.hasCheckedInSomewhere ? "Between bars" : "Pre-game")
+        }
+        return nil
     }
 
     /// Push my current live status (or its absence) up to `live_presence`.
@@ -16520,19 +17137,18 @@ private struct LiveSeshView: View {
                     if inGroup, group.followingGroupVenue {
                         Task { await group.setGroupLooseSpot(spot) }
                     }
-                },
-                onPhotoAdded: { data in
-                    // Mirror every snap to the group while a live group
-                    // sesh runs (compressed server-side copy, 48h TTL).
-                    guard inGroup, let sid = group.session?.id else { return }
-                    let stop = venues.currentVenue?.name
-                    Task { await groupSnaps.upload(imageData: data, stopName: stop, sessionId: sid) }
                 }
             )
             if inGroup, let sid = group.session?.id {
-                GroupSnapsStrip(snaps: groupSnaps, sessionId: sid) { pid in
-                    group.memberProfiles[pid]?.name ?? "?"
-                }
+                // Squad schnaps are taken IN this card, separately from the
+                // personal Night Schnaps above — group photos never enter
+                // the journey, so they stay out of recaps/Nightline posts.
+                GroupSnapsStrip(
+                    snaps: groupSnaps,
+                    sessionId: sid,
+                    stopName: { venues.currentVenue?.name },
+                    nameFor: { pid in group.memberProfiles[pid]?.name ?? "?" }
+                )
             }
             if inGroup {
                 LiveGroupRoster(group: group, selfId: profile.id, now: now)
