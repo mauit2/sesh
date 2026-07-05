@@ -74,16 +74,24 @@ struct SeshStop: Codable, Identifiable, Equatable {
         return CLLocationCoordinate2D(latitude: lat, longitude: lon)
     }
 
+    /// Which GROUP session this entry belongs to. Stamped at creation when
+    /// the user is in a live group; nil = personal (solo, or logged in
+    /// parallel to a group before joining). The group recap is built from
+    /// entries carrying its id — timestamps can't tell "the group's story"
+    /// apart from a member's parallel prelude, identity can.
+    var sessionId: UUID? = nil
+
     // Custom decode so journeys persisted by older builds (no kind /
     // departedAt / photoFilenames / note keys) still load instead of resetting.
     enum CodingKeys: String, CodingKey {
-        case id, venueId, kind, name, lat, lon, arrivedAt, departedAt, photoFilenames, note
+        case id, venueId, kind, name, lat, lon, arrivedAt, departedAt, photoFilenames, note, sessionId
     }
 
     init(
         id: UUID, venueId: UUID, kind: JourneyStopKind = .bar, name: String,
         lat: Double?, lon: Double?, arrivedAt: Date,
-        departedAt: Date? = nil, photoFilenames: [String] = [], note: String? = nil
+        departedAt: Date? = nil, photoFilenames: [String] = [], note: String? = nil,
+        sessionId: UUID? = nil
     ) {
         self.id = id
         self.venueId = venueId
@@ -95,6 +103,7 @@ struct SeshStop: Codable, Identifiable, Equatable {
         self.departedAt = departedAt
         self.photoFilenames = photoFilenames
         self.note = note
+        self.sessionId = sessionId
     }
 
     init(from decoder: Decoder) throws {
@@ -109,6 +118,7 @@ struct SeshStop: Codable, Identifiable, Equatable {
         departedAt = try? c.decodeIfPresent(Date.self, forKey: .departedAt)
         photoFilenames = (try? c.decodeIfPresent([String].self, forKey: .photoFilenames)) ?? []
         note = try? c.decodeIfPresent(String.self, forKey: .note)
+        sessionId = try? c.decodeIfPresent(UUID.self, forKey: .sessionId)
     }
 }
 
@@ -134,6 +144,8 @@ struct LooseSpot: Codable, Equatable, Hashable, Identifiable {
     var lat: Double?
     var lon: Double?
     let at: Date
+    /// Which GROUP session this spot belongs to (see SeshStop.sessionId).
+    var sessionId: UUID? = nil
     var coordinate: CLLocationCoordinate2D? {
         guard let lat, let lon else { return nil }
         return CLLocationCoordinate2D(latitude: lat, longitude: lon)
@@ -150,10 +162,15 @@ final class NightJourneyStore: ObservableObject {
     /// pre-game is a synthetic leg with no SeshStop, so its note lives here.
     @Published private(set) var preGameNote: String?
 
-    private let key = "sesh.nightJourney.v1"
-    private let looseKey = "sesh.nightJourney.loose.v1"
-    private let looseSpotsKey = "sesh.nightJourney.looseSpots.v1"
-    private let preGameNoteKey = "sesh.nightJourney.preGameNote.v1"
+    // Per-ACCOUNT keys (suffix = signed-in user id). A single shared slot
+    // meant one account's night silently OVERWROTE the other's on the same
+    // phone — stops and photos vanished after an account switch. The owner
+    // stamp only stopped cross-reading, not the overwrite; namespacing
+    // gives every account its own journey that survives sign-in/sign-out.
+    private let key: String
+    private let looseKey: String
+    private let looseSpotsKey: String
+    private let preGameNoteKey: String
 
     /// Start of the current loose window — the last checkout (between bars
     /// / afters), or the dawn of time when no bar has been visited yet
@@ -198,6 +215,81 @@ final class NightJourneyStore: ObservableObject {
     /// True once a bar has been visited — i.e. pre-game is now history.
     var hasCheckedInSomewhere: Bool { firstBarArrival != nil }
 
+    /// Supplies the LIVE GROUP id the user is currently in (nil = solo).
+    /// Set by SessionView; every new journey entry is stamped with it so
+    /// the group recap can tell the group's story apart from a member's
+    /// parallel personal stops by IDENTITY, not timestamps.
+    var currentSessionProvider: (() -> UUID?)? = nil
+    private var currentSessionId: UUID? { currentSessionProvider?() }
+
+    /// Merge the group's server-side route into MY journey — the DOWNSTREAM
+    /// half of route syncing, so every member's live view and personal
+    /// recap contain every group stop, not just the ones this device
+    /// witnessed. By-id for entries that round-tripped (mine come back with
+    /// their own ids); name+time proximity for bars (my check-in and the
+    /// group's route row are two records of one arrival); insertion keeps
+    /// time order without disturbing existing entries.
+    func mergeGroupRoute(stops incoming: [SeshStop], spots incomingSpots: [LooseSpot]) {
+        var changed = false
+        for s in incoming {
+            if let i = stops.firstIndex(where: { $0.id == s.id }) {
+                // Another member stamped the departure — adopt the window.
+                if stops[i].departedAt == nil, let dep = s.departedAt {
+                    stops[i].departedAt = dep
+                    changed = true
+                }
+                continue
+            }
+            if s.kind == .bar, stops.contains(where: {
+                $0.kind == .bar && $0.name == s.name
+                    && abs($0.arrivedAt.timeIntervalSince(s.arrivedAt)) < 3 * 60
+            }) {
+                continue
+            }
+            if s.kind == .between, stops.contains(where: {
+                $0.kind == .between && $0.name == s.name
+                    && abs($0.arrivedAt.timeIntervalSince(s.arrivedAt)) < 3 * 60
+            }) {
+                continue
+            }
+            let at = stops.firstIndex(where: { $0.arrivedAt > s.arrivedAt }) ?? stops.endIndex
+            stops.insert(s, at: at)
+            changed = true
+        }
+        if changed { save() }
+        var spotsChanged = false
+        for sp in incomingSpots {
+            // Id-only dedupe: the live broadcast adoption keeps the spot's
+            // original id, so a round-trip matches here. (A same-minute
+            // proximity guard used to sit here too — it silently swallowed
+            // the group's pre-game whenever a member marked their own spot
+            // within a minute of it.)
+            guard !looseSpots.contains(where: { $0.id == sp.id }) else { continue }
+            let at = looseSpots.firstIndex(where: { $0.at > sp.at }) ?? looseSpots.endIndex
+            looseSpots.insert(sp, at: at)
+            spotsChanged = true
+        }
+        if spotsChanged { saveLooseSpots() }
+    }
+
+    /// The moment a user CREATES a group, their running night becomes the
+    /// group's opening chapter — retag everything not already claimed by
+    /// another group (the host's pre-game spot typically predates the
+    /// group row by a minute). Join does NOT do this: a joiner's earlier
+    /// stops stay personal.
+    func adoptNightIntoSession(_ sessionId: UUID) {
+        for i in stops.indices where stops[i].sessionId == nil {
+            stops[i].sessionId = sessionId
+        }
+        var changedSpots = false
+        for i in looseSpots.indices where looseSpots[i].sessionId == nil {
+            looseSpots[i].sessionId = sessionId
+            changedSpots = true
+        }
+        save()
+        if changedSpots { saveLooseSpots() }
+    }
+
     /// Set (or replace) the loose spot for the current window. The exact
     /// coordinate is stored as-is — these stay on-device, and (once recap
     /// sharing exists) the user chooses per-share whether to include them.
@@ -210,14 +302,23 @@ final class NightJourneyStore: ObservableObject {
             name: (trimmed?.isEmpty == false) ? trimmed : nil,
             lat: rawCoordinate?.latitude,
             lon: rawCoordinate?.longitude,
-            at: Date()
+            at: Date(),
+            sessionId: currentSessionId
         ))
         saveLooseSpots()
     }
 
-    func clearCurrentLooseSpot() {
+    /// `protectBefore` shields history: a GROUP's "current spot cleared"
+    /// broadcast must only drop the follower's spot for the ongoing moment
+    /// — never a spot from before the group existed (the host's adopted
+    /// pre-game, or the member's own earlier night). Without the shield, a
+    /// stale "current window" reaching back past old checkouts deleted the
+    /// group's Partaj-style pre-game from followers' journeys.
+    func clearCurrentLooseSpot(protectBefore: Date? = nil) {
         let start = currentWindowStart
-        looseSpots.removeAll { $0.at >= start }
+        looseSpots.removeAll {
+            $0.at >= start && ($0.at >= (protectBefore ?? .distantPast))
+        }
         saveLooseSpots()
     }
 
@@ -240,7 +341,9 @@ final class NightJourneyStore: ObservableObject {
         looseSpots.removeAll {
             $0.id == spot.id || ($0.at >= windowStart && $0.at < windowEnd)
         }
-        looseSpots.append(spot)
+        var stamped = spot
+        stamped.sessionId = currentSessionId
+        looseSpots.append(stamped)
         saveLooseSpots()
     }
 
@@ -257,7 +360,8 @@ final class NightJourneyStore: ObservableObject {
             name: (trimmed?.isEmpty == false) ? trimmed : nil,
             lat: rawCoordinate?.latitude,
             lon: rawCoordinate?.longitude,
-            at: at
+            at: at,
+            sessionId: currentSessionId
         ))
         saveLooseSpots()
     }
@@ -270,17 +374,63 @@ final class NightJourneyStore: ObservableObject {
 
     /// Staging area for photos snapped during the night, before a recap
     /// (and its id) exists. At END time `RecapHistoryStore.adoptPhotos`
-    /// moves these into the saved recap's own directory.
-    nonisolated let photosDirectory: URL = {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return docs.appendingPathComponent("night-recaps/journey-photos", isDirectory: true)
-    }()
+    /// moves these into the saved recap's own directory. Per-account, like
+    /// the keys above.
+    nonisolated let photosDirectory: URL
 
     init() {
+        let ns = supabase.auth.currentUser?.id.uuidString.lowercased() ?? "anon"
+        key = "sesh.nightJourney.v1.\(ns)"
+        looseKey = "sesh.nightJourney.loose.v1.\(ns)"
+        looseSpotsKey = "sesh.nightJourney.looseSpots.v1.\(ns)"
+        preGameNoteKey = "sesh.nightJourney.preGameNote.v1.\(ns)"
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        photosDirectory = docs.appendingPathComponent(
+            "night-recaps/journey-photos-\(ns)", isDirectory: true
+        )
         try? FileManager.default.createDirectory(
             at: photosDirectory, withIntermediateDirectories: true
         )
+        migrateLegacySlotIfMine(ns: ns)
         load()
+    }
+
+    /// One-time adoption of the pre-namespace shared slot: if the legacy
+    /// journey was last written by THIS account (its owner stamp), move its
+    /// data + staged photos into the account's own namespace. Another
+    /// account's legacy data is left untouched for its owner to adopt.
+    private func migrateLegacySlotIfMine(ns: String) {
+        let d = UserDefaults.standard
+        guard d.string(forKey: "sesh.nightJourney.owner.v1") == ns else { return }
+        let pairs = [
+            ("sesh.nightJourney.v1", key),
+            ("sesh.nightJourney.loose.v1", looseKey),
+            ("sesh.nightJourney.looseSpots.v1", looseSpotsKey),
+        ]
+        for (old, new) in pairs {
+            if d.object(forKey: new) == nil, let v = d.data(forKey: old) {
+                d.set(v, forKey: new)
+            }
+            d.removeObject(forKey: old)
+        }
+        if let note = d.string(forKey: "sesh.nightJourney.preGameNote.v1") {
+            if d.string(forKey: preGameNoteKey) == nil { d.set(note, forKey: preGameNoteKey) }
+            d.removeObject(forKey: "sesh.nightJourney.preGameNote.v1")
+        }
+        d.removeObject(forKey: "sesh.nightJourney.owner.v1")
+        let legacyDir = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("night-recaps/journey-photos", isDirectory: true)
+        if let files = try? FileManager.default.contentsOfDirectory(
+            at: legacyDir, includingPropertiesForKeys: nil
+        ) {
+            for f in files {
+                try? FileManager.default.moveItem(
+                    at: f,
+                    to: photosDirectory.appendingPathComponent(f.lastPathComponent)
+                )
+            }
+        }
     }
 
     /// Attach a photo to a stop mid-night. Compressed and staged on disk;
@@ -340,10 +490,20 @@ final class NightJourneyStore: ObservableObject {
     /// or puke marker landed in between). Returning to a bar AFTER
     /// checking out IS a new stop.
     func checkIn(_ venue: Venue, at date: Date = Date()) {
+        // Same-name match too: a merged group-route row for this bar has a
+        // different venueId but IS this arrival — don't double it.
         if let lastBar = stops.last(where: { $0.kind == .bar }),
-           lastBar.venueId == venue.id,
+           lastBar.venueId == venue.id || lastBar.name == venue.name,
            lastBar.departedAt == nil {
             return
+        }
+        // Arriving somewhere new means the previous bar is over — stamp it.
+        // A bar left open forever swallowed everything that happened after
+        // it (its drink window ran to the next arrival, and loose spots
+        // inside it — like a group pre-game adopted mid-night — rendered
+        // NOWHERE: not a page, not a leg, not in the recap).
+        if let open = stops.lastIndex(where: { $0.kind == .bar && $0.departedAt == nil }) {
+            stops[open].departedAt = date
         }
         stops.append(SeshStop(
             id: UUID(),
@@ -352,7 +512,8 @@ final class NightJourneyStore: ObservableObject {
             name: venue.name,
             lat: venue.lat,
             lon: venue.lon,
-            arrivedAt: date
+            arrivedAt: date,
+            sessionId: currentSessionId
         ))
         save()
     }
@@ -363,19 +524,29 @@ final class NightJourneyStore: ObservableObject {
     /// reorderable page (photos attach to it) — not just something that
     /// appears in the recap. `coordinate` (when location is on) puts it on
     /// the map. No-op when there's no bar to leave.
-    func checkOut(at date: Date = Date(), coordinate: CLLocationCoordinate2D? = nil) {
+    /// `recordBetween: false` = the night is OVER (END-triggered checkout):
+    /// just stamp the departure — a post-sesh "between bars" page would be
+    /// a phantom stop on a night that has already ended.
+    func checkOut(
+        at date: Date = Date(),
+        coordinate: CLLocationCoordinate2D? = nil,
+        recordBetween: Bool = true
+    ) {
         guard let i = stops.lastIndex(where: { $0.kind == .bar && $0.departedAt == nil })
         else { return }
         stops[i].departedAt = date
-        stops.append(SeshStop(
-            id: UUID(),
-            venueId: UUID(),
-            kind: .between,
-            name: "Between bars",
-            lat: coordinate?.latitude,
-            lon: coordinate?.longitude,
-            arrivedAt: date
-        ))
+        if recordBetween {
+            stops.append(SeshStop(
+                id: UUID(),
+                venueId: UUID(),
+                kind: .between,
+                name: "Between bars",
+                lat: coordinate?.latitude,
+                lon: coordinate?.longitude,
+                arrivedAt: date,
+                sessionId: currentSessionId
+            ))
+        }
         save()
     }
 
@@ -398,7 +569,8 @@ final class NightJourneyStore: ObservableObject {
             name: name ?? (kind == .food ? "Food stop" : "Puke break"),
             lat: coordinate?.latitude,
             lon: coordinate?.longitude,
-            arrivedAt: date
+            arrivedAt: date,
+            sessionId: currentSessionId
         ))
         save()
     }
@@ -463,7 +635,6 @@ final class NightJourneyStore: ObservableObject {
     func setPreGameNote(_ note: String) {
         let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
         preGameNote = trimmed.isEmpty ? nil : trimmed
-        StoreOwner.stamp(ownerKey)
         if let preGameNote {
             UserDefaults.standard.set(preGameNote, forKey: preGameNoteKey)
         } else {
@@ -488,13 +659,7 @@ final class NightJourneyStore: ObservableObject {
         )
     }
 
-    /// Which account this journey belongs to (see StoreOwner). Covers the
-    /// stops, staged photos, loose spots, and the pre-game note in one stamp
-    /// — they're all fragments of the same night.
-    private let ownerKey = "sesh.nightJourney.owner.v1"
-
     private func load() {
-        guard StoreOwner.mayLoad(ownerKey) else { return }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         if let data = UserDefaults.standard.data(forKey: key) {
@@ -510,7 +675,6 @@ final class NightJourneyStore: ObservableObject {
     }
 
     private func save() {
-        StoreOwner.stamp(ownerKey)
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         if let data = try? enc.encode(stops) {
@@ -522,7 +686,6 @@ final class NightJourneyStore: ObservableObject {
     }
 
     private func saveLooseSpots() {
-        StoreOwner.stamp(ownerKey)
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         if let data = try? enc.encode(looseSpots) {
@@ -580,6 +743,9 @@ struct RecapStop: Codable, Identifiable {
     var photoFilenames: [String] = []
     /// The user's comment about this stop, typed during the live sesh.
     var note: String? = nil
+    /// GROUP recaps only: every member's BAC + drink count when the group
+    /// left this spot, drunkest first. Nil on personal recaps.
+    var squad: [SquadStopStat]? = nil
 
     var coordinate: CLLocationCoordinate2D? {
         guard let lat, let lon else { return nil }
@@ -590,7 +756,7 @@ struct RecapStop: Codable, Identifiable {
     // .bar (their "Warm-up" legs map to .preGame by name).
     enum CodingKeys: String, CodingKey {
         case id, kind, lat, lon, name, arrivedAt, departedAt, drinks
-        case drinkSummary, bacOnArrival, bacOnDeparture, isPeak, photoFilenames, note
+        case drinkSummary, bacOnArrival, bacOnDeparture, isPeak, photoFilenames, note, squad
     }
 
     init(
@@ -632,6 +798,7 @@ struct RecapStop: Codable, Identifiable {
         isPeak = try c.decode(Bool.self, forKey: .isPeak)
         note = try? c.decodeIfPresent(String.self, forKey: .note)
         photoFilenames = (try? c.decodeIfPresent([String].self, forKey: .photoFilenames)) ?? []
+        squad = try? c.decodeIfPresent([SquadStopStat].self, forKey: .squad)
     }
 }
 
@@ -640,6 +807,17 @@ struct GroupMemberStat: Codable, Hashable, Identifiable {
     let name: String
     let drinkCount: Int
     let peakBAC: Double
+    let isMe: Bool
+    var id: String { name }
+}
+
+/// One member's state AT a specific stop of a group recap: BAC when the
+/// group left the spot + how many drinks they'd had by then. Sorted
+/// drunkest-first, so `first` wears the crown.
+struct SquadStopStat: Codable, Hashable, Identifiable {
+    let name: String
+    let bac: Double
+    let drinks: Int
     let isMe: Bool
     var id: String { name }
 }
@@ -660,6 +838,12 @@ struct NightRecap: Codable, Identifiable {
     /// Straight-line meters between consecutive located stops. 0 when
     /// fewer than two stops had coordinates.
     let crawlMeters: Double
+    /// TRUE for the squad recap built from a group sesh (squad schnaps +
+    /// per-stop member stats). Group recaps can be saved but never posted.
+    /// Optional so recaps saved before this existed still decode (nil = no).
+    var isGroup: Bool? = nil
+
+    var isGroupRecap: Bool { isGroup ?? false }
 
     var locatedStops: [RecapStop] { stops.filter { $0.coordinate != nil } }
     var hasMap: Bool { !locatedStops.isEmpty }
@@ -684,9 +868,23 @@ struct NightRecap: Codable, Identifiable {
         endedAt: Date = Date()
     ) -> NightRecap? {
         let events = rawEvents.sorted { $0.when < $1.when }
-        guard let firstEvent = events.first, bumpPerGram > 0 else { return nil }
+        guard bumpPerGram > 0 else { return nil }
+        // A drink-free night can still be a story (check-ins, photos,
+        // spots) — ending it used to silently produce NOTHING, stranding
+        // the photos. Anchor the grace window on the earliest activity
+        // instead of the first drink; bail only when there's truly nothing.
+        let anchor: Date
+        if let first = events.first {
+            anchor = first.when
+        } else {
+            let activity = journeyStops.map(\.arrivedAt)
+                + loosePhotos.map(\.takenAt)
+                + looseSpots.map(\.at)
+            guard let earliest = activity.min() else { return nil }
+            anchor = earliest
+        }
 
-        let graceStart = firstEvent.when.addingTimeInterval(-90 * 60)
+        let graceStart = anchor.addingTimeInterval(-90 * 60)
         // Kept in JOURNEY (display) order — the user can reorder stops, and
         // the recap cards/map follow that order. Drink windows below are
         // computed from a time-sorted copy so each bar keeps its own drinks
@@ -708,10 +906,10 @@ struct NightRecap: Codable, Identifiable {
         // location set before the first drink would fall outside every
         // window and silently vanish from the recap.
         let startedAt = min(
-            firstEvent.when,
-            barsByTime.first?.arrivedAt ?? firstEvent.when,
-            looseTakes.first?.takenAt ?? firstEvent.when,
-            nightSpots.first?.at ?? firstEvent.when
+            anchor,
+            barsByTime.first?.arrivedAt ?? anchor,
+            looseTakes.first?.takenAt ?? anchor,
+            nightSpots.first?.at ?? anchor
         )
 
         // BAC at an arbitrary time + the night's peak. Peak can only occur
@@ -728,7 +926,7 @@ struct NightRecap: Codable, Identifiable {
             return bac
         }
         var peakBAC = 0.0
-        var peakAt = firstEvent.when
+        var peakAt = anchor
         for e in events {
             let v = bac(at: e.when)
             if v > peakBAC { peakBAC = v; peakAt = e.when }
@@ -1071,17 +1269,27 @@ final class RecapHistoryStore: ObservableObject {
     /// recap's stops (the builder copied them from the journey), so a
     /// plain move keeps every reference valid. Call before/around save —
     /// missing files are skipped silently.
-    func adoptPhotos(from stagingDir: URL, for recap: NightRecap) {
+    func adoptPhotos(from stagingDir: URL, for recap: NightRecap, copying: Bool = false) {
         let dest = photoDir(recap.id)
         try? FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
         for stop in recap.stops {
             for filename in stop.photoFilenames {
                 let src = stagingDir.appendingPathComponent(filename)
                 guard FileManager.default.fileExists(atPath: src.path) else { continue }
-                try? FileManager.default.moveItem(
-                    at: src,
-                    to: dest.appendingPathComponent(filename)
-                )
+                // `copying` = the journey continues (mid-night recap from a
+                // group switch) — the staged file must survive for the
+                // final recap's own adoption.
+                if copying {
+                    try? FileManager.default.copyItem(
+                        at: src,
+                        to: dest.appendingPathComponent(filename)
+                    )
+                } else {
+                    try? FileManager.default.moveItem(
+                        at: src,
+                        to: dest.appendingPathComponent(filename)
+                    )
+                }
             }
         }
     }
@@ -1989,7 +2197,7 @@ struct NightRecapView: View {
 
     private var introCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Your night,")
+            Text(recap.isGroupRecap ? "Group night," : "Your night,")
                 .font(.system(size: 40, weight: .black, design: .rounded))
                 .italic()
                 .tracking(-1.6)
@@ -2071,6 +2279,10 @@ struct NightRecapView: View {
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
+
+            if let squad = stop.squad, !squad.isEmpty {
+                squadAtStop(squad)
+            }
 
             StopPhotoStrip(
                 photoURLs: stop.photoFilenames.map { history.photoURL($0, in: recap.id) },
@@ -2207,13 +2419,17 @@ struct NightRecapView: View {
                         onFinish()
                     } label: {
                         VStack(spacing: 2) {
-                            Text(mode == .liveEnd ? "SAVE TO PAST NIGHTS & END" : "SAVE TO PAST NIGHTS")
+                            Text(recap.isGroupRecap
+                                 ? (mode == .liveEnd ? "SAVE TO GROUP NIGHTS & END" : "SAVE TO GROUP NIGHTS")
+                                 : (mode == .liveEnd ? "SAVE TO PAST NIGHTS & END" : "SAVE TO PAST NIGHTS"))
                                 .font(.system(size: 13, weight: .black, design: .monospaced))
                                 .tracking(2.0)
-                            Text("(can be posted later)")
-                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                                .tracking(1.0)
-                                .opacity(0.6)
+                            if !recap.isGroupRecap {
+                                Text("(can be posted later)")
+                                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                    .tracking(1.0)
+                                    .opacity(0.6)
+                            }
                         }
                         .foregroundStyle(Color.ink)
                         .frame(maxWidth: .infinity)
@@ -2259,7 +2475,20 @@ struct NightRecapView: View {
     /// already been shared to the timeline.
     @ViewBuilder
     private var postOrPostedButton: some View {
-        if history.isPosted(recap.id) {
+        if recap.isGroupRecap {
+            // Group recaps are keepsakes, not posts — they contain the
+            // whole squad's photos and stats, which aren't the user's
+            // alone to publish.
+            HStack(spacing: 6) {
+                Image(systemName: "person.3.fill").font(.system(size: 12, weight: .bold))
+                Text("SQUAD RECAP · SAVE ONLY")
+                    .font(.system(size: 12, weight: .black, design: .monospaced)).tracking(1.6)
+            }
+            .foregroundStyle(Color.bronze)
+            .frame(maxWidth: .infinity).padding(.vertical, 13)
+            .background(Capsule().fill(Color.bronze.opacity(0.1)))
+            .overlay(Capsule().strokeBorder(Color.bronze.opacity(0.35), lineWidth: 1))
+        } else if history.isPosted(recap.id) {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle.fill").font(.system(size: 13, weight: .bold))
                 Text("POSTED TO NIGHTLINE")
@@ -2285,6 +2514,39 @@ struct NightRecapView: View {
             }
             .buttonStyle(PressScaleStyle())
         }
+    }
+
+    /// GROUP recap, per stop: everyone's BAC + drink tally as the group
+    /// left this spot — the drunkest wears the crown.
+    private func squadAtStop(_ squad: [SquadStopStat]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("THE SQUAD HERE")
+                .font(.system(size: 9, weight: .black, design: .monospaced))
+                .tracking(2)
+                .foregroundStyle(Color.bronze)
+            ForEach(Array(squad.enumerated()), id: \.element.id) { i, m in
+                HStack(spacing: 8) {
+                    Text(i == 0 ? "👑" : "\(i + 1).")
+                        .font(.system(size: i == 0 ? 13 : 11, weight: .black, design: .monospaced))
+                        .foregroundStyle(Color.cream.opacity(0.6))
+                        .frame(width: 22, alignment: .leading)
+                    Text(m.name)
+                        .font(.system(size: 13, weight: m.isMe ? .heavy : .semibold, design: .rounded))
+                        .foregroundStyle(m.isMe ? Color.whiskey : Color.cream)
+                        .lineLimit(1)
+                    Spacer()
+                    Text("\(m.drinks) \(m.drinks == 1 ? "drink" : "drinks") here")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                    Text(unit.formatted(m.bac))
+                        .font(.system(size: 12, weight: .black, design: .monospaced))
+                        .foregroundStyle(i == 0 ? Color.whiskey : Color.cream.opacity(0.8))
+                        .frame(width: 46, alignment: .trailing)
+                }
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.cream.opacity(0.04)))
     }
 
     /// The group recap's squad table — drunkest first, MVP crowned, you
@@ -2981,22 +3243,11 @@ struct LiveJourneyPhotosSection: View {
                 }
             }
 
-            // Row 2 — nav chrome (reorder arrows, arrival time, remove)
-            // shifted down off the title row so name + badge read cleanly.
+            // Row 2 — nav chrome (arrival time, remove) shifted down off
+            // the title row so name + badge read cleanly. The reorder
+            // arrows that used to sit here were dropped — they mirrored
+            // the pager's chevrons and just confused navigation.
             HStack(spacing: 8) {
-                // Reorder this stop in the journey (display only — its
-                // drinks/photos/time stay put). Shown when there's more
-                // than one stop to shuffle.
-                if journey.stops.count > 1, let idx = journey.stops.firstIndex(where: { $0.id == stop.id }) {
-                    moveButton("chevron.left", enabled: idx > 0) {
-                        journey.moveStop(stop.id, by: -1)
-                        page = max(0, page - 1)
-                    }
-                    moveButton("chevron.right", enabled: idx < journey.stops.count - 1) {
-                        journey.moveStop(stop.id, by: 1)
-                        page = min(pages.count - 1, page + 1)
-                    }
-                }
                 Spacer(minLength: 8)
                 Text(stop.arrivedAt, format: .dateTime.hour().minute())
                     .font(.system(size: 10, weight: .bold, design: .monospaced))

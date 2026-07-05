@@ -1456,6 +1456,25 @@ final class SessionService: ObservableObject {
     /// The squad's per-member stats captured at the same instant, for the
     /// group recap's leaderboard. Nil for a solo sesh / single member.
     @Published var endedGroupLeaderboard: [GroupMemberStat]? = nil
+    /// Raw materials for the SQUAD recap, captured at the same instant:
+    /// the whole session ledger + everyone's profile, so SessionView can
+    /// compute per-stop member stats and fetch the squad schnaps. Nil for
+    /// solo nights / single-member groups.
+    @Published var endedGroupContext: EndedGroupContext? = nil
+
+    struct EndedGroupContext {
+        let sessionId: UUID
+        let drinks: [SessionDrink]
+        let profiles: [UUID: Profile]
+        let headCount: Int
+        /// When the group was created — the group recap only tells the
+        /// story from here on; anything a member logged before joining
+        /// belongs to their INDIVIDUAL recap alone.
+        let sessionStart: Date
+        /// Host id — when several members logged the same marker, the
+        /// host's naming wins in the group recap.
+        let hostId: UUID?
+    }
 
     /// True only when the session was just entered by the user tapping
     /// join/create — as opposed to resumeIfAny restoring it on launch.
@@ -1463,13 +1482,45 @@ final class SessionService: ObservableObject {
     /// whether to carry the solo night in: carrying on a mere resume
     /// would dump leftover solo drinks into the group on every relaunch.
     var entryWasUserInitiated = false
+    /// Bumped whenever THIS device's live night TERMINALLY ends — host end,
+    /// my end, poll-detected end, ended-while-away — but never on a
+    /// keep-night leave or a group→group switch (those don't capture).
+    /// SessionView observes it to check out of the current venue, even when
+    /// no recap is produced (a drink-free night still leaves you "here"
+    /// otherwise).
+    @Published var liveEndedToken = 0
+
+    /// The group's server-side route (session_stops), refreshed on every
+    /// poll. SessionView merges it into the local journey so EVERY member
+    /// sees every group stop live — check-ins, between-bars, food, puke,
+    /// pre-game — not just the ones their own device witnessed.
+    @Published var routeStops: [RouteStopRow] = []
+
+    struct RouteStopRow: Decodable, Equatable {
+        let id: UUID
+        let name: String
+        let lat: Double?
+        let lon: Double?
+        let kind: String
+        let arrivedAt: Date
+        let departedAt: Date?
+        let profileId: UUID?
+        enum CodingKeys: String, CodingKey {
+            case id, name, lat, lon, kind
+            case arrivedAt = "arrived_at"
+            case departedAt = "departed_at"
+            case profileId = "profile_id"
+        }
+    }
 
     /// Snapshot my events before a live-end clears them. No-op for the
     /// plan store, or when I logged nothing worth replaying.
     private func captureLiveEnd(
         drinks sourceDrinks: [SessionDrink],
         members memberList: [SessionMember],
-        ghosts ghostList: [GhostMember]
+        ghosts ghostList: [GhostMember],
+        sessionIdOverride: UUID? = nil,
+        sessionRowOverride: SeshSession? = nil
     ) {
         guard scopeLive, let uid = myId else { return }
         let memberCount = memberList.count
@@ -1510,6 +1561,66 @@ final class SessionService: ObservableObject {
         if board.count >= 2 {
             endedGroupLeaderboard = board.sorted { $0.peakBAC > $1.peakBAC }
         }
+        // Hand the raw ledger to SessionView so it can build the squad
+        // recap (per-stop stats + schnap downloads). Must happen before
+        // clearLocal wipes session/drinks/profiles.
+        if memberCount >= 2, let sid = sessionIdOverride ?? session?.id {
+            let row = sessionRowOverride ?? session
+            endedGroupContext = EndedGroupContext(
+                sessionId: sid,
+                drinks: sourceDrinks,
+                profiles: memberProfiles,
+                headCount: max(memberCount + ghostCount, 1),
+                sessionStart: row?.createdAt ?? .distantPast,
+                hostId: row?.hostId
+            )
+        }
+        // Terminal end → tell SessionView to check out, whether or not
+        // there was anything to recap. (Switches never reach here — they
+        // release the old group without capturing.)
+        liveEndedToken &+= 1
+    }
+
+    /// The session ended while this device was away (app closed, or the
+    /// user signed out) — the poll never saw the end, so no recap was ever
+    /// captured. Pull the final ledger straight from the DB, hand off the
+    /// recap materials, and release my membership flag so the next launch
+    /// doesn't deliver the same night twice.
+    private func captureEndedWhileAway(_ row: SeshSession) async {
+        guard scopeLive, let uid = myId else { return }
+        let sid = row.id.uuidString.lowercased()
+        // The FULL roster, not just in_live=true: the session is over, and
+        // other devices' own captures release their flags as they deliver —
+        // filtering would shrink the leaderboard for whoever captures last.
+        let ms: [SessionMember] = (try? await supabase.from("session_members")
+            .select()
+            .eq("session_id", value: sid)
+            .execute()
+            .value) ?? []
+        let ds: [SessionDrink] = (try? await supabase.from("session_drinks")
+            .select()
+            .eq("session_id", value: sid)
+            .execute()
+            .value) ?? []
+        let ids = ms.map { $0.profileId.uuidString.lowercased() }
+        if !ids.isEmpty,
+           let ps: [Profile] = try? await supabase.from("profiles")
+            .select()
+            .in("id", values: ids)
+            .execute()
+            .value {
+            for p in ps { memberProfiles[p.id] = p }
+        }
+        captureLiveEnd(drinks: ds, members: ms, ghosts: row.ghosts,
+                       sessionIdOverride: row.id, sessionRowOverride: row)
+        // Delivered — flip my flag so the fallback scan stops finding it.
+        struct InLivePatch: Encodable { let in_live: Bool }
+        _ = try? await supabase.from("session_members")
+            .update(InLivePatch(in_live: false))
+            .eq("session_id", value: sid)
+            .eq("profile_id", value: uid.uuidString.lowercased())
+            .execute()
+        memberProfiles = [:]
     }
 
     /// Peak of a chronological Widmark walk over the given events.
@@ -1612,18 +1723,16 @@ final class SessionService: ObservableObject {
     func resumeIfAny() async {
         guard let uid = myId else { return }
 
-        // 1. Persisted session for this scope.
+        // 1. Persisted session for this scope. Fetched WITHOUT the active
+        //    filter so a session that ENDED while this device was away
+        //    (app closed / signed out) can still deliver its recap — the
+        //    poll never saw the end, so nobody captured it.
         if let raw = UserDefaults.standard.string(forKey: persistKey),
            let sid = UUID(uuidString: raw) {
-            // Only resume if the session is still active in MY mode
-            // (per-mode end means `active_<other>` is irrelevant) AND
-            // I'm still a member in MY mode. The two `.eq(...)`
-            // filters do that cleanly server-side.
             if let row: SeshSession = try? await supabase
                 .from("sessions")
                 .select()
                 .eq("id", value: sid.uuidString.lowercased())
-                .eq(activeColumnForScope, value: true)
                 .single()
                 .execute()
                 .value,
@@ -1637,27 +1746,33 @@ final class SessionService: ObservableObject {
                 .execute()
                 .value
             {
-                if isFresh(row) {
+                let activeForScope = scopeLive ? row.activeLive : row.activePlan
+                if activeForScope && isFresh(row) {
                     await enter(session: row)
                     return
                 }
-                // The night is long over but the session was never ended
-                // (host killed the app, switched groups, etc.). Detach
-                // quietly instead of resurrecting a days-old sesh — and
-                // never recap it: entering + recapping stale sessions is
-                // exactly the phantom-recap-on-launch bug.
-                await silentlyRelease(row)
+                if !activeForScope && scopeLive && isFresh(row) {
+                    // Ended while away → recap + release (never re-enter).
+                    await captureEndedWhileAway(row)
+                } else {
+                    // The night is long over but the session was never
+                    // ended (host killed the app, switched groups, etc.).
+                    // Detach quietly instead of resurrecting a days-old
+                    // sesh — and never recap it: entering + recapping
+                    // stale sessions is exactly the phantom-recap bug.
+                    await silentlyRelease(row)
+                }
             }
-            // Persisted session is stale (ended for my mode, or I left
-            // from another device) — clear it so we don't keep hitting
-            // the network for a dead row on every launch.
+            // Persisted session is dealt with either way — clear it so we
+            // don't keep hitting the network for a dead row every launch.
             persistSessionID(nil)
         }
 
         // 2. Fallback: scan all my memberships in this mode, most recent
         //    first, and enter the first FRESH one whose session is still
-        //    active in this mode. Older leftovers get released as we go,
-        //    so the scan doubles as launch-time garbage collection.
+        //    active in this mode. Fresh-but-ended ones deliver their recap
+        //    (same as above); older leftovers get released as we go, so
+        //    the scan doubles as launch-time garbage collection.
         do {
             let myMemberships: [SessionMember] = try await supabase
                 .from("session_members")
@@ -1673,13 +1788,15 @@ final class SessionService: ObservableObject {
                     .from("sessions")
                     .select()
                     .eq("id", value: m.sessionId.uuidString.lowercased())
-                    .eq(activeColumnForScope, value: true)
                     .single()
                     .execute()
                     .value {
-                    if !entered && isFresh(row) {
+                    let activeForScope = scopeLive ? row.activeLive : row.activePlan
+                    if activeForScope && !entered && isFresh(row) {
                         await enter(session: row)
                         entered = true
+                    } else if !activeForScope && scopeLive && isFresh(row) {
+                        await captureEndedWhileAway(row)
                     } else {
                         await silentlyRelease(row)
                     }
@@ -1724,12 +1841,14 @@ final class SessionService: ObservableObject {
                 ))
                 .execute()
             // Creating a new group while still in another = a direct
-            // switch. Detach from the old one (no recap — the night
-            // carries over) so its membership can't resurrect later.
+            // switch. Detach from the old one so its membership can't
+            // resurrect later. NO recap here — the night continues; the
+            // single recap arrives at the night's terminal end.
             if let old = session, old.id != row.id {
                 await silentlyRelease(old)
             }
             entryWasUserInitiated = true
+            followingGroupVenue = true
             await enter(session: row)
         } catch {
             self.error = error.localizedDescription
@@ -1757,15 +1876,31 @@ final class SessionService: ObservableObject {
                 .execute()
                 .value
             // Joining while still in another group = a direct switch.
-            // Detach from the old one (no recap — the night carries
-            // over) so its membership can't resurrect later.
+            // Detach from the old one so its membership can't resurrect
+            // later. NO recap here — the night continues in the new group;
+            // the single recap arrives at the night's TERMINAL end and
+            // covers every group along the way.
             if let old = session, old.id != row.id {
                 await silentlyRelease(old)
             }
             entryWasUserInitiated = true
+            // Joining a group means following it — a "broke away" state
+            // left over from a previous group must not block adopting the
+            // new group's venue / pre-game spot into my journey.
+            followingGroupVenue = true
             await enter(session: row)
         } catch {
-            self.error = "Couldn't join. Check the code."
+            // The join RPC may have SUCCEEDED even though the follow-up
+            // session fetch failed — the membership then exists server-side
+            // while this device looks like it never joined (and the invite
+            // is already consumed). Let resume find and enter it before
+            // declaring failure.
+            entryWasUserInitiated = true
+            await resumeIfAny()
+            if session == nil {
+                entryWasUserInitiated = false
+                self.error = "Couldn't join. Check the code."
+            }
         }
     }
 
@@ -1849,12 +1984,47 @@ final class SessionService: ObservableObject {
         } catch {
             // Swallow — same semantics as the previous `try?`.
         }
+        // NOTE: squad schnaps are NOT purged here — every member's device
+        // needs a window to download them into its group recap after the
+        // end lands. The daily cleanup sweeps schnaps of ended sessions
+        // (and anything past 48h) instead; the sesh being over already
+        // hides them from every UI.
         // Host ending a live group ends everyone's night → recap for me too,
         // unless the host is just leaving to keep their night going elsewhere.
+        // Capture → clearLocal must be atomic (no awaits between): the
+        // recap observer fires on the capture, and if it runs while
+        // `session` still looks alive it treats a TERMINAL end as "night
+        // continues" and skips clearing the journey/check-in — that was
+        // the "pre-game spot survives the end" bug.
         if captureRecap {
             captureLiveEnd(drinks: drinks, members: members, ghosts: ghosts)
         }
         clearLocal()
+        // This night is over for me — release my flag so the launch scan
+        // can't deliver it again as an "ended while away" recap.
+        await markDelivered(sid)
+    }
+
+    /// Flip my `in_<scope>` membership flag after a recap has been
+    /// captured on THIS device — the flag doubles as "recap not yet
+    /// delivered" for the ended-while-away launch scan.
+    private func markDelivered(_ sid: UUID) async {
+        guard let uid = myId else { return }
+        struct InPlanPatch: Encodable { let in_plan: Bool }
+        struct InLivePatch: Encodable { let in_live: Bool }
+        if scopeLive {
+            _ = try? await supabase.from("session_members")
+                .update(InLivePatch(in_live: false))
+                .eq("session_id", value: sid.uuidString.lowercased())
+                .eq("profile_id", value: uid.uuidString.lowercased())
+                .execute()
+        } else {
+            _ = try? await supabase.from("session_members")
+                .update(InPlanPatch(in_plan: false))
+                .eq("session_id", value: sid.uuidString.lowercased())
+                .eq("profile_id", value: uid.uuidString.lowercased())
+                .execute()
+        }
     }
 
     /// Remove MY personal (non-shared) drink rows from a session I'm
@@ -2102,6 +2272,110 @@ final class SessionService: ObservableObject {
         } catch {
             // Non-fatal — local copy updated; the next write re-converges.
         }
+        // Record the group's ROUTE server-side (migration 038): whoever
+        // checks the group in/out writes it, so every member's group recap
+        // can rebuild the night's stops — not just the members whose local
+        // journey happened to witness them.
+        await recordGroupStop(sessionId: sid, venue: venue)
+    }
+
+    /// Mirror my journey's MARKER entries (between-bars, food, puke stops +
+    /// pre-game/loose spots) into the shared route while in a live group.
+    /// The group recap builds from session_stops, so a marker only I
+    /// witnessed still shows up for every member — including members who
+    /// joined after it happened. Keyed by the journey entry's own uuid, so
+    /// re-syncs are idempotent. Bars aren't synced here (the group
+    /// check-in path owns those).
+    func syncRouteMarkers(stops allStops: [SeshStop], spots allSpots: [LooseSpot]) async {
+        guard scopeLive, let sid = session?.id, let uid = myId else { return }
+        // Selection by IDENTITY: only entries stamped with THIS group's id.
+        // Timestamps can't tell the group's story apart from a member's
+        // parallel personal stops (they overlap in time); the tag can.
+        let stops = allStops.filter { $0.sessionId == sid }
+        let spots = allSpots.filter { $0.sessionId == sid }
+        let iso = ISO8601DateFormatter()
+        struct Row: Encodable {
+            let id: String
+            let session_id: String
+            let name: String
+            let lat: Double?
+            let lon: Double?
+            let kind: String
+            let arrived_at: String
+            let departed_at: String?
+            let profile_id: String
+            // Explicit encode (not encodeIfPresent): PostgREST rejects a
+            // bulk upsert whose rows have MISMATCHED key sets — one open
+            // stop (nil departure) next to a closed one silently failed
+            // the whole batch, which is why markers went missing.
+            enum CodingKeys: String, CodingKey {
+                case id, session_id, name, lat, lon, kind, arrived_at, departed_at, profile_id
+            }
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(id, forKey: .id)
+                try c.encode(session_id, forKey: .session_id)
+                try c.encode(name, forKey: .name)
+                try c.encode(lat, forKey: .lat)
+                try c.encode(lon, forKey: .lon)
+                try c.encode(kind, forKey: .kind)
+                try c.encode(arrived_at, forKey: .arrived_at)
+                try c.encode(departed_at, forKey: .departed_at)
+                try c.encode(profile_id, forKey: .profile_id)
+            }
+        }
+        var rows: [Row] = stops.filter { $0.kind != .bar }.map { s in
+            Row(
+                id: s.id.uuidString.lowercased(),
+                session_id: sid.uuidString.lowercased(),
+                name: s.name,
+                lat: s.lat, lon: s.lon,
+                kind: s.kind.rawValue,
+                arrived_at: iso.string(from: s.arrivedAt),
+                departed_at: s.departedAt.map { iso.string(from: $0) },
+                profile_id: uid.uuidString.lowercased()
+            )
+        }
+        rows += spots.map { sp in
+            Row(
+                id: sp.id.uuidString.lowercased(),
+                session_id: sid.uuidString.lowercased(),
+                name: sp.name ?? "Pre-game",
+                lat: sp.lat, lon: sp.lon,
+                kind: "preGame",
+                arrived_at: iso.string(from: sp.at),
+                departed_at: nil,
+                profile_id: uid.uuidString.lowercased()
+            )
+        }
+        guard !rows.isEmpty else { return }
+        _ = try? await supabase.from("session_stops")
+            .upsert(rows, onConflict: "id")
+            .execute()
+    }
+
+    /// Close the open route entry and, when checking IN somewhere, open a
+    /// new one. Best-effort — the recap falls back to the local journey.
+    private func recordGroupStop(sessionId: UUID, venue: Venue?) async {
+        let sid = sessionId.uuidString.lowercased()
+        let iso = ISO8601DateFormatter()
+        struct Close: Encodable { let departed_at: String }
+        _ = try? await supabase.from("session_stops")
+            .update(Close(departed_at: iso.string(from: Date())))
+            .eq("session_id", value: sid)
+            .eq("kind", value: "bar")   // markers are instants — closing them faked windows
+            .filter("departed_at", operator: "is", value: "null")
+            .execute()
+        guard let venue else { return }
+        struct Open: Encodable {
+            let session_id: String
+            let name: String
+            let lat: Double?
+            let lon: Double?
+        }
+        _ = try? await supabase.from("session_stops")
+            .insert(Open(session_id: sid, name: venue.name, lat: venue.lat, lon: venue.lon))
+            .execute()
     }
 
     /// Broadcast a group pre-game/between location (or nil to clear) so
@@ -2137,6 +2411,7 @@ final class SessionService: ObservableObject {
         stopPolling()
         session = nil; members = []; memberProfiles = [:]; drinks = []; ghosts = []
         liveVenue = nil; liveLooseSpot = nil; followingGroupVenue = true
+        routeStops = []
         // Note: endedGroupLeaderboard/endedLiveEvents are intentionally NOT
         // cleared here — clearLocal runs right after capture on group end,
         // and SessionView consumes them on the next tick.
@@ -2208,8 +2483,12 @@ final class SessionService: ObservableObject {
                     // Capture my night for the auto-recap from the freshly
                     // fetched data (self.drinks/members aren't assigned on
                     // a launch poll yet); row.ghosts is the live guest set.
+                    // Capture → clearLocal atomically (see end()) …
                     captureLiveEnd(drinks: ds, members: ms, ghosts: row.ghosts)
                     clearLocal()
+                    // … then release my flag so the next launch's
+                    // ended-while-away scan doesn't deliver it AGAIN.
+                    await markDelivered(sid)
                     return
                 }
                 // Pull the shared guest roster from the session row so
@@ -2245,6 +2524,19 @@ final class SessionService: ObservableObject {
 
             members = ms.sorted { $0.joinedAt < $1.joinedAt }
             drinks = ds
+
+            // Pull the shared route so every member's journey converges on
+            // the group's stops (live scope only — plan has no route).
+            if scopeLive {
+                let route: [RouteStopRow] = (try? await supabase
+                    .from("session_stops")
+                    .select()
+                    .eq("session_id", value: sid.uuidString.lowercased())
+                    .order("arrived_at", ascending: true)
+                    .execute()
+                    .value) ?? []
+                if route != routeStops { routeStops = route }
+            }
         } catch {
             // swallow; try again next tick
         }
@@ -2582,7 +2874,22 @@ final class VenueService: ObservableObject {
         }
     }
 
-    private let currentKey = "sesh.currentVenue.v1"
+    // Per-ACCOUNT key: a shared slot let one account's check-in overwrite
+    // the other's on the same phone. Legacy slot adopted by its stamped
+    // owner on first load.
+    private let currentKey: String = {
+        let ns = supabase.auth.currentUser?.id.uuidString.lowercased() ?? "anon"
+        let namespaced = "sesh.currentVenue.v1.\(ns)"
+        let d = UserDefaults.standard
+        if d.string(forKey: "sesh.currentVenue.owner.v1") == ns {
+            if d.object(forKey: namespaced) == nil, let v = d.data(forKey: "sesh.currentVenue.v1") {
+                d.set(v, forKey: namespaced)
+            }
+            d.removeObject(forKey: "sesh.currentVenue.v1")
+            d.removeObject(forKey: "sesh.currentVenue.owner.v1")
+        }
+        return namespaced
+    }()
 
     init() {
         loadCurrent()
@@ -2933,10 +3240,7 @@ final class VenueService: ObservableObject {
 
     // MARK: - Persistence
 
-    private let currentOwnerKey = "sesh.currentVenue.owner.v1"
-
     private func persistCurrent() {
-        StoreOwner.stamp(currentOwnerKey)
         guard let v = currentVenue else {
             UserDefaults.standard.removeObject(forKey: currentKey)
             return
@@ -2947,7 +3251,6 @@ final class VenueService: ObservableObject {
     }
 
     private func loadCurrent() {
-        guard StoreOwner.mayLoad(currentOwnerKey) else { return }
         guard let data = UserDefaults.standard.data(forKey: currentKey),
               let v = try? JSONDecoder().decode(Venue.self, from: data)
         else { return }
@@ -3086,6 +3389,7 @@ final class InvitesService: ObservableObject {
             let recipient_id: String
             let join_code: String
             let mode: String
+            let status: String
         }
         let rows: [Row] = unique.map { rid in
             Row(
@@ -3093,16 +3397,19 @@ final class InvitesService: ObservableObject {
                 sender_id: uid.uuidString.lowercased(),
                 recipient_id: rid.uuidString.lowercased(),
                 join_code: joinCode,
-                mode: mode.rawValue
+                mode: mode.rawValue,
+                status: "pending"
             )
         }
         do {
-            // `ignoreDuplicates` makes the unique-key collision a soft no-op
-            // instead of a 409 — a host re-sending to the same crew gets a
-            // silent success rather than an error toast.
+            // A real upsert (NOT ignoreDuplicates): re-inviting someone who
+            // already accepted/declined for this session resets their row
+            // to `pending`, so the invite actually reappears in their inbox.
+            // A silent skip here was exactly the "resent the invite and they
+            // never got it" bug.
             _ = try await supabase
                 .from("invites")
-                .upsert(rows, onConflict: "session_id,recipient_id", ignoreDuplicates: true)
+                .upsert(rows, onConflict: "session_id,recipient_id")
                 .execute()
             return rows.count
         } catch {
@@ -4032,18 +4339,39 @@ final class LiveSeshState: ObservableObject {
     @Published var drinks: [LiveDrink] = []
     @Published var startedAt: Date? = nil
 
-    private let drinksKey = "sesh.live.drinks.v1"
-    private let startKey  = "sesh.live.startedAt.v1"
-    /// Which account the persisted night belongs to. UserDefaults is
-    /// device-global, so without this stamp a sign-out/sign-in handed one
-    /// user's solo drinks to the next account on the same phone (and
-    /// PresenceService then broadcast them to that account's friends).
-    private let ownerKey  = "sesh.live.owner.v1"
+    // Per-ACCOUNT keys (see NightJourneyStore) — the shared slot let one
+    // account's solo drinks OVERWRITE the other's on the same phone. The
+    // lock-screen intent follows via the `liveNS` pointer key, so quick
+    // adds land in the signed-in account's slot.
+    private let drinksKey: String
+    private let startKey: String
     private let eliminationRate = 0.015
 
     var isActive: Bool { startedAt != nil }
 
     init() {
+        let ns = supabase.auth.currentUser?.id.uuidString.lowercased() ?? "anon"
+        drinksKey = "\(LockScreenStorageKeys.drinks).\(ns)"
+        startKey = "\(LockScreenStorageKeys.started).\(ns)"
+        let d = UserDefaults.standard
+        // Point the lock-screen intent at MY slot.
+        d.set(ns, forKey: LockScreenStorageKeys.liveNS)
+        // One-time adoption of the pre-namespace shared slot, if its
+        // owner stamp says it was mine. Another account's data is left
+        // for its owner.
+        if d.string(forKey: "sesh.live.owner.v1") == ns {
+            if d.object(forKey: drinksKey) == nil,
+               let v = d.data(forKey: LockScreenStorageKeys.drinks) {
+                d.set(v, forKey: drinksKey)
+            }
+            let raw = d.double(forKey: LockScreenStorageKeys.started)
+            if raw > 0, d.object(forKey: startKey) == nil {
+                d.set(raw, forKey: startKey)
+            }
+            d.removeObject(forKey: LockScreenStorageKeys.drinks)
+            d.removeObject(forKey: LockScreenStorageKeys.started)
+            d.removeObject(forKey: "sesh.live.owner.v1")
+        }
         load()
         // Reload from disk whenever the lock-screen App Intent has
         // appended a drink behind our back. The intent writes through
@@ -4180,17 +4508,11 @@ final class LiveSeshState: ObservableObject {
         } else {
             UserDefaults.standard.removeObject(forKey: startKey)
         }
-        StoreOwner.stamp(ownerKey)
     }
 
     private func load() {
-        // Persisted night belongs to a different account (multi-account
-        // device) → don't surface it. See StoreOwner.
-        guard StoreOwner.mayLoad(ownerKey) else {
-            drinks = []
-            startedAt = nil
-            return
-        }
+        drinks = []
+        startedAt = nil
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         if let data = UserDefaults.standard.data(forKey: drinksKey),
@@ -4300,7 +4622,21 @@ struct GhostMember: Codable, Identifiable, Equatable, Hashable {
 final class GhostMembersStore: ObservableObject {
     @Published var members: [GhostMember] = []
 
-    private let storeKey = "sesh.live.ghosts.v1"
+    // Per-ACCOUNT key (see NightJourneyStore) — legacy slot adopted by its
+    // stamped owner on first load.
+    private let storeKey: String = {
+        let ns = supabase.auth.currentUser?.id.uuidString.lowercased() ?? "anon"
+        let namespaced = "sesh.live.ghosts.v1.\(ns)"
+        let d = UserDefaults.standard
+        if d.string(forKey: "sesh.live.ghosts.owner.v1") == ns {
+            if d.object(forKey: namespaced) == nil, let v = d.data(forKey: "sesh.live.ghosts.v1") {
+                d.set(v, forKey: namespaced)
+            }
+            d.removeObject(forKey: "sesh.live.ghosts.v1")
+            d.removeObject(forKey: "sesh.live.ghosts.owner.v1")
+        }
+        return namespaced
+    }()
     private let eliminationRate = 0.015
 
     /// When set (by SessionView while a live GROUP is active), every local
@@ -4406,10 +4742,7 @@ final class GhostMembersStore: ObservableObject {
         if !isHydrating { syncSink?(members) }
     }
 
-    private let ownerKey = "sesh.live.ghosts.owner.v1"
-
     private func persist() {
-        StoreOwner.stamp(ownerKey)
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         if let data = try? enc.encode(members) {
@@ -4418,7 +4751,6 @@ final class GhostMembersStore: ObservableObject {
     }
 
     private func load() {
-        guard StoreOwner.mayLoad(ownerKey) else { return }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         if let data = UserDefaults.standard.data(forKey: storeKey),
@@ -6357,28 +6689,37 @@ private struct FriendPickerSheet: View {
                                               avatarURL: friend.avatarURL, trailing: .select)
                                 }
                             }
-                            Button {
-                                Task { await invite(Array(selected)) ; dismiss() }
-                            } label: {
-                                HStack {
-                                    Text(selected.isEmpty ? "SELECT FRIENDS" : "SEND \(selected.count) INVITE\(selected.count == 1 ? "" : "S")")
-                                        .font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(2)
-                                    Spacer()
-                                    Image(systemName: "paperplane.fill").font(.system(size: 12, weight: .bold))
-                                }
-                                .foregroundStyle(Color.ink)
-                                .padding(.vertical, 15).padding(.horizontal, 20)
-                                .background(RoundedRectangle(cornerRadius: 16).fill(selected.isEmpty ? Color.cream.opacity(0.4) : Color.cream))
-                            }
-                            .disabled(selected.isEmpty)
-                            .buttonStyle(PressScaleStyle())
-                            .padding(.top, 4)
                         }
                     }
 
                     Spacer(minLength: 20)
                 }
                 .padding(.horizontal, 24).padding(.bottom, 40)
+            }
+        }
+        // Pinned send bar — always in reach instead of buried below a long
+        // friends list.
+        .safeAreaInset(edge: .bottom) {
+            if query.trimmingCharacters(in: .whitespaces).isEmpty, !friends.friends.isEmpty {
+                Button {
+                    Task { await invite(Array(selected)) ; dismiss() }
+                } label: {
+                    HStack {
+                        Text(selected.isEmpty ? "SELECT FRIENDS" : "SEND \(selected.count) INVITE\(selected.count == 1 ? "" : "S")")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(2)
+                        Spacer()
+                        Image(systemName: "paperplane.fill").font(.system(size: 12, weight: .bold))
+                    }
+                    .foregroundStyle(Color.ink)
+                    .padding(.vertical, 15).padding(.horizontal, 20)
+                    .background(RoundedRectangle(cornerRadius: 16).fill(selected.isEmpty ? Color.cream.opacity(0.4) : Color.cream))
+                }
+                .disabled(selected.isEmpty)
+                .buttonStyle(PressScaleStyle())
+                .padding(.horizontal, 24)
+                .padding(.top, 8)
+                .padding(.bottom, 10)
+                .background(Color.ink.opacity(0.97))
             }
         }
         .preferredColorScheme(.dark)
@@ -7105,10 +7446,19 @@ struct GroupSnapsStrip: View {
     let stopName: () -> String?
     /// Resolves an uploader id to a display name (group roster lookup).
     let nameFor: (UUID) -> String
+    /// Resolves an uploader id to their avatar URL (nil → initial shows).
+    let avatarFor: (UUID) -> String?
+    /// Copies a schnap (image data + its original timestamp) into MY night
+    /// journey — squad schnaps are purged when the sesh ends, so saving is
+    /// how a member keeps one for their recap.
+    let saveToJourney: (Data, Date) -> Void
     @State private var viewer: SessionSnap? = nil
     @State private var cameraOpen = false
     @State private var libraryOpen = false
     @State private var pickerItem: PhotosPickerItem? = nil
+    /// Schnaps already saved this session — hides the save affordance so a
+    /// double-tap can't duplicate the photo in the journey.
+    @State private var savedIds: Set<UUID> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -7127,7 +7477,7 @@ struct GroupSnapsStrip: View {
                 captureButton(icon: "photo.on.rectangle") { libraryOpen = true }
             }
             if snaps.snaps.isEmpty {
-                Text("Schnap one here to share it with the group — squad schnaps stay out of your recap.")
+                Text("Schnap one here to share it with the group. Save the ones you want to keep — the rest vanish when the sesh ends.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.45))
             } else {
@@ -7143,12 +7493,16 @@ struct GroupSnapsStrip: View {
                                     .frame(width: 96, height: 96)
                                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                     .overlay(alignment: .bottomLeading) {
-                                        Text(String(nameFor(snap.profileId).prefix(1)).uppercased())
-                                            .font(.system(size: 10, weight: .black, design: .rounded))
-                                            .foregroundStyle(Color.ink)
-                                            .frame(width: 18, height: 18)
-                                            .background(Circle().fill(Color.whiskey))
-                                            .padding(5)
+                                        // Uploader badge: their profile
+                                        // photo, falling back to their
+                                        // initial (AvatarView's built-in
+                                        // fallback).
+                                        AvatarView(
+                                            urlString: avatarFor(snap.profileId),
+                                            initial: String(nameFor(snap.profileId).prefix(1)).uppercased(),
+                                            size: 20
+                                        )
+                                        .padding(5)
                                     }
                                     .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
                                         .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
@@ -7174,6 +7528,19 @@ struct GroupSnapsStrip: View {
             GroupSnapViewer(
                 snap: snap,
                 name: nameFor(snap.profileId),
+                isSaved: savedIds.contains(snap.id),
+                onSave: {
+                    guard !savedIds.contains(snap.id), let url = snap.url else { return }
+                    savedIds.insert(snap.id)
+                    Task {
+                        if let (data, _) = try? await URLSession.shared.data(from: url) {
+                            saveToJourney(data, snap.createdAt)
+                        } else {
+                            // Download failed — let them try again.
+                            savedIds.remove(snap.id)
+                        }
+                    }
+                },
                 onDelete: snaps.canDelete(snap) ? {
                     Task { await snaps.delete(snap) }
                     viewer = nil
@@ -7213,12 +7580,17 @@ struct GroupSnapsStrip: View {
 }
 
 /// Full-screen viewer for one shared snap. `onDelete` is non-nil only for
-/// the uploader's own schnaps.
+/// the uploader's own schnaps; `onSave` copies the schnap into MY journey
+/// (squad schnaps vanish when the sesh ends — saving is how you keep one).
 private struct GroupSnapViewer: View {
     let snap: SessionSnap
     let name: String
+    var isSaved: Bool = false
+    var onSave: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     let onClose: () -> Void
+
+    @State private var saved = false
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -7243,6 +7615,20 @@ private struct GroupSnapViewer: View {
                 .padding(.bottom, 26)
             }
             HStack(spacing: 10) {
+                if let onSave {
+                    Button {
+                        guard !saved && !isSaved else { return }
+                        saved = true
+                        onSave()
+                    } label: {
+                        Image(systemName: (saved || isSaved) ? "checkmark" : "square.and.arrow.down")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle((saved || isSaved) ? Color.ink : Color.cream)
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill((saved || isSaved) ? Color.whiskey : Color.ink.opacity(0.7)))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
                 if let onDelete {
                     Button(action: onDelete) {
                         Image(systemName: "trash")
@@ -7613,13 +7999,28 @@ private struct PulseWiringModifier: ViewModifier {
     @Binding var openPulse: FriendPulse?
     let tab: TopTab
     let publish: () -> Void
+    /// A live sesh terminally ended → SessionView checks out of the venue.
+    let onLiveEnded: () -> Void
+    /// Journey markers changed (or a group was entered) → mirror them into
+    /// the shared route so the group recap sees everyone's stops.
+    @ObservedObject var journey: NightJourneyStore
+    let syncMarkers: () -> Void
+    /// The group's server route changed → merge it into my journey.
+    let mergeRoute: () -> Void
 
     func body(content: Content) -> some View {
         content
             .onChange(of: live.drinks) { _, _ in publish() }
             .onChange(of: live.startedAt) { _, _ in publish() }
-            .onChange(of: liveGroup.session?.id) { _, _ in publish() }
+            .onChange(of: liveGroup.session?.id) { _, _ in
+                publish()
+                syncMarkers()
+            }
             .onChange(of: venues.currentVenue?.id) { _, _ in publish() }
+            .onChange(of: liveGroup.liveEndedToken) { _, _ in onLiveEnded() }
+            .onChange(of: journey.stops) { _, _ in syncMarkers() }
+            .onChange(of: journey.looseSpots) { _, _ in syncMarkers() }
+            .onChange(of: liveGroup.routeStops) { _, _ in mergeRoute() }
             .task {
                 publish()
                 // Slow app-wide poll so the NIGHTLINE tab dot can light up
@@ -8971,6 +9372,10 @@ private struct SessionView: View {
     /// launch — presents the recap the user would have seen had they hit
     /// END themselves.
     @State private var autoRecap: NightRecap? = nil
+    /// The SQUAD recap waiting behind the personal one — presented when
+    /// the personal auto-recap cover closes (or immediately if it already
+    /// has, e.g. schnap downloads finished late).
+    @State private var pendingGroupRecap: NightRecap? = nil
     /// On-device cache of groups the user has been in. Updated whenever a
     /// SessionService refresh lands on a session it's tracking. Surfaces
     /// in GroupSheet's idle view so rejoining a previous group is a tap
@@ -9107,30 +9512,452 @@ private struct SessionView: View {
     /// that actually happened (last drink / check-in / photo) rather than
     /// "now" — which could be the next afternoon and would wildly inflate
     /// the duration.
-    private func buildAutoRecap(events: [RecapEvent]) -> NightRecap? {
+    private func buildAutoRecap(
+        events: [RecapEvent],
+        extraStops: [SeshStop] = [],
+        extraSpots: [LooseSpot] = []
+    ) -> NightRecap? {
         let denom = profile.weightKg * 1000 * profile.sex.r
-        guard denom > 0, !events.isEmpty else { return nil }
+        guard denom > 0 else { return nil }
+        let stops = journey.stops + extraStops
+        let spots = journey.looseSpots + extraSpots
+        // Photo-only nights still deserve their recap — the builder
+        // anchors on journey activity when there are no drinks.
+        guard !events.isEmpty || !stops.isEmpty || !journey.loosePhotos.isEmpty else {
+            return nil
+        }
         var endedAt = events.map(\.when).max() ?? Date()
-        if let a = journey.stops.map(\.arrivedAt).max() { endedAt = max(endedAt, a) }
-        if let d = journey.stops.compactMap(\.departedAt).max() { endedAt = max(endedAt, d) }
+        if let a = stops.map(\.arrivedAt).max() { endedAt = max(endedAt, a) }
+        if let d = stops.compactMap(\.departedAt).max() { endedAt = max(endedAt, d) }
         if let p = journey.loosePhotos.map(\.takenAt).max() { endedAt = max(endedAt, p) }
         return NightRecap.build(
-            journeyStops: journey.stops,
+            journeyStops: stops,
             events: events,
             bumpPerGram: 100 / denom,
             loosePhotos: journey.loosePhotos,
-            looseSpots: journey.looseSpots,
+            looseSpots: spots,
             preGameNote: journey.preGameNote,
             endedAt: endedAt
         )
     }
 
+    /// Deliver the end-of-group recaps (personal, then squad). When the
+    /// local journey is EMPTY — the end arrived while signed out / on a
+    /// fresh install — the personal recap rebuilds its route from the
+    /// group's server-side stops instead of showing bare numbers.
+    private func deliverEndRecaps(
+        events: [RecapEvent],
+        board: [GroupMemberStat]?,
+        ctx: SessionService.EndedGroupContext?,
+        keepJourney: Bool
+    ) {
+        Task {
+            var extraStops: [SeshStop] = []
+            var extraSpots: [LooseSpot] = []
+            if journey.stops.isEmpty, let ctx {
+                (extraStops, extraSpots) = await fetchRouteAsJourneyInputs(ctx.sessionId)
+            }
+            if var built = buildAutoRecap(events: events, extraStops: extraStops, extraSpots: extraSpots) {
+                // Group sesh → carry the squad leaderboard so the recap's
+                // overview shows everyone's night, not just mine.
+                built.groupLeaderboard = board
+                // Build the SQUAD recap from the same route before
+                // presentAutoRecap clears the journey it came from.
+                if let ctx {
+                    prepareGroupRecap(from: built, context: ctx, board: board)
+                }
+                presentAutoRecap(built, preservingJourney: keepJourney)
+            }
+        }
+    }
+
+    /// The group's server-side route, converted back into journey inputs
+    /// for the personal recap builder. Venue/marker rows become stops;
+    /// pre-game rows become loose spots (that's what they were on the
+    /// device that logged them).
+    private func fetchRouteAsJourneyInputs(_ sessionId: UUID) async -> ([SeshStop], [LooseSpot]) {
+        struct Row: Decodable {
+            let name: String
+            let lat: Double?
+            let lon: Double?
+            let kind: String
+            let arrivedAt: Date
+            let departedAt: Date?
+            enum CodingKeys: String, CodingKey {
+                case name, lat, lon, kind
+                case arrivedAt = "arrived_at"
+                case departedAt = "departed_at"
+            }
+        }
+        let rows: [Row] = (try? await supabase.from("session_stops")
+            .select()
+            .eq("session_id", value: sessionId.uuidString.lowercased())
+            .order("arrived_at", ascending: true)
+            .execute()
+            .value) ?? []
+        var stops: [SeshStop] = []
+        var spots: [LooseSpot] = []
+        for r in rows {
+            if r.kind == "preGame" {
+                spots.append(LooseSpot(id: UUID(), name: r.name, lat: r.lat, lon: r.lon, at: r.arrivedAt))
+            } else {
+                stops.append(SeshStop(
+                    id: UUID(), venueId: UUID(),
+                    kind: JourneyStopKind(rawValue: r.kind) ?? .bar,
+                    name: r.name, lat: r.lat, lon: r.lon,
+                    arrivedAt: r.arrivedAt, departedAt: r.departedAt
+                ))
+            }
+        }
+        return (stops, spots)
+    }
+
+    /// Mirror my journey markers into the live group's shared route (see
+    /// SessionService.syncRouteMarkers). No-op when not in a live group.
+    private func syncJourneyMarkersToGroup() {
+        guard liveGroup.isActive else { return }
+        let stops = journey.stops
+        let spots = journey.looseSpots
+        Task { await liveGroup.syncRouteMarkers(stops: stops, spots: spots) }
+    }
+
+    /// The DOWNSTREAM half: convert the group's server route into journey
+    /// entries and merge them into MY journey — so a member sees every
+    /// group stop live (and in their personal recap), not just the ones
+    /// their own device witnessed.
+    private func mergeGroupRouteIntoJourney() {
+        guard let sid = liveGroup.session?.id else { return }
+        var stops: [SeshStop] = []
+        var spots: [LooseSpot] = []
+        for r in liveGroup.routeStops {
+            if r.kind == "preGame" {
+                // Already have it as a spot (I logged/adopted it)? Done.
+                if journey.looseSpots.contains(where: { $0.id == r.id }) { continue }
+                // The group's pre-game falls MID-NIGHT for me (my own bars
+                // predate it) → a loose spot would be swallowed by my
+                // earlier route and render nowhere. Make it a real stop
+                // page instead: "then we gathered at Partaj". A fresh
+                // night (no earlier bars) keeps the classic pre-game leg.
+                if journey.stops.contains(where: { $0.kind == .bar && $0.arrivedAt < r.arrivedAt }) {
+                    stops.append(SeshStop(
+                        id: r.id, venueId: UUID(),
+                        kind: .between,
+                        name: r.name, lat: r.lat, lon: r.lon,
+                        arrivedAt: r.arrivedAt, departedAt: r.departedAt,
+                        sessionId: sid
+                    ))
+                } else {
+                    spots.append(LooseSpot(
+                        id: r.id, name: r.name, lat: r.lat, lon: r.lon,
+                        at: r.arrivedAt, sessionId: sid
+                    ))
+                }
+            } else {
+                stops.append(SeshStop(
+                    id: r.id, venueId: UUID(),
+                    kind: JourneyStopKind(rawValue: r.kind) ?? .bar,
+                    name: r.name, lat: r.lat, lon: r.lon,
+                    arrivedAt: r.arrivedAt, departedAt: r.departedAt,
+                    sessionId: sid
+                ))
+            }
+        }
+        journey.mergeGroupRoute(stops: stops, spots: spots)
+    }
+
+    /// A live sesh terminally ended → check out of the venue. Deferred so
+    /// the recap observer (same cycle) builds + clears the journey first:
+    /// if a recap was produced it already handled the checkout, so clearing
+    /// the chip here finds an empty journey (no stray "between bars" stop);
+    /// if NOT, we clear the leftover check-in so a drink-free night doesn't
+    /// leave the user "here".
+    private func checkOutAfterLiveEnd() {
+        DispatchQueue.main.async {
+            // With no running night this stamps the departure only — the
+            // venue onChange skips the "between bars" stop post-END.
+            venues.currentVenue = nil
+        }
+        // Final sweep once the recap flow has had time to build from the
+        // journey (presenting a recap clears it itself): anything still
+        // staged after this belongs to no recap and no running night.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            guard !live.isActive, liveGroup.session == nil,
+                  autoRecap == nil, pendingGroupRecap == nil else { return }
+            journey.clear()
+        }
+    }
+
+    /// The newest timestamp anywhere in the staged journey — used to decide
+    /// whether leftover check-ins/photos belong to a night that's over.
+    private var journeyLastActivity: Date? {
+        var dates: [Date] = journey.stops.map(\.arrivedAt)
+        dates += journey.stops.compactMap(\.departedAt)
+        dates += journey.loosePhotos.map(\.takenAt)
+        dates += journey.looseSpots.map(\.at)
+        return dates.max()
+    }
+
+    /// Build the SQUAD recap: the personal recap's route, re-cast for the
+    /// whole group — per-stop member stats (who was drunkest where, their
+    /// BAC, drinks so far) and the squad schnaps as its photo reel. Saved
+    /// to history immediately (the auto-end cover offers keep/discard) and
+    /// queued to present after the personal recap closes.
+    private func prepareGroupRecap(
+        from personal: NightRecap,
+        context: SessionService.EndedGroupContext,
+        board: [GroupMemberStat]?
+    ) {
+        Task {
+            // Squad schnaps first: their timestamps decide whether the
+            // group recap needs BETWEEN-BARS legs my personal recap
+            // doesn't have (someone else schnapped in a gap where I
+            // logged nothing).
+            let snaps: [SessionSnap] = (try? await supabase.from("session_snaps")
+                .select()
+                .eq("session_id", value: context.sessionId.uuidString.lowercased())
+                .order("created_at", ascending: true)
+                .execute()
+                .value) ?? []
+
+            // The group's server-side route (migration 038) — the source
+            // of truth for WHERE the group went. Every member gets the
+            // same stops, even if their own device journey never saw them.
+            struct RouteRow: Decodable {
+                let name: String
+                let lat: Double?
+                let lon: Double?
+                let kind: String
+                let arrivedAt: Date
+                let departedAt: Date?
+                let profileId: UUID?
+                enum CodingKeys: String, CodingKey {
+                    case name, lat, lon, kind
+                    case arrivedAt = "arrived_at"
+                    case departedAt = "departed_at"
+                    case profileId = "profile_id"
+                }
+            }
+            let rawRoute: [RouteRow] = (try? await supabase.from("session_stops")
+                .select()
+                .eq("session_id", value: context.sessionId.uuidString.lowercased())
+                .order("arrived_at", ascending: true)
+                .execute()
+                .value) ?? []
+
+            // Rows land in session_stops by IDENTITY (journey entries are
+            // tagged with the group id at creation), so everything here IS
+            // the group's story — no time filtering, which wrongly dropped
+            // the host's pre-game (set moments before creating the group)
+            // and wrongly kept members' parallel personal stops.
+            // Collapse duplicate markers — several members logging the same
+            // moment (each device's "Between bars", everyone's pre-game)
+            // becomes ONE stop, with the HOST's naming winning.
+            var markers: [RouteRow] = []
+            for r in rawRoute where r.kind != "bar" {
+                if let i = markers.firstIndex(where: {
+                    $0.kind == r.kind && abs($0.arrivedAt.timeIntervalSince(r.arrivedAt)) < 15 * 60
+                }) {
+                    if r.profileId == context.hostId { markers[i] = r }
+                } else {
+                    markers.append(r)
+                }
+            }
+            let route = (rawRoute.filter { $0.kind == "bar" } + markers)
+                .sorted { $0.arrivedAt < $1.arrivedAt }
+
+            // Fresh ids: this recap owns its own photo directory and
+            // history entry, independent of the personal one.
+            var stops: [RecapStop]
+            if !route.isEmpty {
+                stops = route.map { r in
+                    // Bars hold a window (open ones run to the end of the
+                    // night); markers are instants.
+                    let isBar = r.kind == "bar"
+                    let dep = r.departedAt ?? (isBar ? personal.endedAt : r.arrivedAt)
+                    let kind: RecapStopKind = switch r.kind {
+                    case "bar":     .bar
+                    case "between": .refuel
+                    case "food":    .food
+                    case "puke":    .puke
+                    case "preGame": .preGame
+                    default:        .bar
+                    }
+                    let squad = squadStats(arrivedAt: r.arrivedAt, leavingAt: dep, context: context)
+                    let mine = squad.first(where: { $0.isMe })
+                    var s = RecapStop(
+                        id: UUID(), kind: kind, lat: r.lat, lon: r.lon, name: r.name,
+                        arrivedAt: r.arrivedAt, departedAt: dep, drinks: [],
+                        drinkSummary: "",
+                        bacOnArrival: 0,
+                        bacOnDeparture: mine?.bac ?? 0,
+                        isPeak: isBar && personal.peakAt >= r.arrivedAt && personal.peakAt <= dep
+                    )
+                    s.squad = squad
+                    return s
+                }
+            } else {
+                // Legacy sessions without a recorded route — fall back to
+                // my own journey's stops, still scoped to the group's
+                // window (pre-join stops are personal-recap material).
+                let mine = personal.stops.filter { $0.arrivedAt >= context.sessionStart }
+                guard !mine.isEmpty else { return }
+                stops = mine.map { s in
+                    var copy = RecapStop(
+                        id: UUID(), kind: s.kind, lat: s.lat, lon: s.lon, name: s.name,
+                        arrivedAt: s.arrivedAt, departedAt: s.departedAt, drinks: s.drinks,
+                        drinkSummary: s.drinkSummary, bacOnArrival: s.bacOnArrival,
+                        bacOnDeparture: s.bacOnDeparture, isPeak: s.isPeak
+                    )
+                    copy.squad = squadStats(arrivedAt: s.arrivedAt, leavingAt: s.departedAt, context: context)
+                    return copy
+                }
+            }
+
+            // Synthesize a leg only for schnaps genuinely STRANDED between
+            // stops. A schnap merely outside a stop's window but close to
+            // one (markers are instants — a photo at the food break is
+            // seconds away) attaches to that stop instead; synthesizing for
+            // those minted phantom "Between bars" legs after every marker.
+            let byTime = stops.sorted { $0.arrivedAt < $1.arrivedAt }
+            let orphans = snaps.filter { s in
+                let inWindow = stops.contains {
+                    s.createdAt >= $0.arrivedAt && s.createdAt <= $0.departedAt
+                }
+                let nearAStop = stops.contains {
+                    min(abs($0.arrivedAt.timeIntervalSince(s.createdAt)),
+                        abs($0.departedAt.timeIntervalSince(s.createdAt))) < 20 * 60
+                }
+                return !inWindow && !nearAStop
+            }
+            var legs: [RecapStop] = []
+            for (i, current) in byTime.enumerated() {
+                let gapStart = current.departedAt
+                let gapEnd = i + 1 < byTime.count ? byTime[i + 1].arrivedAt : personal.endedAt
+                guard gapEnd > gapStart,
+                      orphans.contains(where: { $0.createdAt > gapStart && $0.createdAt < gapEnd })
+                else { continue }
+                var leg = RecapStop(
+                    id: UUID(),
+                    kind: i + 1 < byTime.count ? .refuel : .afters,
+                    lat: nil, lon: nil,
+                    name: i + 1 < byTime.count ? "Between bars" : "Afters",
+                    arrivedAt: gapStart, departedAt: gapEnd,
+                    drinks: [], drinkSummary: "",
+                    bacOnArrival: current.bacOnDeparture,
+                    bacOnDeparture: current.bacOnDeparture,
+                    isPeak: false
+                )
+                leg.squad = squadStats(arrivedAt: gapStart, leavingAt: gapEnd, context: context)
+                legs.append(leg)
+            }
+            stops = (stops + legs).sorted { $0.arrivedAt < $1.arrivedAt }
+
+            let group = NightRecap(
+                id: UUID(), stops: stops,
+                startedAt: personal.startedAt, endedAt: personal.endedAt,
+                totalDrinks: personal.totalDrinks, peakBAC: personal.peakBAC,
+                peakAt: personal.peakAt, groupLeaderboard: board,
+                crawlMeters: personal.crawlMeters, isGroup: true
+            )
+            recapHistory.save(group)
+            pendingGroupRecap = group
+
+            // Pull the schnaps into the recap's own photo directory — the
+            // cloud copies are ephemeral (purged once the sesh is over),
+            // the recap's copies are forever.
+            guard !snaps.isEmpty else { return }
+            var latest = group
+            for snap in snaps {
+                guard let url = snap.url,
+                      let (data, _) = try? await URLSession.shared.data(from: url)
+                else { continue }
+                let stopId = stopFor(snap: snap, in: latest.stops)
+                if let updated = recapHistory.addPhoto(data, toStop: stopId, in: latest.id) {
+                    latest = updated
+                }
+            }
+            if autoRecap?.id == latest.id {
+                // Already on screen (user opened it before downloads
+                // finished) — refresh in place so photos pop in.
+                autoRecap = latest
+            } else if pendingGroupRecap?.id == latest.id {
+                pendingGroupRecap = latest
+            }
+        }
+    }
+
+    /// Every member's state AT a stop: BAC as the group left it (full
+    /// chronological walk up to departure — that's their level at the
+    /// spot) and the number of drinks logged WHILE there. Shared rounds
+    /// count at their per-head share, exactly like the live math.
+    private func squadStats(
+        arrivedAt arrival: Date,
+        leavingAt departure: Date,
+        context: SessionService.EndedGroupContext
+    ) -> [SquadStopStat] {
+        let n = Double(max(context.headCount, 1))
+        var out: [SquadStopStat] = []
+        for (pid, prof) in context.profiles {
+            let denom = prof.weightKg * 1000 * prof.sex.r
+            guard denom > 0 else { continue }
+            let events: [(Date, Double)] = context.drinks.compactMap { d in
+                let mine = d.profileId == pid && !d.shared
+                guard mine || d.shared else { return nil }
+                return (d.createdAt, d.shared ? d.grams / n : d.grams)
+            }
+            .filter { $0.0 <= departure }
+            .sorted { $0.0 < $1.0 }
+
+            var bac = 0.0
+            var last: Date? = nil
+            for (when, grams) in events {
+                if let l = last {
+                    bac = max(0, bac - 0.015 * when.timeIntervalSince(l) / 3600)
+                }
+                bac += (grams / denom) * 100
+                last = when
+            }
+            if let l = last {
+                bac = max(0, bac - 0.015 * max(0, departure.timeIntervalSince(l)) / 3600)
+            }
+            let hereCount = events.filter { $0.0 >= arrival }.count
+            out.append(SquadStopStat(
+                name: prof.name, bac: bac, drinks: hereCount, isMe: pid == profile.id
+            ))
+        }
+        return out.sorted { $0.bac > $1.bac }
+    }
+
+    /// Which stop a schnap belongs to: its stop window first, then its
+    /// stamped name, then whichever stop is nearest in time.
+    private func stopFor(snap: SessionSnap, in stops: [RecapStop]) -> UUID {
+        if let hit = stops.first(where: { snap.createdAt >= $0.arrivedAt && snap.createdAt <= $0.departedAt }) {
+            return hit.id
+        }
+        if let name = snap.stopName, let hit = stops.first(where: { $0.name == name }) {
+            return hit.id
+        }
+        let nearest = stops.min { a, b in
+            let da = min(abs(a.arrivedAt.timeIntervalSince(snap.createdAt)),
+                         abs(a.departedAt.timeIntervalSince(snap.createdAt)))
+            let db = min(abs(b.arrivedAt.timeIntervalSince(snap.createdAt)),
+                         abs(b.departedAt.timeIntervalSince(snap.createdAt)))
+            return da < db
+        }
+        return nearest?.id ?? stops[0].id
+    }
+
     /// Save + surface an auto-built recap (shared by the solo and group
     /// paths). Adopts staged photos, persists, presents, clears the route.
-    private func presentAutoRecap(_ built: NightRecap) {
-        recapHistory.adoptPhotos(from: journey.photosDirectory, for: built)
+    /// `preservingJourney` = the night continues (direct group→group
+    /// switch): photos are COPIED instead of moved and nothing is cleared,
+    /// so the ongoing journey stays intact for the eventual final recap.
+    private func presentAutoRecap(_ built: NightRecap, preservingJourney: Bool = false) {
+        recapHistory.adoptPhotos(from: journey.photosDirectory, for: built,
+                                 copying: preservingJourney)
         recapHistory.save(built)
         autoRecap = built
+        guard !preservingJourney else { return }
         journey.clear()
         // The sesh is over — reset the venue chip to "tap to check in".
         venues.currentVenue = nil
@@ -9409,10 +10236,15 @@ private struct SessionView: View {
         .onChange(of: venues.currentVenue) { _, venue in
             if let venue {
                 journey.checkIn(venue)
-            } else {
+            } else if live.isActive || liveGroup.isActive {
                 // Checkout drops a "between bars" stop (with location when
                 // available) you can swipe to, photograph, and reorder.
                 journey.checkOut(coordinate: location.location?.coordinate)
+            } else {
+                // END-triggered checkout (or any clear outside a running
+                // night): stamp the departure only — no phantom "between
+                // bars" page after the sesh is over.
+                journey.checkOut(recordBetween: false)
             }
         }
         // Start the solo live sesh on the first real action — a check-in,
@@ -9447,7 +10279,9 @@ private struct SessionView: View {
                 guard !journey.looseSpots.contains(where: { $0.id == spot.id }) else { return }
                 journey.adoptLooseSpot(spot)
             } else {
-                journey.clearCurrentLooseSpot()
+                // Only the CURRENT moment's spot — never spots predating
+                // the group (its adopted pre-game, my own earlier night).
+                journey.clearCurrentLooseSpot(protectBefore: liveGroup.session?.createdAt)
             }
         }
         .sheet(isPresented: $invitesSheetOpen) {
@@ -9536,6 +10370,33 @@ private struct SessionView: View {
                     journey.clear()
                 }
             }
+            // Same staleness rule for a night that never logged a drink:
+            // an old check-in + photos used to linger FOREVER (no drinks →
+            // no END button, no auto-end). Recap what's there, then clear.
+            // Skipped while an ended-while-away capture is pending — that
+            // recap builds from this same journey.
+            if !live.isActive, !liveGroup.isActive, liveGroup.endedLiveEvents == nil {
+                let hasLeftovers = !journey.stops.isEmpty
+                    || !journey.loosePhotos.isEmpty
+                    || venues.currentVenue != nil
+                if hasLeftovers {
+                    if let last = journeyLastActivity {
+                        if Date().timeIntervalSince(last) > 12 * 3600 {
+                            if let built = buildAutoRecap(events: []) {
+                                presentAutoRecap(built)
+                            } else {
+                                journey.clear()
+                                venues.currentVenue = nil
+                            }
+                        }
+                    } else {
+                        // A stray check-in with no recorded activity at
+                        // all — nothing to recap, just reset the chip.
+                        journey.clear()
+                        venues.currentVenue = nil
+                    }
+                }
+            }
         }
         // Pull venue + specials catalog on first launch so the chip /
         // picker have something to render. With no curated seed list,
@@ -9548,6 +10409,14 @@ private struct SessionView: View {
         .fullScreenCover(item: $autoRecap) { built in
             NightRecapView(recap: built, history: recapHistory, mode: .autoEnd) {
                 autoRecap = nil
+                // Squad recap queued behind the personal one? Present it
+                // once this cover has fully dismissed.
+                if let squad = pendingGroupRecap {
+                    pendingGroupRecap = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                        autoRecap = squad
+                    }
+                }
             }
         }
         // Group auto-recap: SessionService hands off my projected events
@@ -9556,14 +10425,17 @@ private struct SessionView: View {
         .onChange(of: liveGroup.endedLiveEvents) { _, events in
             guard let events, !events.isEmpty else { return }
             let board = liveGroup.endedGroupLeaderboard
+            let groupCtx = liveGroup.endedGroupContext
+            // Preserve the journey/check-in when the night CONTINUES: a
+            // backfilled recap of an OLD session arriving while a NEW sesh
+            // is already running — wiping the current night's check-in was
+            // exactly the "we're checked in but the app doesn't show it"
+            // bug.
+            let keepJourney = liveGroup.session != nil || live.isActive
             liveGroup.endedLiveEvents = nil
             liveGroup.endedGroupLeaderboard = nil
-            if var built = buildAutoRecap(events: events) {
-                // Group sesh → carry the squad leaderboard so the recap's
-                // overview shows everyone's night, not just mine.
-                built.groupLeaderboard = board
-                presentAutoRecap(built)
-            }
+            liveGroup.endedGroupContext = nil
+            deliverEndRecaps(events: events, board: board, ctx: groupCtx, keepJourney: keepJourney)
         }
         // When the plan members list refreshes (entry or 3s poll), pull
         // my synced duration from the DB into the local slider so the
@@ -9595,7 +10467,11 @@ private struct SessionView: View {
             stories: liveStories,
             openPulse: $openPulse,
             tab: tab,
-            publish: publishPresence
+            publish: publishPresence,
+            onLiveEnded: { checkOutAfterLiveEnd() },
+            journey: journey,
+            syncMarkers: { syncJourneyMarkersToGroup() },
+            mergeRoute: { mergeGroupRouteIntoJourney() }
         ))
         // Bridge the device-local guest store to the shared session roster
         // as the user enters / leaves a LIVE group:
@@ -9616,6 +10492,13 @@ private struct SessionView: View {
                 let userInitiated = liveGroup.entryWasUserInitiated
                 liveGroup.entryWasUserInitiated = false
                 if userInitiated {
+                    // CREATOR only: my running night becomes the group's
+                    // opening chapter (the host's pre-game spot usually
+                    // predates the group row by a minute). Joiners keep
+                    // their earlier stops personal.
+                    if liveGroup.isHost, let newId = new {
+                        journey.adoptNightIntoSession(newId)
+                    }
                     if old == nil {
                         // Solo → group: carry my running solo night in.
                         carrySoloNightIntoGroup()
@@ -9653,6 +10536,12 @@ private struct SessionView: View {
             recordSavedGroup(from: planGroup)
             recordSavedGroup(from: liveGroup)
             friends.start()
+            // Every journey entry created while in a live group carries the
+            // group's id — the group recap selects by IDENTITY, so a
+            // member's parallel personal stops can never leak into it.
+            journey.currentSessionProvider = { [weak liveGroup] in
+                liveGroup?.session?.id
+            }
         }
         // Profile edits (weight/age/sex) need to flow into the live
         // Widmark formula immediately. Otherwise the per-drink BAC
@@ -11332,14 +12221,17 @@ private struct ProfileSheet: View {
 
                     // Saved night recaps — replay any past night (and add
                     // photos to its stops the morning after). Long-press a
-                    // row to delete.
-                    if !nightHistory.pastNights.isEmpty {
+                    // row to delete. Personal and group recaps get their
+                    // own sections so the two are easy to tell apart.
+                    let personalNights = nightHistory.pastNights.filter { !$0.isGroupRecap }
+                    let groupNights = nightHistory.pastNights.filter { $0.isGroupRecap }
+                    if !personalNights.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("PAST NIGHTS")
                                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                                 .tracking(2)
                                 .foregroundStyle(Color.bronze)
-                            ForEach(nightHistory.pastNights.prefix(20)) { night in
+                            ForEach(personalNights.prefix(20)) { night in
                                 Button {
                                     replayRecap = night
                                 } label: {
@@ -11354,6 +12246,38 @@ private struct ProfileSheet: View {
                                         nightHistory.removeFromPastNights(night.id)
                                     } label: {
                                         Label("Delete from Past nights", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.top, 6)
+                    }
+                    if !groupNights.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "person.3.fill")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(Color.bronze)
+                                Text("GROUP NIGHTS")
+                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                    .tracking(2)
+                                    .foregroundStyle(Color.bronze)
+                            }
+                            ForEach(groupNights.prefix(20)) { night in
+                                Button {
+                                    replayRecap = night
+                                } label: {
+                                    PastNightRow(
+                                        recap: night,
+                                        unit: BACUnitSetting.resolved(mode: bacUnitMode)
+                                    )
+                                }
+                                .buttonStyle(PressScaleStyle())
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        nightHistory.removeFromPastNights(night.id)
+                                    } label: {
+                                        Label("Delete from Group nights", systemImage: "trash")
                                     }
                                 }
                             }
@@ -17147,7 +18071,14 @@ private struct LiveSeshView: View {
                     snaps: groupSnaps,
                     sessionId: sid,
                     stopName: { venues.currentVenue?.name },
-                    nameFor: { pid in group.memberProfiles[pid]?.name ?? "?" }
+                    nameFor: { pid in group.memberProfiles[pid]?.name ?? "?" },
+                    avatarFor: { pid in group.memberProfiles[pid]?.avatarURL },
+                    saveToJourney: { data, date in
+                        // Saved squad schnaps become loose journey photos at
+                        // their original time — the recap files them onto the
+                        // right leg of the night automatically.
+                        journey.addLoosePhoto(data, at: date)
+                    }
                 )
             }
             if inGroup {

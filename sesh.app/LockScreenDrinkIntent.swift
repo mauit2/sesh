@@ -49,6 +49,28 @@ import Foundation
 public enum LockScreenStorageKeys {
     public static let drinks  = "sesh.live.drinks.v1"
     public static let started = "sesh.live.startedAt.v1"
+    /// The signed-in account's namespace suffix, written by LiveSeshState.
+    /// Solo drinks live in per-account keys (`drinks`.`<ns>`) so accounts
+    /// sharing a phone can't overwrite each other's night; the intent
+    /// resolves the ACTIVE account's keys through this pointer.
+    public static let liveNS = "sesh.live.ns.v1"
+
+    /// The active account's drinks key (falls back to the legacy shared
+    /// slot when no account has signed in since the namespacing shipped).
+    public static var drinksResolved: String {
+        if let ns = UserDefaults.standard.string(forKey: liveNS), !ns.isEmpty {
+            return "\(drinks).\(ns)"
+        }
+        return drinks
+    }
+
+    /// The active account's started-at key (same resolution rule).
+    public static var startedResolved: String {
+        if let ns = UserDefaults.standard.string(forKey: liveNS), !ns.isEmpty {
+            return "\(started).\(ns)"
+        }
+        return started
+    }
     /// Legacy name-only recents (migrated away from by RecentDrinksStore).
     public static let recents = "sesh.recentDrinks.v1"
     /// Full-option recents (JSON-encoded [RecentDrink]) — scanned/custom
@@ -197,9 +219,9 @@ public enum LockScreenDrinkLogger {
 
         // 2) Stamp the start time if this is the very first drink of
         //    the sesh. LiveSeshState's `add(_:)` does the same dance.
-        let raw = UserDefaults.standard.double(forKey: LockScreenStorageKeys.started)
+        let raw = UserDefaults.standard.double(forKey: LockScreenStorageKeys.startedResolved)
         if raw <= 0 {
-            UserDefaults.standard.set(now.timeIntervalSince1970, forKey: LockScreenStorageKeys.started)
+            UserDefaults.standard.set(now.timeIntervalSince1970, forKey: LockScreenStorageKeys.startedResolved)
         }
 
         // 3) Move this option to the front of the recents list.
@@ -355,7 +377,7 @@ public enum LockScreenDrinkLogger {
     // MARK: - I/O helpers
 
     fileprivate static func loadDrinks() -> [StoredLiveDrink] {
-        guard let data = UserDefaults.standard.data(forKey: LockScreenStorageKeys.drinks)
+        guard let data = UserDefaults.standard.data(forKey: LockScreenStorageKeys.drinksResolved)
         else { return [] }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
@@ -366,7 +388,7 @@ public enum LockScreenDrinkLogger {
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         if let data = try? enc.encode(drinks) {
-            UserDefaults.standard.set(data, forKey: LockScreenStorageKeys.drinks)
+            UserDefaults.standard.set(data, forKey: LockScreenStorageKeys.drinksResolved)
         }
     }
 
