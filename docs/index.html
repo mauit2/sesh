@@ -3,15 +3,23 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Sesh</title>
-<meta name="description" content="Sesh — a social BAC tracker. Coming soon." />
+<!-- Hardening: zero JavaScript runs on this page, styles are inline-only,
+     fonts pinned to Google Fonts, nothing else may load or frame us. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta name="referrer" content="no-referrer" />
+<meta name="color-scheme" content="dark" />
+<meta name="theme-color" content="#140f0b" />
+<title>Sesh — know your night</title>
+<meta name="description" content="Sesh — the social BAC tracker. Log drinks, watch your estimated BAC live, run group seshes with friends, and replay the night. In beta on TestFlight." />
+<link rel="canonical" href="https://mauit2.github.io/sesh/" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <style>
   :root{
-    --bg:#140f0b; --cream:#f3e9d8; --cream-dim:#cdbfa8;
+    --bg:#140f0b; --bg-elev:#1d1610; --cream:#f3e9d8; --cream-dim:#cdbfa8;
     --whiskey:#e8843c; --bronze:#b3895a; --line:rgba(243,233,216,.10);
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
   }
   *{box-sizing:border-box;}
   html,body{height:100%;}
@@ -25,35 +33,135 @@
     font-family:"Hanken Grotesk",system-ui,sans-serif;
     -webkit-font-smoothing:antialiased;
     display:flex;align-items:center;justify-content:center;
+    overflow-x:hidden;
   }
+  /* grain */
   body::before{
     content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.04;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
-  .card{position:relative;z-index:1;text-align:center;padding:40px 28px;max-width:30rem;}
-  .eyebrow{font-size:12px;font-weight:700;letter-spacing:.36em;text-transform:uppercase;color:var(--bronze);margin:0 0 18px;}
-  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--whiskey);margin-right:9px;vertical-align:middle;box-shadow:0 0 12px rgba(232,132,60,.7);}
-  h1{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:clamp(3.4rem,16vw,6rem);line-height:.95;letter-spacing:-.04em;margin:0;color:var(--cream);}
-  h1 em{font-style:italic;color:var(--whiskey);}
-  .tag{color:var(--cream-dim);font-size:18px;margin:18px 0 34px;}
+
+  /* ambience — a slow amber orb drifting behind everything */
+  .orb{
+    position:fixed;z-index:0;pointer-events:none;
+    width:52vmax;height:52vmax;border-radius:50%;
+    background:radial-gradient(circle at 40% 40%, rgba(232,132,60,.14), transparent 62%);
+    top:-18vmax;right:-14vmax;
+    animation:drift 26s ease-in-out infinite alternate;
+    will-change:transform;
+  }
+  @keyframes drift{
+    from{transform:translate3d(0,0,0) scale(1);}
+    to{transform:translate3d(-9vmax,7vmax,0) scale(1.15);}
+  }
+
+  /* carbonation — bubbles rising through the night */
+  .bubbles{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+  .bubbles i{
+    position:absolute;bottom:-6vh;border-radius:50%;
+    border:1px solid rgba(232,132,60,.35);
+    background:radial-gradient(circle at 32% 30%, rgba(243,233,216,.16), rgba(232,132,60,.05));
+    opacity:0;
+    animation-name:rise;
+    animation-timing-function:cubic-bezier(.25,.4,.45,1);
+    animation-iteration-count:infinite;
+    will-change:transform,opacity;
+  }
+  @keyframes rise{
+    0%  {opacity:0;transform:translate3d(0,0,0) scale(.6);}
+    8%  {opacity:.85;}
+    72% {opacity:.5;}
+    100%{opacity:0;transform:translate3d(var(--sway,2vw),-108vh,0) scale(1.05);}
+  }
+  .bubbles i:nth-child(1){left:8%;  width:10px;height:10px;--sway: 3vw; animation-duration:13s; animation-delay:0s;}
+  .bubbles i:nth-child(2){left:18%; width:6px; height:6px; --sway:-2vw; animation-duration:17s; animation-delay:3.2s;}
+  .bubbles i:nth-child(3){left:29%; width:13px;height:13px;--sway: 4vw; animation-duration:15s; animation-delay:6.4s;}
+  .bubbles i:nth-child(4){left:41%; width:7px; height:7px; --sway:-3vw; animation-duration:19s; animation-delay:1.6s;}
+  .bubbles i:nth-child(5){left:55%; width:9px; height:9px; --sway: 2vw; animation-duration:14s; animation-delay:8.5s;}
+  .bubbles i:nth-child(6){left:66%; width:5px; height:5px; --sway:-4vw; animation-duration:21s; animation-delay:4.8s;}
+  .bubbles i:nth-child(7){left:77%; width:12px;height:12px;--sway: 3vw; animation-duration:16s; animation-delay:10.2s;}
+  .bubbles i:nth-child(8){left:88%; width:8px; height:8px; --sway:-2vw; animation-duration:18s; animation-delay:2.4s;}
+
+  .card{position:relative;z-index:1;text-align:center;padding:40px 28px;max-width:32rem;}
+
+  .reveal{opacity:0;transform:translateY(14px);animation:up .8s cubic-bezier(.2,.7,.2,1) forwards;}
+  .d1{animation-delay:.05s}.d2{animation-delay:.2s}.d3{animation-delay:.38s}.d4{animation-delay:.56s}.d5{animation-delay:.74s}
+  @keyframes up{to{opacity:1;transform:none;}}
+
+  .eyebrow{
+    font-family:var(--mono);font-size:11px;font-weight:700;
+    letter-spacing:.36em;text-transform:uppercase;color:var(--bronze);margin:0 0 18px;
+  }
+  /* live dot with a sonar ring — the app's LIVE pulse */
+  .dot{position:relative;display:inline-block;width:7px;height:7px;border-radius:50%;
+    background:var(--whiskey);margin-right:11px;vertical-align:middle;}
+  .dot::after{
+    content:"";position:absolute;inset:-3px;border-radius:50%;
+    border:1px solid var(--whiskey);
+    animation:sonar 2.2s ease-out infinite;
+  }
+  @keyframes sonar{
+    0%  {transform:scale(.6);opacity:.9;}
+    70% {transform:scale(2.4);opacity:0;}
+    100%{transform:scale(2.4);opacity:0;}
+  }
+
+  h1{font-family:"Fraunces",Georgia,serif;font-weight:800;
+    font-size:clamp(3rem,14vw,5.4rem);line-height:.98;letter-spacing:-.04em;
+    margin:0;color:var(--cream);}
+  h1 em{
+    font-style:italic;color:var(--whiskey);display:inline-block;
+    animation:tipsy 5.5s ease-in-out infinite;
+    transform-origin:50% 85%;
+  }
+  @keyframes tipsy{
+    0%,100%{transform:rotate(0deg) translateY(0);}
+    30%    {transform:rotate(-2.4deg) translateY(-2px);}
+    65%    {transform:rotate(1.8deg) translateY(1px);}
+  }
+
+  .tag{color:var(--cream-dim);font-size:17px;line-height:1.6;margin:20px 0 10px;}
+  .beta{
+    font-family:var(--mono);font-size:12px;letter-spacing:.18em;color:var(--whiskey);
+    margin:0 0 34px;
+  }
+
   .links{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
   a{font-weight:600;font-size:14px;letter-spacing:.02em;text-decoration:none;color:var(--cream);
     padding:10px 18px;border-radius:999px;border:1px solid var(--line);
-    transition:border-color .15s ease, color .15s ease, transform .15s ease;}
-  a:hover{border-color:var(--whiskey);color:var(--whiskey);transform:translateY(-1px);}
+    transition:border-color .18s ease, color .18s ease, transform .18s ease;}
+  a:hover{border-color:var(--whiskey);color:var(--whiskey);transform:translateY(-2px);}
+  a:focus-visible{outline:2px solid var(--whiskey);outline-offset:3px;}
+  a:active{transform:translateY(0);}
   a.mail{color:var(--bronze);border-color:transparent;}
   a.mail:hover{color:var(--whiskey);}
+
+  .foot{margin-top:44px;font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;
+    text-transform:uppercase;color:rgba(205,191,168,.4);}
+
+  @media (prefers-reduced-motion: reduce){
+    .orb,.bubbles i,.dot::after,h1 em{animation:none;}
+    .reveal{animation:none;opacity:1;transform:none;}
+    a{transition:none;}
+  }
 </style>
 </head>
 <body>
+  <div class="orb" aria-hidden="true"></div>
+  <div class="bubbles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+
   <main class="card">
-    <p class="eyebrow"><span class="dot"></span>Coming soon</p>
-    <h1>Sesh<em>.</em></h1>
-    <p class="tag">Know your night. A social BAC tracker for the sesh.</p>
-    <div class="links">
-      <a href="/privacy">Privacy Policy</a>
+    <p class="eyebrow reveal d1"><span class="dot"></span>Live now in beta</p>
+    <h1 class="reveal d2">Know your <em>night.</em></h1>
+    <p class="tag reveal d3">Sesh — the social BAC tracker. Log your drinks, watch your estimated
+      BAC live, run group seshes with friends, share the night's schnaps, and replay it all
+      in the morning.</p>
+    <p class="beta reveal d3">TESTFLIGHT BETA · iOS 18+</p>
+    <nav class="links reveal d4" aria-label="Site">
+      <a href="./privacy/">Privacy policy</a>
       <a class="mail" href="mailto:contact@seshapp.xyz">contact@seshapp.xyz</a>
-    </div>
+    </nav>
+    <p class="foot reveal d5">Drink responsibly · BAC values are estimates, never a reason to drive</p>
   </main>
 </body>
 </html>
