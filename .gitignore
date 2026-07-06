@@ -50,3 +50,9 @@ Secrets.local.*
 *.p8
 *.p12
 *.mobileprovision
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
