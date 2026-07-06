@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- Hardening: zero JavaScript runs on this page, styles are inline-only,
+     fonts pinned to Google Fonts, nothing else may load or frame us. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta name="referrer" content="no-referrer" />
+<meta name="color-scheme" content="dark" />
+<meta name="theme-color" content="#140f0b" />
+<title>Terms of Use — Sesh</title>
+<meta name="description" content="Terms of Use for the Sesh app — eligibility, the BAC disclaimer, content rules, and your responsibilities." />
+<link rel="canonical" href="https://mauit2.github.io/sesh/terms/" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#140f0b; --bg-elev:#1d1610; --cream:#f3e9d8; --cream-dim:#cdbfa8;
+    --whiskey:#e8843c; --bronze:#b3895a; --line:rgba(243,233,216,.10);
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+    --measure:44rem;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(120% 80% at 85% -10%, rgba(232,132,60,.16), transparent 55%),
+      radial-gradient(90% 70% at -10% 0%, rgba(179,137,90,.10), transparent 50%),
+      var(--bg);
+    color:var(--cream);
+    font-family:"Hanken Grotesk",system-ui,sans-serif;
+    font-size:17px;line-height:1.72;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.04;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .bubbles{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+  .bubbles i{
+    position:absolute;bottom:-6vh;border-radius:50%;
+    border:1px solid rgba(232,132,60,.22);
+    background:radial-gradient(circle at 32% 30%, rgba(243,233,216,.10), rgba(232,132,60,.04));
+    opacity:0;
+    animation:rise linear infinite;
+    will-change:transform,opacity;
+  }
+  @keyframes rise{
+    0%  {opacity:0;transform:translate3d(0,0,0) scale(.6);}
+    10% {opacity:.5;}
+    75% {opacity:.3;}
+    100%{opacity:0;transform:translate3d(var(--sway,2vw),-110vh,0) scale(1);}
+  }
+  .bubbles i:nth-child(1){left:4%;  width:9px; height:9px; --sway: 2vw; animation-duration:22s; animation-delay:0s;}
+  .bubbles i:nth-child(2){left:9%;  width:5px; height:5px; --sway:-2vw; animation-duration:28s; animation-delay:9s;}
+  .bubbles i:nth-child(3){left:93%; width:11px;height:11px;--sway:-3vw; animation-duration:24s; animation-delay:4s;}
+  .bubbles i:nth-child(4){left:88%; width:6px; height:6px; --sway: 3vw; animation-duration:30s; animation-delay:14s;}
+
+  .wrap{position:relative;z-index:1;max-width:var(--measure);margin:0 auto;padding:72px 24px 96px;}
+
+  .reveal{opacity:0;transform:translateY(12px);animation:up .7s cubic-bezier(.2,.7,.2,1) forwards;}
+  .d1{animation-delay:.04s}.d2{animation-delay:.16s}.d3{animation-delay:.3s}.d4{animation-delay:.44s}
+  @keyframes up{to{opacity:1;transform:none;}}
+
+  @supports (animation-timeline: view()){
+    section{
+      animation:sectionUp .7s cubic-bezier(.2,.7,.2,1) both;
+      animation-timeline:view();
+      animation-range:entry 0% entry 32%;
+    }
+    @keyframes sectionUp{
+      from{opacity:0;transform:translateY(18px);}
+      to  {opacity:1;transform:none;}
+    }
+  }
+
+  .eyebrow{
+    font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.34em;
+    text-transform:uppercase;color:var(--bronze);margin:0 0 14px;
+  }
+  .dot{position:relative;display:inline-block;width:7px;height:7px;border-radius:50%;
+    background:var(--whiskey);margin-right:11px;vertical-align:middle;}
+  .dot::after{
+    content:"";position:absolute;inset:-3px;border-radius:50%;
+    border:1px solid var(--whiskey);
+    animation:sonar 2.2s ease-out infinite;
+  }
+  @keyframes sonar{
+    0%{transform:scale(.6);opacity:.9;}
+    70%,100%{transform:scale(2.4);opacity:0;}
+  }
+
+  h1{
+    font-family:"Fraunces",Georgia,serif;font-optical-sizing:auto;
+    font-weight:800;font-size:clamp(2.6rem,7vw,4rem);line-height:1.02;letter-spacing:-.03em;
+    margin:0 0 18px;color:var(--cream);
+  }
+  h1 em{font-style:italic;color:var(--whiskey);}
+  .dates{font-family:var(--mono);color:var(--cream-dim);font-size:13px;letter-spacing:.04em;margin:0 0 30px;}
+  .dates b{color:var(--cream);font-weight:600;}
+  .callout{
+    border-left:3px solid var(--whiskey);
+    background:linear-gradient(90deg,rgba(232,132,60,.10),rgba(232,132,60,.02));
+    padding:16px 20px;border-radius:0 14px 14px 0;margin:0 0 40px;
+    color:var(--cream-dim);font-size:15.5px;
+  }
+  .callout b{color:var(--cream);font-weight:700;}
+  .lede{color:var(--cream-dim);font-size:18px;margin:0 0 40px;}
+
+  h2{
+    font-family:"Fraunces",Georgia,serif;font-weight:700;
+    font-size:1.5rem;letter-spacing:-.01em;line-height:1.2;
+    margin:54px 0 6px;color:var(--cream);
+    display:flex;align-items:baseline;gap:12px;
+  }
+  h2 .num{
+    font-family:var(--mono);font-size:12px;font-weight:700;
+    letter-spacing:.2em;color:var(--whiskey);transform:translateY(-2px);flex-shrink:0;
+  }
+  p{margin:14px 0;}
+  a{color:var(--whiskey);text-decoration:none;border-bottom:1px solid rgba(232,132,60,.35);
+    transition:border-color .15s ease;}
+  a:hover{border-color:var(--whiskey);}
+  a:focus-visible{outline:2px solid var(--whiskey);outline-offset:3px;}
+  ul{margin:14px 0;padding-left:20px;}
+  li{margin:9px 0;}
+  li::marker{color:var(--whiskey);}
+  strong{color:var(--cream);font-weight:600;}
+
+  .foot{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+    color:var(--cream-dim);font-size:14px;}
+  .back{
+    display:inline-block;margin-top:14px;font-weight:700;font-size:13px;
+    letter-spacing:.04em;color:var(--cream);text-decoration:none;border:1px solid var(--line);
+    border-radius:999px;padding:9px 18px;
+    transition:border-color .18s ease,color .18s ease,transform .18s ease;
+  }
+  .back:hover{border-color:var(--whiskey);color:var(--whiskey);transform:translateY(-2px);}
+  .back:focus-visible{outline:2px solid var(--whiskey);outline-offset:3px;}
+
+  @media (prefers-reduced-motion: reduce){
+    .bubbles i,.dot::after{animation:none;}
+    .reveal{animation:none;opacity:1;transform:none;}
+    @supports (animation-timeline: view()){
+      section{animation:none;opacity:1;transform:none;}
+    }
+    html{scroll-behavior:auto;}
+  }
+</style>
+</head>
+<body>
+  <div class="bubbles" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <main class="wrap">
+    <p class="eyebrow reveal d1"><span class="dot"></span>Sesh App</p>
+    <h1 class="reveal d2">Terms of <em>Use.</em></h1>
+    <p class="dates reveal d3"><b>Effective:</b> 6 July 2026 &nbsp;·&nbsp; <b>Last updated:</b> 6 July 2026</p>
+
+    <p class="lede reveal d3">These terms are an agreement between you and the operator of the Sesh
+      app. By creating an account or using Sesh, you accept them. If you don't agree, don't use
+      Sesh. Our <a href="../privacy/">Privacy Policy</a> explains how we handle your data and is
+      part of these terms.</p>
+
+    <div class="callout reveal d4"><b>The one rule that matters most: never use Sesh to decide
+      whether you're okay to drive</b> — or to make any other safety, health, or legal decision.
+      BAC values in Sesh are rough Widmark-formula <em>estimates</em> built from what you type in.
+      They can be wrong, in either direction, by a lot.</div>
+
+    <section>
+    <h2><span class="num">01</span>Who can use Sesh</h2>
+    <ul>
+      <li>You must be of <strong>legal drinking age</strong> in every jurisdiction where you use
+        Sesh, and in any case at least 17 years old (the app's App&nbsp;Store rating).</li>
+      <li>You must provide accurate account information and keep your login to yourself. You are
+        responsible for everything that happens under your account.</li>
+      <li>One account per person; no accounts created for someone else or for automation.</li>
+    </ul>
+    </section>
+
+    <section>
+    <h2><span class="num">02</span>What Sesh is — and is not</h2>
+    <p>Sesh is a social drink-logging and BAC-<em>estimation</em> app for harm-reduction awareness
+      and entertainment: log drinks, see estimates, share nights with friends.</p>
+    <ul>
+      <li>Sesh is <strong>not a medical device, breathalyzer, legal-compliance tool, or safety
+        instrument</strong>. Estimates depend entirely on what you enter and on population-average
+        formulas that may not describe your body.</li>
+      <li>Sesh provides <strong>no medical advice</strong>. A reading of 0.00 does not mean you are
+        sober, unimpaired, or legal to drive.</li>
+      <li>You alone are responsible for your drinking and its consequences. If you or someone
+        around you may be in danger (e.g. alcohol poisoning), call emergency services —
+        <strong>112 in the EU</strong>.</li>
+    </ul>
+    </section>
+
+    <section>
+    <h2><span class="num">03</span>Your content</h2>
+    <p>Sesh lets you post photos and other content — stories, squad schnaps, night recaps,
+      comments, captions ("your content"). You keep ownership of it. You grant us a limited,
+      non-exclusive licence to host, store, display, and transmit it solely to operate the app
+      (e.g. showing your story to your friends, purging it after 24 hours).</p>
+    <p><strong>You must not post content that:</strong></p>
+    <ul>
+      <li>is illegal, or depicts illegal activity (including underage drinking);</li>
+      <li>harasses, bullies, threatens, or degrades anyone;</li>
+      <li>is sexually explicit, gratuitously violent, or hateful;</li>
+      <li>invades someone's privacy — no posting identifiable photos of people who'd object,
+        and never of minors;</li>
+      <li>is spam, a scam, or someone else's work posted without permission.</li>
+    </ul>
+    <p>We may remove content and suspend or terminate accounts that break these rules, at our
+      discretion and without notice.</p>
+    </section>
+
+    <section>
+    <h2><span class="num">04</span>Reporting, blocking, and moderation</h2>
+    <ul>
+      <li><strong>Report:</strong> every story, post, and user can be reported from inside the
+        app (long-press a post, the flag on a story, or a friend's row). Reports go to the
+        operator for review; we aim to act on objectionable content within 24 hours of a
+        report, including removing content and ejecting the user who provided it.</li>
+      <li><strong>Block:</strong> you can block any user. Blocking removes you from each other's
+        feeds, stories, live status, and friends, and prevents new contact inside Sesh.</li>
+      <li><strong>Remove friends:</strong> your friend list is yours — you can remove anyone at
+        any time.</li>
+    </ul>
+    </section>
+
+    <section>
+    <h2><span class="num">05</span>Acceptable use</h2>
+    <p>Don't misuse the service. In particular, don't:</p>
+    <ul>
+      <li>probe, scrape, overload, or interfere with the service or other users' data;</li>
+      <li>attempt to access accounts, data, or systems you don't own;</li>
+      <li>misrepresent your identity or impersonate others;</li>
+      <li>use Sesh to encourage dangerous drinking — drinking games built on the app's numbers
+        are a bad idea and against the spirit of the whole thing.</li>
+    </ul>
+    </section>
+
+    <section>
+    <h2><span class="num">06</span>Termination</h2>
+    <p>You can stop using Sesh and request account deletion at any time (see the Privacy
+      Policy). We may suspend or terminate your access if you break these terms, if required by
+      law, or if we discontinue the service. Sesh is currently a free beta; we may change,
+      pause, or shut down features or the whole service at any time.</p>
+    </section>
+
+    <section>
+    <h2><span class="num">07</span>Disclaimers</h2>
+    <p>Sesh is provided <strong>"as is" and "as available"</strong>, without warranties of any
+      kind, express or implied — including accuracy of any BAC estimate, availability,
+      merchantability, or fitness for a particular purpose. Content posted by users is theirs,
+      not ours; we don't endorse it and are not responsible for it, though we moderate as
+      described above. Venue deals shown in the app are provided by third parties and may
+      change or be withdrawn without notice.</p>
+    </section>
+
+    <section>
+    <h2><span class="num">08</span>Limitation of liability</h2>
+    <p>To the maximum extent permitted by law, the operator of Sesh is not liable for any
+      indirect, incidental, special, consequential, or punitive damages, or for personal injury,
+      property damage, legal penalties, or losses arising from your alcohol consumption, from
+      reliance on any estimate shown in the app, or from content posted by other users. To the
+      extent liability cannot be excluded, it is limited to the amount you paid to use Sesh in
+      the twelve months before the claim (currently: nothing).</p>
+    <p>Nothing in these terms limits liability that cannot be limited under applicable law,
+      including mandatory consumer-protection rights in your country of residence.</p>
+    </section>
+
+    <section>
+    <h2><span class="num">09</span>Governing law</h2>
+    <p>These terms are governed by the laws of <strong>Sweden</strong>. Disputes go to the Swedish
+      courts, unless the mandatory consumer law of your country of residence provides otherwise.
+      EU consumers may also use the European Commission's
+      <a href="https://ec.europa.eu/consumers/odr/">online dispute resolution platform</a>.</p>
+    </section>
+
+    <section>
+    <h2><span class="num">10</span>Changes</h2>
+    <p>We may update these terms as Sesh evolves. Meaningful changes will be reflected in the
+      date above and, for significant changes, noted in the app. Continued use after a change
+      means you accept the updated terms.</p>
+    </section>
+
+    <section>
+    <h2><span class="num">11</span>Contact</h2>
+    <p>Questions about these terms:
+      <a href="mailto:contact@seshapp.xyz">contact@seshapp.xyz</a></p>
+    </section>
+
+    <div class="foot">
+      <p>See also the <a href="../privacy/">Privacy Policy</a>.</p>
+      <a class="back" href="../">← Back to seshapp</a>
+    </div>
+  </main>
+</body>
+</html>
