@@ -32,6 +32,7 @@ import PhotosUI
 import UIKit
 import ImageIO
 import Supabase
+import AVFoundation
 
 // MARK: - Journey store
 
@@ -1417,6 +1418,227 @@ struct CameraTarget: Identifiable {
     let id: UUID   // the stop id the shot lands on
 }
 
+// MARK: - Sesh Cam
+//
+// The branded camera — a full-screen AVFoundation viewfinder with the
+// app's own chrome (whiskey shutter ring, flash + flip pills, SESH CAM
+// wordmark) instead of the stock system picker. Same contract as
+// CameraCaptureView: presents full screen, calls back with JPEG data.
+
+@MainActor
+final class SeshCameraController: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
+    let session = AVCaptureSession()
+    private let output = AVCapturePhotoOutput()
+    private var position: AVCaptureDevice.Position = .back
+    @Published var flashOn = false
+    @Published var denied = false
+    private var completion: ((Data) -> Void)?
+
+    func start() async {
+        let granted = await AVCaptureDevice.requestAccess(for: .video)
+        guard granted else { denied = true; return }
+        configure()
+        let s = session
+        Task.detached { s.startRunning() }
+    }
+
+    func stop() {
+        let s = session
+        Task.detached { s.stopRunning() }
+    }
+
+    private func configure() {
+        session.beginConfiguration()
+        session.sessionPreset = .photo
+        session.inputs.forEach(session.removeInput)
+        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position),
+           let input = try? AVCaptureDeviceInput(device: device),
+           session.canAddInput(input) {
+            session.addInput(input)
+        }
+        if !session.outputs.contains(where: { $0 === output }), session.canAddOutput(output) {
+            session.addOutput(output)
+        }
+        // Selfies: capture exactly what the (mirrored) preview shows —
+        // an unmirrored front-camera photo reads as a surprise flip.
+        if let conn = output.connection(with: .video), conn.isVideoMirroringSupported {
+            conn.automaticallyAdjustsVideoMirroring = false
+            conn.isVideoMirrored = (position == .front)
+        }
+        session.commitConfiguration()
+    }
+
+    func flip() {
+        position = position == .back ? .front : .back
+        configure()
+    }
+
+    func capture(_ done: @escaping (Data) -> Void) {
+        completion = done
+        let settings = AVCapturePhotoSettings()
+        if output.supportedFlashModes.contains(flashOn ? .on : .off) {
+            settings.flashMode = flashOn ? .on : .off
+        }
+        output.capturePhoto(with: settings, delegate: self)
+    }
+
+    nonisolated func photoOutput(
+        _ output: AVCapturePhotoOutput,
+        didFinishProcessingPhoto photo: AVCapturePhoto,
+        error: Error?
+    ) {
+        guard error == nil, let data = photo.fileDataRepresentation() else { return }
+        Task { @MainActor in
+            self.completion?(data)
+            self.completion = nil
+        }
+    }
+}
+
+private struct SeshCameraPreview: UIViewRepresentable {
+    let session: AVCaptureSession
+
+    func makeUIView(context: Context) -> PreviewView {
+        let v = PreviewView()
+        v.videoPreviewLayer.session = session
+        v.videoPreviewLayer.videoGravity = .resizeAspectFill
+        return v
+    }
+    func updateUIView(_ uiView: PreviewView, context: Context) {}
+
+    final class PreviewView: UIView {
+        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+        var videoPreviewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+    }
+}
+
+struct SeshCameraView: View {
+    let onCapture: (Data) -> Void
+    /// false = the PARENT owns navigation (e.g. the story flow swaps to
+    /// the composer in place); true = classic behavior, dismiss on shot.
+    var autoDismiss: Bool = true
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var camera = SeshCameraController()
+    @State private var shutterFlash = false
+    @State private var rollItem: PhotosPickerItem? = nil
+
+    static var isAvailable: Bool { CameraCaptureView.isAvailable }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            SeshCameraPreview(session: camera.session)
+                .ignoresSafeArea()
+
+            // Capture blink.
+            Color.white
+                .ignoresSafeArea()
+                .opacity(shutterFlash ? 0.7 : 0)
+                .allowsHitTesting(false)
+
+            VStack {
+                HStack {
+                    chromeButton("xmark") { dismiss() }
+                    Spacer()
+                    Text("SESH CAM")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(3.2)
+                        .foregroundStyle(Color.cream.opacity(0.85))
+                        .padding(.horizontal, 14).padding(.vertical, 7)
+                        .background(Capsule().fill(Color.ink.opacity(0.55)))
+                    Spacer()
+                    chromeButton(camera.flashOn ? "bolt.fill" : "bolt.slash",
+                                 tint: camera.flashOn ? .whiskey : .cream) {
+                        camera.flashOn.toggle()
+                    }
+                }
+                .padding(.horizontal, 18)
+                // Clear of the clock/battery — the cover can extend under
+                // the status bar on some presentation paths.
+                .padding(.top, 58)
+
+                Spacer()
+
+                if camera.denied {
+                    Text("Allow camera access in Settings to use the Sesh Cam.")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                    Spacer()
+                }
+
+                // Shutter row: camera roll on the left, whiskey-ring
+                // shutter center, flip on the right (Snapchat layout).
+                ZStack {
+                    HStack {
+                        PhotosPicker(selection: $rollItem, matching: .images) {
+                            Image(systemName: "photo.on.rectangle")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(Color.cream)
+                                .frame(width: 42, height: 42)
+                                .background(Circle().fill(Color.ink.opacity(0.55)))
+                                .overlay(Circle().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
+                        }
+                        Spacer()
+                        chromeButton("arrow.triangle.2.circlepath.camera") { camera.flip() }
+                    }
+                    .padding(.horizontal, 26)
+
+                    Button {
+                        shutterFlash = true
+                        withAnimation(.easeOut(duration: 0.3)) { shutterFlash = false }
+                        camera.capture { data in
+                            onCapture(data)
+                            if autoDismiss { dismiss() }
+                        }
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .strokeBorder(Color.whiskey, lineWidth: 4)
+                                .frame(width: 78, height: 78)
+                                .shadow(color: Color.whiskey.opacity(0.55), radius: 14)
+                            Circle()
+                                .fill(Color.cream)
+                                .frame(width: 60, height: 60)
+                        }
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+                .padding(.bottom, 34)
+            }
+        }
+        // Picking from the roll delivers through the same capture path.
+        .onChange(of: rollItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self) {
+                    onCapture(data)
+                    if autoDismiss { dismiss() }
+                }
+                rollItem = nil
+            }
+        }
+        .task { await camera.start() }
+        .onDisappear { camera.stop() }
+        .preferredColorScheme(.dark)
+    }
+
+    private func chromeButton(
+        _ icon: String, tint: Color = .cream, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 42, height: 42)
+                .background(Circle().fill(Color.ink.opacity(0.55)))
+                .overlay(Circle().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
 // MARK: - Lightbox
 
 /// Which photos to show full-screen, and where to start.
@@ -1913,7 +2135,7 @@ struct NightRecapView: View {
             }
         }
         .fullScreenCover(item: $cameraTarget) { target in
-            CameraCaptureView { data in
+            SeshCameraView { data in
                 applyPhoto(data, to: target.id)
             }
             .ignoresSafeArea()
@@ -2876,7 +3098,7 @@ struct LiveJourneyPhotosSection: View {
             }
         }
         .fullScreenCover(item: $cameraTarget) { target in
-            CameraCaptureView { data in
+            SeshCameraView { data in
                 if target.id == Self.looseTargetId {
                     journey.addLoosePhoto(data)
                 } else {

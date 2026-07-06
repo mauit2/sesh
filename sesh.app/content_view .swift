@@ -6311,6 +6311,7 @@ private struct FriendsView: View {
     @ObservedObject var friends: FriendsService
     @ObservedObject var auth: AuthService
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var moderation = ModerationService()
 
     @State private var query = ""
     @State private var results: [UserSearchHit] = []
@@ -6543,6 +6544,24 @@ private struct FriendsView: View {
                         Button(role: .destructive) {
                             Task { await friends.remove(userId: friend.id) }
                         } label: { Label("Remove friend", systemImage: "person.badge.minus") }
+                        Menu {
+                            ForEach(ModerationService.reasons, id: \.self) { reason in
+                                Button(reason) {
+                                    Task {
+                                        await moderation.report(
+                                            kind: "user", targetId: friend.id,
+                                            offender: friend.id, reason: reason
+                                        )
+                                    }
+                                }
+                            }
+                        } label: { Label("Report user", systemImage: "flag") }
+                        Button(role: .destructive) {
+                            Task {
+                                await moderation.block(friend.id)
+                                await friends.refresh()
+                            }
+                        } label: { Label("Block user", systemImage: "hand.raised") }
                     }
                 }
             }
@@ -6978,16 +6997,41 @@ private struct FriendsPulseStrip: View {
     @ObservedObject var pulse: FriendsPulseService
     @ObservedObject var stories: StoriesService
     let profile: Profile
-    /// My BAC / location at the moment of posting (nil = nothing to stamp).
+    /// My BAC / location / drink tally at the moment of posting (nil =
+    /// nothing to stamp).
     let storyBAC: () -> Double?
     let storyStamp: () -> String?
+    let storyProof: () -> String?
     let onOpen: (FriendPulse) -> Void
 
-    @State private var cameraOpen = false
+    /// One cover hosts the whole camera→composer journey (no flicker).
+    @State private var flowOpen = false
+    /// Pre-picked roll photo (no-camera devices) — flow skips the camera.
+    @State private var flowImage: Data? = nil
     @State private var libraryOpen = false
     @State private var pickerItem: PhotosPickerItem? = nil
-    @State private var staged: StagedStoryImage? = nil
     @State private var viewerCtx: StoryViewerContext? = nil
+
+    /// Who's on the carousel, in what order: story-posters first, newest
+    /// story leftmost; then friends who are live without a story (drunkest
+    /// first). Friends with neither don't appear at all — TONIGHT shows
+    /// what's happening tonight, not the whole address book.
+    private var displayPulses: [FriendPulse] {
+        func newestStory(_ id: UUID) -> Date? {
+            stories.stories(for: id).map(\.createdAt).max()
+        }
+        let posters = pulse.pulses
+            .compactMap { p -> (FriendPulse, Date)? in
+                guard let d = newestStory(p.id) else { return nil }
+                return (p, d)
+            }
+            .sorted { $0.1 > $1.1 }
+            .map(\.0)
+        let liveOnly = pulse.pulses
+            .filter { $0.live && newestStory($0.id) == nil }
+            .sorted { ($0.bac ?? 0) > ($1.bac ?? 0) }
+        return posters + liveOnly
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -6999,7 +7043,7 @@ private struct FriendsPulseStrip: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
                     myBubble
-                    ForEach(pulse.pulses) { p in
+                    ForEach(displayPulses) { p in
                         let theirStories = stories.stories(for: p.id)
                         PulseAvatar(pulse: p, hasStory: !theirStories.isEmpty)
                             .onTapGesture {
@@ -7017,38 +7061,55 @@ private struct FriendsPulseStrip: View {
                 .padding(.horizontal, 22)
                 .padding(.vertical, 2)
             }
+            // Soft edges instead of hard clips. Two parts:
+            //  • scrollClipDisabled lets the story-ring GLOW spill outside
+            //    the scroll bounds instead of being sliced into a box at
+            //    the strip's top/bottom;
+            //  • the horizontal gradient mask fades avatars out at the
+            //    screen edges. The mask is inflated vertically so it never
+            //    re-clips the freed glow.
+            .scrollClipDisabled()
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0.0),
+                        .init(color: .black, location: 0.03),
+                        .init(color: .black, location: 0.88),
+                        .init(color: .clear, location: 1.0),
+                    ],
+                    startPoint: .leading, endPoint: .trailing
+                )
+                .padding(.vertical, -32)
+            )
         }
-        .fullScreenCover(isPresented: $cameraOpen) {
-            CameraCaptureView { data in staged = StagedStoryImage(data: data) }
-                .ignoresSafeArea()
+        .fullScreenCover(isPresented: $flowOpen, onDismiss: { flowImage = nil }) {
+            StoryFlowView(
+                initialImage: flowImage,
+                bac: storyBAC(),
+                stamp: storyStamp(),
+                drinkProof: storyProof(),
+                onPost: { flattenedImage, bac, stamp in
+                    flowOpen = false
+                    Task { await stories.post(imageData: flattenedImage, caption: nil, bac: bac, stamp: stamp) }
+                },
+                onCancel: { flowOpen = false }
+            )
         }
         .photosPicker(isPresented: $libraryOpen, selection: $pickerItem, matching: .images)
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }
             Task {
                 if let data = try? await item.loadTransferable(type: Data.self) {
-                    staged = StagedStoryImage(data: data)
+                    flowImage = data
+                    flowOpen = true
                 }
                 pickerItem = nil
             }
         }
-        .sheet(item: $staged) { img in
-            StoryComposer(
-                imageData: img.data,
-                bac: storyBAC(),
-                stamp: storyStamp(),
-                onPost: { caption, bac, stamp in
-                    staged = nil
-                    Task { await stories.post(imageData: img.data, caption: caption, bac: bac, stamp: stamp) }
-                },
-                onCancel: { staged = nil }
-            )
-            .presentationDetents([.large])
-            .presentationBackground(Color.ink)
-        }
         .fullScreenCover(item: $viewerCtx) { ctx in
             StoryViewer(
                 ctx: ctx,
+                svc: stories,
                 onDelete: { story in Task { await stories.delete(story) } },
                 onClose: { viewerCtx = nil }
             )
@@ -7104,7 +7165,12 @@ private struct FriendsPulseStrip: View {
     }
 
     private func openCapture() {
-        if CameraCaptureView.isAvailable { cameraOpen = true } else { libraryOpen = true }
+        if SeshCameraView.isAvailable {
+            flowImage = nil
+            flowOpen = true
+        } else {
+            libraryOpen = true
+        }
     }
 }
 
@@ -7112,9 +7178,11 @@ private struct FriendsPulseStrip: View {
 /// BAC pill; offline friends are dimmed with no badge.
 private struct PulseAvatar: View {
     let pulse: FriendPulse
-    /// They have fresh stories → bronze ring, full opacity, tappable even
-    /// when not live.
+    /// They have fresh stories → glowing rotating story ring, full
+    /// opacity, tappable even when not live.
     var hasStory: Bool = false
+    @State private var ringSpin = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// BAC arrives on the raw %-scale; display follows the VIEWER's unit
     /// preference (percent vs promille), same as everywhere else in the app.
     @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
@@ -7136,13 +7204,37 @@ private struct PulseAvatar: View {
                 AvatarView(urlString: pulse.avatarUrl,
                            initial: String(pulse.name.prefix(1)).uppercased(),
                            size: 54)
-                    .overlay(
-                        Circle().strokeBorder(
-                            pulse.live ? status.color : (hasStory ? Color.bronze : Color.clear),
-                            lineWidth: 2.5
-                        )
-                        .padding(-3)
-                    )
+                    .overlay {
+                        if hasStory {
+                            // Unmissable story ring: a bright whiskey/cream
+                            // gradient slowly ROTATING around the avatar,
+                            // separated by a dark gap and doubled up with a
+                            // strong warm glow. This is THE "new story"
+                            // signal — it has to read from across the bar.
+                            Circle()
+                                .strokeBorder(
+                                    AngularGradient(
+                                        colors: [.whiskey, .cream, .whiskey, .cream, .whiskey],
+                                        center: .center
+                                    ),
+                                    lineWidth: 4
+                                )
+                                .padding(-8)
+                                .rotationEffect(.degrees(ringSpin ? 360 : 0))
+                                .shadow(color: Color.whiskey.opacity(0.9), radius: 7)
+                                .shadow(color: Color.whiskey.opacity(0.45), radius: 14)
+                                .onAppear {
+                                    guard !reduceMotion else { return }
+                                    withAnimation(.linear(duration: 7).repeatForever(autoreverses: false)) {
+                                        ringSpin = true
+                                    }
+                                }
+                        } else if pulse.live {
+                            Circle()
+                                .strokeBorder(status.color, lineWidth: 2.5)
+                                .padding(-3)
+                        }
+                    }
                     .opacity((pulse.live || hasStory) ? 1 : 0.45)
                 if pulse.live {
                     Text(unit.formatted(pulse.bac ?? 0))
@@ -7154,11 +7246,11 @@ private struct PulseAvatar: View {
                 }
             }
             // Breathing room for the parts that render OUTSIDE the 54pt
-            // circle — the ring (3pt up/sides) and the BAC pill (below,
-            // right) — so the ScrollView doesn't crop them.
-            .padding(.top, 4)
-            .padding(.horizontal, 8)
-            .padding(.bottom, 9)
+            // circle — the story ring (8pt + glow) and the BAC pill
+            // (below, right) — so the ScrollView doesn't crop them.
+            .padding(.top, 9)
+            .padding(.horizontal, 11)
+            .padding(.bottom, 11)
             Text(pulse.name.split(separator: " ").first.map(String.init) ?? pulse.name)
                 .font(.system(size: 11, weight: pulse.live ? .bold : .medium, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(pulse.live ? 0.95 : 0.45))
@@ -7549,7 +7641,7 @@ struct GroupSnapsStrip: View {
             )
         }
         .fullScreenCover(isPresented: $cameraOpen) {
-            CameraCaptureView { data in
+            SeshCameraView { data in
                 Task { await snaps.upload(imageData: data, stopName: stopName(), sessionId: sessionId) }
             }
             .ignoresSafeArea()
@@ -7698,6 +7790,17 @@ final class StoriesService: ObservableObject {
         stories.filter { $0.profileId == profileId }.sorted { $0.createdAt < $1.createdAt }
     }
 
+    /// True when a friend posted a story or a night since the user last
+    /// looked at the Nightline — drives the tab's wiggle + badge.
+    @Published private(set) var hasUnseenNightline = false
+    /// How many unseen things (friend stories + feed posts) — the number
+    /// in the tab badge.
+    @Published private(set) var unseenNightlineCount = 0
+    private var pollTask: Task<Void, Never>? = nil
+    private var lastSeenKey: String {
+        "sesh.nightline.lastSeen.v1.\(myId?.uuidString.lowercased() ?? "anon")"
+    }
+
     func refresh() async {
         do {
             let rows: [LiveStory] = try await supabase.from("live_stories")
@@ -7709,6 +7812,56 @@ final class StoriesService: ObservableObject {
         } catch {
             // Keep the previous list on a transient failure.
         }
+        await refreshUnseen()
+    }
+
+    /// Anything new on the Nightline since the user last visited it?
+    /// Counts unseen friend stories (already fetched) plus unseen feed
+    /// posts (one tiny query; RLS scopes it to friends).
+    private func refreshUnseen() async {
+        struct PostRow: Decodable {
+            let createdAt: Date
+            enum CodingKeys: String, CodingKey { case createdAt = "created_at" }
+        }
+        let lastSeen = Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: lastSeenKey))
+        var count = 0
+        if let uid = myId {
+            count += stories.filter { $0.profileId != uid && $0.createdAt > lastSeen }.count
+            let iso = ISO8601DateFormatter()
+            let posts: [PostRow] = (try? await supabase.from("posts")
+                .select("created_at")
+                .neq("author_id", value: uid.uuidString.lowercased())
+                .gt("created_at", value: iso.string(from: lastSeen))
+                .order("created_at", ascending: false)
+                .limit(20)
+                .execute()
+                .value) ?? []
+            count += posts.count
+        }
+        unseenNightlineCount = count
+        hasUnseenNightline = count > 0
+    }
+
+    /// The user is looking at the Nightline — quiet the buzz.
+    func markNightlineSeen() {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastSeenKey)
+        hasUnseenNightline = false
+        unseenNightlineCount = 0
+    }
+
+    func startPolling(every seconds: TimeInterval = 120) {
+        stopPolling()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refresh()
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            }
+        }
+    }
+
+    func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
     }
 
     /// Compress + upload + register one story. Same storage discipline as
@@ -7755,12 +7908,80 @@ final class StoriesService: ObservableObject {
             .execute()
         stories.removeAll { $0.id == story.id }
     }
-}
 
-/// Image staged for the story composer (Identifiable for sheet(item:)).
-private struct StagedStoryImage: Identifiable {
-    let id = UUID()
-    let data: Data
+    // MARK: View receipts
+
+    /// One line of a story's audience list.
+    struct StoryViewerEntry: Decodable, Identifiable {
+        let viewerId: UUID
+        let viewedAt: Date
+        let profile: ViewerProfile
+        struct ViewerProfile: Decodable {
+            let name: String
+            let avatarUrl: String?
+            enum CodingKeys: String, CodingKey {
+                case name
+                case avatarUrl = "avatar_url"
+            }
+        }
+        var id: UUID { viewerId }
+        enum CodingKeys: String, CodingKey {
+            case viewerId = "viewer_id"
+            case viewedAt = "viewed_at"
+            case profile = "profiles"
+        }
+    }
+
+    /// View counts for MY stories, refreshed alongside the audience.
+    @Published private(set) var viewCounts: [UUID: Int] = [:]
+
+    /// Record that I watched a friend's story. Deduped server-side by the
+    /// (story, viewer) primary key; my own stories are never counted.
+    func recordView(of story: LiveStory) {
+        guard let uid = myId, story.profileId != uid else { return }
+        struct Row: Encodable { let story_id: String; let viewer_id: String }
+        Task {
+            _ = try? await supabase.from("story_views")
+                .upsert(Row(
+                    story_id: story.id.uuidString.lowercased(),
+                    viewer_id: uid.uuidString.lowercased()
+                ), onConflict: "story_id,viewer_id", ignoreDuplicates: true)
+                .execute()
+        }
+    }
+
+    /// The audience of one of MY stories (name + avatar + when), newest
+    /// first. Also refreshes the story's cached count.
+    func viewers(of story: LiveStory) async -> [StoryViewerEntry] {
+        guard story.profileId == myId else { return [] }
+        let rows: [StoryViewerEntry] = (try? await supabase.from("story_views")
+            .select("viewer_id, viewed_at, profiles!story_views_viewer_id_fkey(name, avatar_url)")
+            .eq("story_id", value: story.id.uuidString.lowercased())
+            .order("viewed_at", ascending: false)
+            .execute()
+            .value) ?? []
+        viewCounts[story.id] = rows.count
+        return rows
+    }
+
+    /// Refresh view counts for all of MY fresh stories in one query.
+    func refreshViewCounts() async {
+        guard let uid = myId else { return }
+        let mine = stories(for: uid)
+        guard !mine.isEmpty else { viewCounts = [:]; return }
+        struct Row: Decodable {
+            let storyId: UUID
+            enum CodingKeys: String, CodingKey { case storyId = "story_id" }
+        }
+        let rows: [Row] = (try? await supabase.from("story_views")
+            .select("story_id")
+            .in("story_id", values: mine.map { $0.id.uuidString.lowercased() })
+            .execute()
+            .value) ?? []
+        var counts: [UUID: Int] = [:]
+        for r in rows { counts[r.storyId, default: 0] += 1 }
+        viewCounts = counts
+    }
 }
 
 /// Everything the full-screen story viewer needs.
@@ -7772,84 +7993,612 @@ private struct StoryViewerContext: Identifiable {
     let canDelete: Bool
 }
 
-/// Compose sheet: photo preview + caption + toggleable BAC / location
-/// stamps captured at post time.
+/// Report + block plumbing (App Review 1.2 — user-generated content).
+/// Reports are write-only for users and reviewed by app admins; blocking
+/// severs the friendship server-side, which removes both users from each
+/// other's feed, stories, live pulse, and friends list, and prevents
+/// re-friending from either side.
+@MainActor
+final class ModerationService: ObservableObject {
+    private var myId: UUID? { supabase.auth.currentUser?.id }
+
+    static let reasons = [
+        "Inappropriate content",
+        "Harassment or bullying",
+        "Spam or scam",
+        "Something else",
+    ]
+
+    func report(kind: String, targetId: UUID, offender: UUID?, reason: String) async {
+        guard let uid = myId else { return }
+        struct Row: Encodable {
+            let reporter_id: String
+            let target_kind: String
+            let target_id: String
+            let target_user_id: String?
+            let reason: String
+        }
+        _ = try? await supabase.from("reports").insert(Row(
+            reporter_id: uid.uuidString.lowercased(),
+            target_kind: kind,
+            target_id: targetId.uuidString.lowercased(),
+            target_user_id: offender?.uuidString.lowercased(),
+            reason: reason
+        )).execute()
+    }
+
+    func block(_ userId: UUID) async {
+        struct P: Encodable { let p_user: String }
+        _ = try? await supabase
+            .rpc("block_user", params: P(p_user: userId.uuidString.lowercased()))
+            .execute()
+    }
+}
+
+/// The whole story creation journey in ONE full-screen cover: Sesh Cam →
+/// composer, swapped in place. Two separate covers used to dismiss back to
+/// the Nightline between shot and editor — a jarring close/reopen flicker.
+private struct StoryFlowView: View {
+    /// Non-nil = skip the camera (photo already picked from the roll).
+    let initialImage: Data?
+    let bac: Double?
+    let stamp: String?
+    let drinkProof: String?
+    let onPost: (_ image: Data, _ bac: Double?, _ stamp: String?) -> Void
+    let onCancel: () -> Void
+
+    @State private var image: Data? = nil
+
+    var body: some View {
+        ZStack {
+            if let data = image ?? initialImage {
+                StoryComposer(
+                    imageData: data,
+                    bac: bac,
+                    stamp: stamp,
+                    drinkProof: drinkProof,
+                    onPost: onPost,
+                    onCancel: onCancel
+                )
+                .transition(.opacity)
+            } else {
+                SeshCameraView(
+                    onCapture: { data in
+                        // Sesh Cam shots fill the screen, Snapchat-style:
+                        // center-crop the 4:3 sensor frame to the device's
+                        // aspect so it matches the full-bleed preview the
+                        // user composed against. Roll picks stay untouched.
+                        let cropped = Self.cropToScreenAspect(data)
+                        withAnimation(.easeInOut(duration: 0.18)) { image = cropped }
+                    },
+                    autoDismiss: false
+                )
+            }
+        }
+    }
+
+    /// Center-crop to the device screen's aspect ratio (orientation baked
+    /// in first so EXIF rotation can't skew the crop).
+    private static func cropToScreenAspect(_ data: Data) -> Data {
+        guard let raw = UIImage(data: data) else { return data }
+        // Bake orientation.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let upright = UIGraphicsImageRenderer(size: raw.size, format: format).image { _ in
+            raw.draw(in: CGRect(origin: .zero, size: raw.size))
+        }
+        guard let cg = upright.cgImage else { return data }
+        let screen = UIScreen.main.bounds.size
+        let target = screen.width / screen.height
+        let size = CGSize(width: cg.width, height: cg.height)
+        let current = size.width / size.height
+        let cropRect: CGRect
+        if current > target {
+            let w = (size.height * target).rounded()
+            cropRect = CGRect(x: ((size.width - w) / 2).rounded(), y: 0, width: w, height: size.height)
+        } else if current < target {
+            let h = (size.width / target).rounded()
+            cropRect = CGRect(x: 0, y: ((size.height - h) / 2).rounded(), width: size.width, height: h)
+        } else {
+            return upright.jpegData(compressionQuality: 0.9) ?? data
+        }
+        guard let croppedCG = cg.cropping(to: cropRect) else { return data }
+        return UIImage(cgImage: croppedCG).jpegData(compressionQuality: 0.9) ?? data
+    }
+}
+
+/// One draggable overlay on the story canvas: free text, or a generated
+/// sticker (BAC proof / drink proof). Position is normalized to the image
+/// frame so flattening maps 1:1 onto pixels.
+private struct StoryOverlayItem: Identifiable {
+    enum Kind { case text, sticker }
+    let id = UUID()
+    var kind: Kind
+    var text: String
+    var fontIndex: Int = 0
+    var colorIndex: Int = 0
+    var scale: CGFloat = 1
+    var position = CGPoint(x: 0.5, y: 0.42)   // normalized 0–1 in the image
+
+    var baseSize: CGFloat { kind == .text ? 30 : 22 }
+
+    static let fontCount = 4
+    static func font(_ index: Int, size: CGFloat) -> Font {
+        switch index % fontCount {
+        case 0:  return .system(size: size, weight: .heavy,    design: .rounded)
+        case 1:  return .system(size: size, weight: .bold,     design: .serif).italic()
+        case 2:  return .system(size: size, weight: .black,    design: .monospaced)
+        default: return .system(size: size, weight: .semibold, design: .default)
+        }
+    }
+    static func uiFont(_ index: Int, size: CGFloat) -> UIFont {
+        let design: UIFontDescriptor.SystemDesign
+        let weight: UIFont.Weight
+        var italic = false
+        switch index % fontCount {
+        case 0:  design = .rounded;    weight = .heavy
+        case 1:  design = .serif;      weight = .bold; italic = true
+        case 2:  design = .monospaced; weight = .black
+        default: design = .default;    weight = .semibold
+        }
+        var desc = UIFont.systemFont(ofSize: size, weight: weight).fontDescriptor
+        if let d = desc.withDesign(design) { desc = d }
+        if italic, let d = desc.withSymbolicTraits(desc.symbolicTraits.union(.traitItalic)) { desc = d }
+        return UIFont(descriptor: desc, size: size)
+    }
+
+    /// (text, pill) color pairs — cream, whiskey, ink-on-cream, cream-on-ink.
+    static let colorCount = 4
+    static func colors(_ index: Int) -> (fg: Color, pill: Color?) {
+        switch index % colorCount {
+        case 0:  return (.cream, nil)
+        case 1:  return (.whiskey, nil)
+        case 2:  return (.ink, .cream)
+        default: return (.cream, Color.ink.opacity(0.75))
+        }
+    }
+}
+
+/// Full-screen story composer, Instagram/Snapchat style: the photo IS the
+/// screen — tap anywhere to start typing right there, drag to place,
+/// pinch to size, cycle fonts and colors, drop a BAC or proof-of-drink
+/// sticker. Everything is flattened INTO the image at post so viewers see
+/// exactly what you made.
 private struct StoryComposer: View {
     let imageData: Data
     let bac: Double?
     let stamp: String?
-    let onPost: (_ caption: String?, _ bac: Double?, _ stamp: String?) -> Void
+    /// "3 drinks · Large beer" — the night's proof at post time.
+    let drinkProof: String?
+    let onPost: (_ image: Data, _ bac: Double?, _ stamp: String?) -> Void
     let onCancel: () -> Void
 
-    @State private var caption = ""
     @State private var includeBAC = true
     @State private var includeStamp = true
+    @State private var items: [StoryOverlayItem] = []
+    @State private var editingId: UUID? = nil
+    @State private var imageFrame: CGRect = .zero
+    @State private var dragBase: [UUID: CGPoint] = [:]
+    @State private var pinchBase: [UUID: CGFloat] = [:]
+    @FocusState private var textFocused: Bool
     @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
     private var unit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
 
     var body: some View {
-        VStack(spacing: 16) {
-            HStack {
-                Button("Cancel", action: onCancel)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.cream.opacity(0.6))
-                Spacer()
-                Text("YOUR STORY")
-                    .font(.system(size: 11, weight: .black, design: .monospaced))
-                    .tracking(2.2)
-                    .foregroundStyle(Color.bronze)
-                Spacer()
-                Button {
-                    onPost(caption,
-                           includeBAC ? bac : nil,
-                           includeStamp ? stamp : nil)
-                } label: {
-                    Text("POST")
-                        .font(.system(size: 13, weight: .black, design: .monospaced))
-                        .tracking(1.2)
-                        .foregroundStyle(Color.ink)
-                        .padding(.horizontal, 16).padding(.vertical, 8)
-                        .background(Capsule().fill(Color.whiskey))
-                }
-                .buttonStyle(PressScaleStyle())
-            }
+        ZStack {
+            Color.black.ignoresSafeArea()
 
-            if let img = UIImage(data: imageData) {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxHeight: 340)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            }
+            // ---- the full-bleed canvas ----
+            GeometryReader { geo in
+                let frame = fittedFrame(in: geo.size)
+                ZStack {
+                    if let img = UIImage(data: imageData) {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: frame.width, height: frame.height)
+                            .position(x: frame.midX, y: frame.midY)
+                    }
+                    // Tap the picture → start typing right there.
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture(coordinateSpace: .local) { location in
+                            if editingId != nil {
+                                // First tap while editing just commits.
+                                commitEditing()
+                            } else {
+                                addText(at: location, in: frame)
+                            }
+                        }
+                    ForEach(items) { item in
+                        // The item being edited renders in the centered
+                        // editor below, not at its spot.
+                        if item.id != editingId {
+                            overlayView(item)
+                                .position(
+                                    x: frame.minX + item.position.x * frame.width,
+                                    y: frame.minY + item.position.y * frame.height
+                                )
+                                // Tap wins over drag so "press the text to
+                                // edit" always lands.
+                                .highPriorityGesture(TapGesture().onEnded {
+                                    if item.kind == .text {
+                                        editingId = item.id
+                                        textFocused = true
+                                    }
+                                })
+                                .gesture(dragGesture(for: item.id, frame: frame))
+                                .simultaneousGesture(pinchGesture(for: item.id))
+                        }
+                    }
 
-            // What gets stamped on the story — tap to include/exclude.
-            HStack(spacing: 10) {
-                if let bac {
-                    stampChip(
-                        icon: "gauge.medium",
-                        label: "\(unit.formatted(bac))\(unit.symbol)",
-                        on: includeBAC
-                    ) { includeBAC.toggle() }
-                }
-                if let stamp, !stamp.isEmpty {
-                    stampChip(icon: "mappin.circle.fill", label: stamp, on: includeStamp) {
-                        includeStamp.toggle()
+                    // Editing happens CENTERED, Instagram-style — dimmed
+                    // photo behind, text field high enough that the
+                    // keyboard can never cover what you're typing. It
+                    // snaps back to its spot on commit.
+                    if let id = editingId, let item = items.first(where: { $0.id == id }) {
+                        Color.black.opacity(0.45)
+                            .ignoresSafeArea()
+                            .onTapGesture { commitEditing() }
+                        inlineEditor(for: item, maxWidth: geo.size.width - 72)
+                            .position(x: geo.size.width / 2, y: geo.size.height * 0.26)
                     }
                 }
-                Spacer()
+                .onAppear { imageFrame = frame }
+                .onChange(of: geo.size) { _, s in imageFrame = fittedFrame(in: s) }
             }
+            .ignoresSafeArea(.container)
+            // The canvas must NOT shift when the keyboard rises — the
+            // centered editor is already placed clear of it.
+            .ignoresSafeArea(.keyboard)
 
-            TextField("Add a caption…", text: $caption, axis: .vertical)
-                .lineLimit(1...3)
-                .font(.system(size: 15, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.cream)
-                .padding(12)
-                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.06)))
+            // ---- floating chrome ----
+            VStack(spacing: 12) {
+                HStack {
+                    Button(action: onCancel) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(Color.cream)
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(Color.ink.opacity(0.6)))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                    Spacer()
+                    Text("YOUR STORY")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(2.6)
+                        .foregroundStyle(Color.cream.opacity(0.85))
+                        .padding(.horizontal, 14).padding(.vertical, 7)
+                        .background(Capsule().fill(Color.ink.opacity(0.55)))
+                    Spacer()
+                    Button {
+                        onPost(flattened(),
+                               includeBAC ? bac : nil,
+                               includeStamp ? stamp : nil)
+                    } label: {
+                        Text("POST")
+                            .font(.system(size: 13, weight: .black, design: .monospaced))
+                            .tracking(1.2)
+                            .foregroundStyle(Color.ink)
+                            .padding(.horizontal, 16).padding(.vertical, 9)
+                            .background(Capsule().fill(Color.whiskey))
+                            .shadow(color: Color.whiskey.opacity(0.5), radius: 10, y: 3)
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
 
-            Spacer()
+                if editingId == nil {
+                    toolbar
+                }
+
+                Spacer()
+
+                if let id = editingId {
+                    editControls(id: id)
+                } else {
+                    // What gets badged UNDER the story — tap to toggle.
+                    HStack(spacing: 10) {
+                        if let bac {
+                            stampChip(icon: "gauge.medium",
+                                      label: "\(unit.formatted(bac))\(unit.symbol)",
+                                      on: includeBAC) { includeBAC.toggle() }
+                        }
+                        if let stamp, !stamp.isEmpty {
+                            stampChip(icon: "mappin.circle.fill", label: stamp, on: includeStamp) {
+                                includeStamp.toggle()
+                            }
+                        }
+                        Spacer()
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 10)
         }
-        .padding(18)
-        .background(Color.ink)
+        .preferredColorScheme(.dark)
+    }
+
+    /// Tap-to-type: a fresh text item exactly where the finger landed
+    /// (clamped into the picture), immediately in edit mode.
+    private func addText(at location: CGPoint, in frame: CGRect) {
+        guard frame.width > 0 else { return }
+        var item = StoryOverlayItem(kind: .text, text: "")
+        item.position = CGPoint(
+            x: min(max((location.x - frame.minX) / frame.width, 0.05), 0.95),
+            y: min(max((location.y - frame.minY) / frame.height, 0.05), 0.95)
+        )
+        items.append(item)
+        editingId = item.id
+        textFocused = true
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 10) {
+            toolButton("textformat", "Text") {
+                var item = StoryOverlayItem(kind: .text, text: "")
+                item.position = CGPoint(x: 0.5, y: 0.35)
+                items.append(item)
+                editingId = item.id
+                textFocused = true
+            }
+            if let bac {
+                toolButton("gauge.medium", "BAC") {
+                    var item = StoryOverlayItem(
+                        kind: .sticker,
+                        text: "🥃 \(unit.formatted(bac))\(unit.symbol)"
+                    )
+                    item.colorIndex = 3
+                    item.position = CGPoint(x: 0.5, y: 0.78)
+                    items.append(item)
+                }
+            }
+            if let drinkProof, !drinkProof.isEmpty {
+                toolButton("wineglass.fill", "Proof") {
+                    var item = StoryOverlayItem(kind: .sticker, text: "🍻 \(drinkProof)")
+                    item.colorIndex = 2
+                    item.position = CGPoint(x: 0.5, y: 0.88)
+                    items.append(item)
+                }
+            }
+            Spacer()
+            if !items.isEmpty {
+                Text("drag · pinch")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(1.2)
+                    .foregroundStyle(Color.cream.opacity(0.35))
+            }
+        }
+    }
+
+    private func toolButton(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.whiskey)
+                Text(label)
+                    .font(.system(size: 12, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.cream)
+            }
+            .padding(.horizontal, 13).padding(.vertical, 9)
+            // Solid ink pill — the old translucent chip disappeared against
+            // bright photos.
+            .background(Capsule().fill(Color.ink.opacity(0.85)))
+            .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.6), lineWidth: 1))
+            .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+
+    /// Crash-safe binding into the items array by ID — index-based bindings
+    /// blew up when the array mutated (Done / tap-to-commit) while the
+    /// field was still attached.
+    private func textBinding(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { items.first(where: { $0.id == id })?.text ?? "" },
+            set: { v in
+                if let i = items.firstIndex(where: { $0.id == id }) {
+                    items[i].text = v
+                }
+            }
+        )
+    }
+
+    /// The centered text field shown while editing — same font/color/pill
+    /// as the rendered overlay, so what you type is what you get. Width is
+    /// bounded (never zero: `fixedSize` on an empty field collapsed it to
+    /// nothing, which is why typed text was invisible).
+    private func inlineEditor(for item: StoryOverlayItem, maxWidth: CGFloat) -> some View {
+        let c = StoryOverlayItem.colors(item.colorIndex)
+        let font = StoryOverlayItem.font(item.fontIndex, size: item.baseSize * item.scale)
+        return TextField(
+            "",
+            text: textBinding(for: item.id),
+            prompt: Text("Type something…").font(font).foregroundStyle(c.fg.opacity(0.5)),
+            axis: .vertical
+        )
+        .focused($textFocused)
+        .font(font)
+        .foregroundStyle(c.fg)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: maxWidth)
+        .padding(.horizontal, c.pill == nil ? 2 : 12 * item.scale)
+        .padding(.vertical, c.pill == nil ? 0 : 6 * item.scale)
+        .background {
+            if let pill = c.pill {
+                RoundedRectangle(cornerRadius: 18 * item.scale, style: .continuous).fill(pill)
+            }
+        }
+        .shadow(color: .black.opacity(c.pill == nil ? 0.6 : 0), radius: 3, y: 1)
+    }
+
+    /// Commit the current edit: drop empty text items, dismiss keyboard.
+    private func commitEditing() {
+        editingId = nil
+        textFocused = false
+        items.removeAll {
+            $0.kind == .text && $0.text.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+    }
+
+    @ViewBuilder
+    private func editControls(id: UUID) -> some View {
+        let item = items.first(where: { $0.id == id })
+        HStack(spacing: 12) {
+            Button {
+                if let i = items.firstIndex(where: { $0.id == id }) {
+                    items[i].fontIndex += 1
+                }
+            } label: {
+                Text("Aa")
+                    .font(StoryOverlayItem.font(item?.fontIndex ?? 0, size: 16))
+                    .foregroundStyle(Color.cream)
+                    .frame(width: 44, height: 38)
+                    .background(Capsule().fill(Color.cream.opacity(0.12)))
+            }
+            Button {
+                if let i = items.firstIndex(where: { $0.id == id }) {
+                    items[i].colorIndex += 1
+                }
+            } label: {
+                let c = StoryOverlayItem.colors(item?.colorIndex ?? 0)
+                Circle()
+                    .fill(c.pill ?? c.fg)
+                    .frame(width: 24, height: 24)
+                    .overlay(Circle().strokeBorder(Color.cream.opacity(0.5), lineWidth: 1.5))
+                    .frame(width: 44, height: 38)
+            }
+            Button {
+                items.removeAll { $0.id == id }
+                editingId = nil
+                textFocused = false
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Color.cream.opacity(0.8))
+                    .frame(width: 44, height: 38)
+            }
+            Spacer()
+            Button("Done") { commitEditing() }
+                .font(.system(size: 14, weight: .black, design: .rounded))
+                .foregroundStyle(Color.whiskey)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(Capsule().fill(Color.ink.opacity(0.85)))
+    }
+
+    // MARK: canvas pieces
+
+    private func overlayView(_ item: StoryOverlayItem) -> some View {
+        let c = StoryOverlayItem.colors(item.colorIndex)
+        return Text(item.text)
+            .font(StoryOverlayItem.font(item.fontIndex, size: item.baseSize * item.scale))
+            .foregroundStyle(c.fg)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, c.pill == nil ? 0 : 12 * item.scale)
+            .padding(.vertical, c.pill == nil ? 0 : 6 * item.scale)
+            .background {
+                if let pill = c.pill {
+                    Capsule().fill(pill)
+                }
+            }
+            .shadow(color: .black.opacity(c.pill == nil ? 0.6 : 0), radius: 3, y: 1)
+    }
+
+    private func dragGesture(for id: UUID, frame: CGRect) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                guard let idx = items.firstIndex(where: { $0.id == id }) else { return }
+                let base = dragBase[id] ?? items[idx].position
+                dragBase[id] = base
+                let nx = base.x + value.translation.width / max(frame.width, 1)
+                let ny = base.y + value.translation.height / max(frame.height, 1)
+                items[idx].position = CGPoint(
+                    x: min(max(nx, 0.03), 0.97),
+                    y: min(max(ny, 0.03), 0.97)
+                )
+            }
+            .onEnded { _ in dragBase[id] = nil }
+    }
+
+    private func pinchGesture(for id: UUID) -> some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                guard let idx = items.firstIndex(where: { $0.id == id }) else { return }
+                let base = pinchBase[id] ?? items[idx].scale
+                pinchBase[id] = base
+                items[idx].scale = min(max(base * value, 0.5), 3.5)
+            }
+            .onEnded { _ in pinchBase[id] = nil }
+    }
+
+    /// Where the aspect-fit image lands inside the canvas area.
+    private func fittedFrame(in container: CGSize) -> CGRect {
+        guard let img = UIImage(data: imageData),
+              img.size.width > 0, img.size.height > 0,
+              container.width > 0, container.height > 0
+        else { return .zero }
+        let scale = min(container.width / img.size.width, container.height / img.size.height)
+        let w = img.size.width * scale
+        let h = img.size.height * scale
+        return CGRect(x: (container.width - w) / 2, y: (container.height - h) / 2, width: w, height: h)
+    }
+
+    /// Bake the overlays into the photo so viewers see exactly this canvas.
+    private func flattened() -> Data {
+        guard !items.isEmpty,
+              let base = UIImage(data: imageData),
+              imageFrame.width > 0
+        else { return imageData }
+        let pixelScale = base.size.width / imageFrame.width
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let rendered = UIGraphicsImageRenderer(size: base.size, format: format).image { _ in
+            base.draw(in: CGRect(origin: .zero, size: base.size))
+            for item in items {
+                let c = StoryOverlayItem.colors(item.colorIndex)
+                let fontSize = item.baseSize * item.scale * pixelScale
+                let font = StoryOverlayItem.uiFont(item.fontIndex, size: fontSize)
+                let para = NSMutableParagraphStyle()
+                para.alignment = .center
+                var attrs: [NSAttributedString.Key: Any] = [
+                    .font: font,
+                    .foregroundColor: UIColor(c.fg),
+                    .paragraphStyle: para,
+                ]
+                if c.pill == nil {
+                    let shadow = NSShadow()
+                    shadow.shadowColor = UIColor.black.withAlphaComponent(0.6)
+                    shadow.shadowBlurRadius = 3 * pixelScale
+                    shadow.shadowOffset = CGSize(width: 0, height: pixelScale)
+                    attrs[.shadow] = shadow
+                }
+                let str = NSAttributedString(string: item.text, attributes: attrs)
+                let textSize = str.size()
+                let center = CGPoint(
+                    x: item.position.x * base.size.width,
+                    y: item.position.y * base.size.height
+                )
+                let origin = CGPoint(
+                    x: center.x - textSize.width / 2,
+                    y: center.y - textSize.height / 2
+                )
+                if let pill = c.pill {
+                    let padX = 12 * item.scale * pixelScale
+                    let padY = 6 * item.scale * pixelScale
+                    let rect = CGRect(
+                        x: origin.x - padX, y: origin.y - padY,
+                        width: textSize.width + padX * 2,
+                        height: textSize.height + padY * 2
+                    )
+                    UIColor(pill).setFill()
+                    UIBezierPath(roundedRect: rect, cornerRadius: rect.height / 2).fill()
+                }
+                str.draw(at: origin)
+            }
+        }
+        return rendered.jpegData(compressionQuality: 0.85) ?? imageData
     }
 
     private func stampChip(icon: String, label: String, on: Bool, action: @escaping () -> Void) -> some View {
@@ -7872,13 +8621,19 @@ private struct StoryComposer: View {
 }
 
 /// Full-screen story pager: swipe through one user's fresh stories with
-/// their caption, BAC (in the VIEWER's unit) and location stamp.
+/// their caption, BAC (in the VIEWER's unit) and location stamp. Watching
+/// a friend's story records a view receipt; on your OWN stories a views
+/// pill opens the audience list.
 private struct StoryViewer: View {
     let ctx: StoryViewerContext
+    @ObservedObject var svc: StoriesService
     let onDelete: (LiveStory) -> Void
     let onClose: () -> Void
 
     @State private var index = 0
+    @State private var audience: [StoriesService.StoryViewerEntry]? = nil
+    @State private var reportOpen = false
+    @StateObject private var moderation = ModerationService()
     @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
     private var unit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
 
@@ -7891,6 +8646,46 @@ private struct StoryViewer: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: ctx.stories.count > 1 ? .automatic : .never))
+            .onAppear {
+                if ctx.stories.indices.contains(index) {
+                    svc.recordView(of: ctx.stories[index])
+                }
+                if ctx.canDelete {
+                    Task { await svc.refreshViewCounts() }
+                }
+            }
+            .onChange(of: index) { _, i in
+                if ctx.stories.indices.contains(i) {
+                    svc.recordView(of: ctx.stories[i])
+                }
+            }
+
+            // MY story → views pill (count + tap for the audience list).
+            if ctx.canDelete, ctx.stories.indices.contains(index) {
+                let story = ctx.stories[index]
+                VStack {
+                    Spacer()
+                    HStack {
+                        Button {
+                            Task { audience = await svc.viewers(of: story) }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "eye.fill")
+                                    .font(.system(size: 12, weight: .bold))
+                                Text("\(svc.viewCounts[story.id] ?? 0)")
+                                    .font(.system(size: 13, weight: .black, design: .monospaced))
+                            }
+                            .foregroundStyle(Color.cream)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(Capsule().fill(Color.ink.opacity(0.7)))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+                }
+            }
 
             HStack(spacing: 10) {
                 AvatarView(urlString: ctx.avatarUrl,
@@ -7921,6 +8716,18 @@ private struct StoryViewer: View {
                     }
                     .buttonStyle(PressScaleStyle())
                 }
+                if !ctx.canDelete, ctx.stories.indices.contains(index) {
+                    Button {
+                        reportOpen = true
+                    } label: {
+                        Image(systemName: "flag")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(Color.cream.opacity(0.85))
+                            .frame(width: 38, height: 38)
+                            .background(Circle().fill(Color.ink.opacity(0.7)))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 14, weight: .bold))
@@ -7932,6 +8739,78 @@ private struct StoryViewer: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
+        }
+        // Report this story / block its author (friends' stories only).
+        .confirmationDialog("Report this story?", isPresented: $reportOpen, titleVisibility: .visible) {
+            ForEach(ModerationService.reasons, id: \.self) { reason in
+                Button(reason) {
+                    guard ctx.stories.indices.contains(index) else { return }
+                    let story = ctx.stories[index]
+                    Task {
+                        await moderation.report(
+                            kind: "story", targetId: story.id,
+                            offender: story.profileId, reason: reason
+                        )
+                    }
+                }
+            }
+            Button("Block \(ctx.name)", role: .destructive) {
+                guard ctx.stories.indices.contains(index) else { return }
+                let story = ctx.stories[index]
+                Task {
+                    await moderation.block(story.profileId)
+                    await svc.refresh()
+                }
+                onClose()
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        // The audience: who watched this story, newest first.
+        .sheet(isPresented: Binding(
+            get: { audience != nil },
+            set: { if !$0 { audience = nil } }
+        )) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 6) {
+                    Image(systemName: "eye.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.whiskey)
+                    Text("VIEWED BY \(audience?.count ?? 0)")
+                        .font(.system(size: 10, weight: .black, design: .monospaced))
+                        .tracking(2.2)
+                        .foregroundStyle(Color.bronze)
+                    Spacer()
+                }
+                if let audience, !audience.isEmpty {
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 10) {
+                            ForEach(audience) { v in
+                                HStack(spacing: 10) {
+                                    AvatarView(urlString: v.profile.avatarUrl,
+                                               initial: String(v.profile.name.prefix(1)).uppercased(),
+                                               size: 34)
+                                    Text(v.profile.name)
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .foregroundStyle(Color.cream)
+                                    Spacer()
+                                    Text(v.viewedAt, style: .time)
+                                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(Color.cream.opacity(0.5))
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Text("No views yet — give it a minute.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                    Spacer()
+                }
+            }
+            .padding(18)
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.ink)
         }
     }
 
@@ -8023,16 +8902,18 @@ private struct PulseWiringModifier: ViewModifier {
             .onChange(of: liveGroup.routeStops) { _, _ in mergeRoute() }
             .task {
                 publish()
-                // Slow app-wide poll so the NIGHTLINE tab dot can light up
-                // when a friend goes live, wherever the user is.
+                // Slow app-wide polls so the NIGHTLINE tab can buzz when a
+                // friend goes live or posts, wherever the user is.
                 friendsPulse.startPolling(every: 120)
-                await stories.refresh()
+                stories.startPolling(every: 120)
             }
             .onChange(of: tab) { _, newTab in
                 // Fast while the TONIGHT strip is on screen, slow otherwise.
                 friendsPulse.startPolling(every: newTab == .timeline ? 30 : 120)
+                stories.startPolling(every: newTab == .timeline ? 30 : 120)
                 if newTab == .timeline {
-                    Task { await stories.refresh() }
+                    // They came to look — quiet the buzz.
+                    stories.markNightlineSeen()
                 }
             }
             .sheet(item: $openPulse) { p in
@@ -8052,9 +8933,11 @@ private struct TimelineFeedView: View {
     let profile: Profile
     let storyBAC: () -> Double?
     let storyStamp: () -> String?
+    let storyProof: () -> String?
     let onOpenPost: (TimelinePost) -> Void
     let onOpenAuthor: (TimelinePost) -> Void
     let onOpenPulse: (FriendPulse) -> Void
+    @StateObject private var moderation = ModerationService()
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -8070,6 +8953,7 @@ private struct TimelineFeedView: View {
                     profile: profile,
                     storyBAC: storyBAC,
                     storyStamp: storyStamp,
+                    storyProof: storyProof,
                     onOpen: onOpenPulse
                 )
 
@@ -8082,6 +8966,28 @@ private struct TimelineFeedView: View {
                                  onOpenAuthor: { onOpenAuthor(post) },
                                  onLike: { Task { await feed.toggleLike(post.id) } })
                             .padding(.horizontal, 16)
+                            .contextMenu {
+                                Menu {
+                                    ForEach(ModerationService.reasons, id: \.self) { reason in
+                                        Button(reason) {
+                                            Task {
+                                                await moderation.report(
+                                                    kind: "post", targetId: post.id,
+                                                    offender: post.authorId, reason: reason
+                                                )
+                                            }
+                                        }
+                                    }
+                                } label: { Label("Report post", systemImage: "flag") }
+                                Button(role: .destructive) {
+                                    Task {
+                                        await moderation.block(post.authorId)
+                                        await feed.refresh()
+                                        await pulse.refresh()
+                                        await stories.refresh()
+                                    }
+                                } label: { Label("Block \(post.authorName)", systemImage: "hand.raised") }
+                            }
                     }
                 }
             }
@@ -9194,10 +10100,7 @@ private struct ModeTopBar: View {
             TimelineView(.periodic(from: .now, by: 30)) { ctx in
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 7) {
-                        Circle()
-                            .fill(Color.whiskey)
-                            .frame(width: 7, height: 7)
-                            .shadow(color: Color.whiskey.opacity(0.8), radius: 5)
+                        SonarDot()
                         Text(liveInGroup ? "LIVE GROUP" : "LIVE SESH")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .tracking(2.4)
@@ -10144,8 +11047,12 @@ private struct SessionView: View {
             // The atmosphere accent shifts when the user is on LIVE so
             // the whole screen reads "this is the live experience" even
             // before any content swipes in.
-            AtmosphereBackground(accent: tab == .live ? Color.whiskey : status.color)
-                .animation(.easeInOut(duration: 0.45), value: tab)
+            AtmosphereBackground(
+                accent: tab == .live ? Color.whiskey : status.color,
+                // Carbonation while the night is actually on.
+                bubbles: tab == .live && liveStartTime != nil
+            )
+            .animation(.easeInOut(duration: 0.45), value: tab)
 
             VStack(spacing: 0) {
                 ModeTopBar(
@@ -10187,7 +11094,9 @@ private struct SessionView: View {
                 .animation(.spring(response: 0.4, dampingFraction: 0.82), value: tab)
 
                 BottomTabBar(tab: $tab, liveActive: liveActive,
-                             friendsLive: friendsPulse.pulses.contains { $0.live })
+                             friendsLive: friendsPulse.pulses.contains { $0.live },
+                             newOnNightline: liveStories.hasUnseenNightline,
+                             unseenCount: liveStories.unseenNightlineCount)
             }
 
             // Floating invite banner — pinned just below the ModeTopBar.
@@ -10630,6 +11539,7 @@ private struct SessionView: View {
             profile: profile,
             storyBAC: { currentStoryBAC() },
             storyStamp: { currentStoryStamp() },
+            storyProof: { currentStoryProof() },
             onOpenPost: { openPost = $0 },
             onOpenAuthor: { post in
                 openProfileUser = ProfileRef(
@@ -10652,6 +11562,22 @@ private struct SessionView: View {
             return live.bac(profile: profile)
         }
         return nil
+    }
+
+    /// "3 drinks · Large beer" — my tally + latest pour, for the story
+    /// composer's proof-of-drink sticker. Nil when nothing's been logged.
+    private func currentStoryProof() -> String? {
+        if liveGroup.isActive {
+            let mine = liveGroup.liveTimeline(for: profile.id)
+            guard !mine.isEmpty else { return nil }
+            let latest = mine.first?.drinkName
+            return "\(mine.count) \(mine.count == 1 ? "drink" : "drinks")"
+                + (latest.map { " · \($0)" } ?? "")
+        }
+        guard !live.drinks.isEmpty else { return nil }
+        let latest = live.drinks.max(by: { $0.consumedAt < $1.consumedAt })?.optionName
+        return "\(live.drinks.count) \(live.drinks.count == 1 ? "drink" : "drinks")"
+            + (latest.map { " · \($0)" } ?? "")
     }
 
     /// Where I am for the story stamp: checked-in venue first, then the
@@ -10849,6 +11775,9 @@ private struct SessionView: View {
 
 private struct AtmosphereBackground: View {
     let accent: Color
+    /// Rising carbonation (the website's signature) — enabled while a live
+    /// sesh runs so the whole screen quietly says "the night is on".
+    var bubbles: Bool = false
 
     var body: some View {
         ZStack {
@@ -10870,6 +11799,10 @@ private struct AtmosphereBackground: View {
             .blendMode(.screen)
             .ignoresSafeArea()
 
+            if bubbles {
+                RisingBubbles()
+            }
+
             LinearGradient(
                 colors: [.clear, .ink.opacity(0.85)],
                 startPoint: .center, endPoint: .bottom
@@ -10882,6 +11815,81 @@ private struct AtmosphereBackground: View {
                 .allowsHitTesting(false)
                 .ignoresSafeArea()
         }
+    }
+}
+
+/// The website's carbonation, in-app: faint amber bubbles rising through
+/// the atmosphere. One Canvas driven by a 30fps TimelineView — a single
+/// cheap layer, deterministic (no state), and absent entirely when the
+/// user prefers reduced motion.
+private struct RisingBubbles: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if !reduceMotion {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
+                Canvas { g, size in
+                    let t = ctx.date.timeIntervalSinceReferenceDate
+                    for i in 0..<7 {
+                        let fi = Double(i)
+                        // 14–21s per ascent, staggered so the column never
+                        // looks synchronized.
+                        let duration = 14.0 + fi.truncatingRemainder(dividingBy: 3.0) * 3.5
+                        let phase = (t / duration + fi * 0.37)
+                            .truncatingRemainder(dividingBy: 1.0)
+                        let lane = (0.06 + fi * 0.14).truncatingRemainder(dividingBy: 1.0)
+                        let sway = sin((phase * 2 + fi) * .pi * 2) * 14
+                        let x = lane * size.width + sway
+                        let y = size.height * (1.06 - phase * 1.12)
+                        let r = 2.5 + (fi * 1.7).truncatingRemainder(dividingBy: 4.5)
+                        // Fade in leaving the bottom, out approaching the top.
+                        let fade = min(1, min(phase / 0.08, (1 - phase) / 0.25))
+                        guard fade > 0 else { continue }
+                        let rect = CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)
+                        g.stroke(
+                            Circle().path(in: rect),
+                            with: .color(Color.whiskey.opacity(0.35 * fade)),
+                            lineWidth: 1
+                        )
+                        g.fill(
+                            Circle().path(in: rect),
+                            with: .color(Color.cream.opacity(0.09 * fade))
+                        )
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+            .ignoresSafeArea()
+        }
+    }
+}
+
+/// The website's LIVE dot, in-app: a glowing whiskey dot with a sonar ring
+/// pulsing outward. Ring is skipped under Reduce Motion (the glow stays).
+struct SonarDot: View {
+    var size: CGFloat = 7
+    var color: Color = .whiskey
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulsing = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .shadow(color: color.opacity(0.8), radius: size * 0.7)
+            .overlay {
+                if !reduceMotion {
+                    Circle()
+                        .strokeBorder(color, lineWidth: 1)
+                        .scaleEffect(pulsing ? 2.6 : 0.6)
+                        .opacity(pulsing ? 0 : 0.9)
+                }
+            }
+            .onAppear {
+                withAnimation(.easeOut(duration: 2.2).repeatForever(autoreverses: false)) {
+                    pulsing = true
+                }
+            }
     }
 }
 
@@ -14156,13 +15164,23 @@ private struct BottomTabBar: View {
     /// At least one friend is currently in a live sesh — green dot on
     /// NIGHTLINE so the user knows the TONIGHT strip has something to show.
     var friendsLive: Bool = false
+    /// A friend posted a story or a night since the user last looked —
+    /// the NIGHTLINE icon wiggles until they swipe over.
+    var newOnNightline: Bool = false
+    /// How many unseen stories/posts — shown as a number in a whiskey
+    /// ring on the NIGHTLINE tab.
+    var unseenCount: Int = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 0) {
             item(.plan,     icon: "gauge.medium",                  label: "PLAN")
             item(.live,     icon: "dot.radiowaves.left.and.right", label: "LIVE", pulse: liveActive)
             item(.timeline, icon: "square.stack.fill",             label: "NIGHTLINE",
-                 pulse: friendsLive, pulseColor: Color(red: 0.51, green: 0.72, blue: 0.48))
+                 pulse: friendsLive,
+                 pulseColor: Color(red: 0.51, green: 0.72, blue: 0.48),
+                 buzzing: newOnNightline && !reduceMotion,
+                 badgeCount: unseenCount)
             item(.offers,   icon: "map.fill",                      label: "DEALS")
         }
         .padding(.top, 10)
@@ -14175,7 +15193,8 @@ private struct BottomTabBar: View {
 
     @ViewBuilder
     private func item(_ value: TopTab, icon: String, label: String,
-                      pulse: Bool = false, pulseColor: Color = .whiskey) -> some View {
+                      pulse: Bool = false, pulseColor: Color = .whiskey,
+                      buzzing: Bool = false, badgeCount: Int = 0) -> some View {
         let on = tab == value
         Button {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = value }
@@ -14185,11 +15204,23 @@ private struct BottomTabBar: View {
                     Image(systemName: icon)
                         .font(.system(size: 18, weight: on ? .bold : .semibold))
                         .foregroundStyle(on ? Color.whiskey : Color.cream.opacity(0.55))
-                    // Live pulse, mirroring the old switcher's LIVE dot.
-                    if pulse {
-                        Circle()
-                            .fill(pulseColor)
-                            .frame(width: 6, height: 6)
+                        // "Something new over here" — a periodic wiggle
+                        // until the user swipes over to look.
+                        .symbolEffect(.wiggle, options: .repeat(.periodic(delay: 2.2)), isActive: buzzing)
+                    // Unseen count in a whiskey ring beats the plain dot.
+                    if badgeCount > 0 {
+                        Text(badgeCount > 9 ? "9+" : "\(badgeCount)")
+                            .font(.system(size: 9, weight: .black, design: .monospaced))
+                            .foregroundStyle(Color.whiskey)
+                            .frame(width: 17, height: 17)
+                            .background(Circle().fill(Color.ink))
+                            .overlay(Circle().strokeBorder(Color.whiskey, lineWidth: 1.5))
+                            .shadow(color: Color.whiskey.opacity(0.6), radius: 4)
+                            .offset(x: 13, y: -11)
+                    } else if pulse {
+                        // Live pulse, mirroring the old switcher's LIVE
+                        // dot — with the website's sonar ring.
+                        SonarDot(size: 6, color: pulseColor)
                             .offset(x: 12, y: -10)
                     }
                 }
