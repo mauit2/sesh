@@ -224,6 +224,136 @@ extension Color {
     static let foam    = Color(red: 0.975, green: 0.915, blue: 0.810)
 }
 
+// MARK: - Calm design system
+//
+// One visual voice for the whole app. Rules the components below enforce:
+//  - Cards carry exactly ONE soft shadow; the whiskey glow belongs to the
+//    single primary action per screen (PrimaryGlowButton) and nothing else.
+//  - Mono-caps labels exist only via SectionLabel (tracking capped at +2).
+//  - Type scale: hero 40 / title 20 / body 14 / label 10.
+
+enum CalmType {
+    static func hero(_ size: CGFloat = 40) -> Font {
+        .system(size: size, weight: .black, design: .rounded)
+    }
+    static func title(_ size: CGFloat = 20) -> Font {
+        .system(size: size, weight: .heavy, design: .rounded)
+    }
+    static func body(_ size: CGFloat = 14, weight: Font.Weight = .medium) -> Font {
+        .system(size: size, weight: weight, design: .rounded)
+    }
+    static func label(_ size: CGFloat = 10) -> Font {
+        .system(size: size, weight: .semibold, design: .monospaced)
+    }
+}
+
+/// The single card surface. Quiet by design: elevated ink, hairline stroke,
+/// one soft shadow — no glows, no tints.
+struct CalmCard<Content: View>: View {
+    var padding: CGFloat = 16
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.inkElev)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Color.cream.opacity(0.06), lineWidth: 1)
+                    )
+            )
+            .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+    }
+}
+
+/// The one sanctioned mono-caps section label.
+struct SectionLabel: View {
+    let text: String
+    var color: Color = .bronze
+
+    init(_ text: String, color: Color = .bronze) {
+        self.text = text
+        self.color = color
+    }
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(CalmType.label())
+            .tracking(2)
+            .foregroundStyle(color)
+    }
+}
+
+/// The only component allowed the whiskey glow — one per screen.
+struct PrimaryGlowButton: View {
+    let title: String
+    var systemImage: String? = nil
+    var tint: Color = .whiskey
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 14, weight: .bold))
+                }
+                Text(title.uppercased())
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .tracking(2)
+            }
+            .foregroundStyle(Color.ink)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 15)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(tint)
+            )
+            .shadow(color: tint.opacity(0.45), radius: 16, y: 8)
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
+/// Quiet key-value row — replaces what used to be its own mini-card.
+struct StatRow: View {
+    let icon: String
+    let title: String
+    var value: String? = nil
+    var valueColor: Color = .cream
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.bronze)
+                .frame(width: 20)
+            Text(title)
+                .font(CalmType.body())
+                .foregroundStyle(Color.cream.opacity(0.85))
+            Spacer(minLength: 8)
+            if let value {
+                Text(value)
+                    .font(CalmType.body(14, weight: .bold).monospacedDigit())
+                    .foregroundStyle(valueColor)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+/// Thin separator for rows inside a CalmCard.
+struct CalmDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.cream.opacity(0.06))
+            .frame(height: 1)
+    }
+}
+
 // MARK: - Drinks catalog
 
 enum DrinkCategory: String, CaseIterable, Identifiable, Codable {
@@ -3271,6 +3401,710 @@ final class VenueService: ObservableObject {
 // invites are rare events, and burning a query every 3 s for an empty
 // inbox is wasteful. 7 s is fast enough that "host taps send → recipient
 // sees banner" still feels live (typically <10 s end-to-end).
+// MARK: - Events (plan-ahead parties & trips, migration 042)
+
+/// What kind of thing is being planned — drives the glyph and whether the
+/// nights stepper shows (trips span several nights, the rest default to 1).
+enum EventKind: String, CaseIterable, Identifiable {
+    case party, trip, pregame, other
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .party:   return "Party"
+        case .trip:    return "Trip"
+        case .pregame: return "Pregame"
+        case .other:   return "Other"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .party:   return "party.popper.fill"
+        case .trip:    return "suitcase.fill"
+        case .pregame: return "flame.fill"
+        case .other:   return "calendar"
+        }
+    }
+}
+
+struct SeshEvent: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let hostId: UUID
+    var title: String
+    var kind: String
+    var startsAt: Date
+    var durationHours: Double
+    var nights: Int
+    var targetBAC: Double
+    /// Shopping list keyed by SupplyContainer raw values.
+    var supplies: [String: Int]
+    /// Off-app guests — same GhostMember shape the session ghosts use.
+    var ghosts: [GhostMember]
+    /// 'calc' = host-built calculated list · 'byob' = everyone brings.
+    var planMode: String
+    /// 'host' = only the host edits the plan · 'everyone' = any going member.
+    var editMode: String
+    /// BYOB contributions: profile uuid string → {container: count}.
+    var byo: [String: [String: Int]]
+    /// Host-set cover photo (event-covers bucket).
+    var coverURL: String?
+    /// Arm the server to start a live group sesh at starts_at.
+    var autoLive: Bool
+    /// The linked live session once the event has gone live.
+    var liveSessionId: UUID?
+    var liveStartedAt: Date?
+    var liveEndedAt: Date?
+    /// Event location: 'venue' = the group auto-checks-in when live
+    /// starts; 'spot' = becomes the group pre-game location. The raw
+    /// payload jsonb stays server-side (copied verbatim onto the session);
+    /// the client only needs kind + display name.
+    var locationKind: String?
+    var locationName: String?
+    let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case hostId = "host_id"
+        case title, kind
+        case startsAt = "starts_at"
+        case durationHours = "duration_hours"
+        case nights
+        case targetBAC = "target_bac"
+        case supplies, ghosts
+        case planMode = "plan_mode"
+        case editMode = "edit_mode"
+        case byo
+        case coverURL = "cover_url"
+        case autoLive = "auto_live"
+        case liveSessionId = "live_session_id"
+        case liveStartedAt = "live_started_at"
+        case liveEndedAt = "live_ended_at"
+        case locationKind = "location_kind"
+        case locationName = "location_name"
+        case createdAt = "created_at"
+    }
+
+    var kindValue: EventKind { EventKind(rawValue: kind) ?? .other }
+    var isBYOB: Bool { planMode == "byob" }
+    /// The event's linked sesh is running right now.
+    var isLiveNow: Bool { liveSessionId != nil && liveEndedAt == nil && liveStartedAt != nil }
+
+    /// Scheduled end: last day's drinking window closes.
+    var scheduledEnd: Date {
+        startsAt
+            .addingTimeInterval(Double(max(nights, 1) - 1) * 86_400)
+            .addingTimeInterval(durationHours * 3_600)
+    }
+
+    /// Done and dusted — its night ended (or its window passed without
+    /// ever going live). These move to the PAST EVENTS shelf.
+    var isPast: Bool {
+        if isLiveNow { return false }
+        if liveEndedAt != nil { return true }
+        return scheduledEnd < Date()
+    }
+
+    /// Everyone's contributions pooled into one shopping list.
+    var pooledBYO: [String: Int] {
+        var out: [String: Int] = [:]
+        for slice in byo.values {
+            for (k, v) in slice { out[k, default: 0] += v }
+        }
+        return out
+    }
+}
+
+struct EventMember: Codable, Equatable, Hashable {
+    let eventId: UUID
+    let profileId: UUID
+    var status: String            // "pending" | "going" | "declined"
+    var invitedBy: UUID?
+    var respondedAt: Date?
+    let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case eventId = "event_id"
+        case profileId = "profile_id"
+        case status
+        case invitedBy = "invited_by"
+        case respondedAt = "responded_at"
+        case createdAt = "created_at"
+    }
+}
+
+/// Real, purchasable containers for the provisioning calculator — the
+/// shopping list speaks in bottles and cans, not serving sizes.
+enum SupplyContainer: String, CaseIterable, Codable, Identifiable {
+    case beerCan, ciderCan, wineBottle, bubblyBottle, vodkaBottle, ginBottle, whiskyBottle
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .beerCan:      return "Beer"
+        case .ciderCan:     return "Cider"
+        case .wineBottle:   return "Wine"
+        case .bubblyBottle: return "Bubbles"
+        case .vodkaBottle:  return "Vodka"
+        case .ginBottle:    return "Gin"
+        case .whiskyBottle: return "Whisky"
+        }
+    }
+
+    /// "33 cl can" / "75 cl bottle" — the unit the count refers to.
+    var unit: String {
+        switch self {
+        case .beerCan, .ciderCan:                       return "33 cl can"
+        case .wineBottle, .bubblyBottle:                return "75 cl bottle"
+        case .vodkaBottle, .ginBottle, .whiskyBottle:   return "70 cl bottle"
+        }
+    }
+
+    var volumeML: Double {
+        switch self {
+        case .beerCan, .ciderCan:                     return 330
+        case .wineBottle, .bubblyBottle:              return 750
+        case .vodkaBottle, .ginBottle, .whiskyBottle: return 700
+        }
+    }
+
+    var abv: Double {
+        switch self {
+        case .beerCan:      return 0.05
+        case .ciderCan:     return 0.045
+        case .wineBottle:   return 0.12
+        case .bubblyBottle: return 0.12
+        case .vodkaBottle, .ginBottle, .whiskyBottle: return 0.40
+        }
+    }
+
+    /// Grams of pure alcohol per container — same formula as DrinkOption.
+    var grams: Double { volumeML * abv * 0.789 }
+
+    /// Category mapping so the drink glyphs render in the shopping list.
+    var category: DrinkCategory {
+        switch self {
+        case .beerCan:      return .beer
+        case .ciderCan:     return .cider
+        case .wineBottle:   return .wine
+        case .bubblyBottle: return .sparkling
+        case .vodkaBottle:  return .vodka
+        case .ginBottle:    return .gin
+        case .whiskyBottle: return .whisky
+        }
+    }
+}
+
+/// Pure Widmark provisioning math. Model: everyone drinks steadily over
+/// the event's window (H hours) and lands on the target BAC at the end,
+/// so per person `grams = (target + 0.015·H) · weightKg·1000·r / 100`.
+/// Everything is linear in the target, so the inverse (counts → level)
+/// is exact — no iteration.
+enum EventProvisioning {
+    static let decayPerHour = 0.015
+    static let gramsPerStandardDrink = 12.0
+
+    /// One attendee's contribution to the shared denominator:
+    /// weightKg·1000·r / 100.
+    static func spread(weightKg: Double, sex: Sex) -> Double {
+        weightKg * 1000 * sex.r / 100
+    }
+
+    /// Total grams of alcohol for the whole crew to hit `target` after
+    /// `hours` of steady drinking, per night, times `nights`.
+    static func gramsNeeded(target: Double, hours: Double, nights: Int, totalSpread: Double) -> Double {
+        max(0, (target + decayPerHour * hours) * totalSpread * Double(max(nights, 1)))
+    }
+
+    /// Inverse: the level everyone lands at if the crew shares
+    /// `totalGrams` evenly (weight-proportionally) per night.
+    static func resultingBAC(totalGrams: Double, hours: Double, nights: Int, totalSpread: Double) -> Double {
+        guard totalSpread > 0 else { return 0 }
+        let perNight = totalGrams / Double(max(nights, 1))
+        return max(0, perNight / totalSpread - decayPerHour * hours)
+    }
+
+    /// Split the needed grams across the chosen container types WITHOUT
+    /// overshooting the target level. Naive per-type ceil rounding blows
+    /// straight past the target for small crews (one 70cl vodka bottle is
+    /// ~221 g — almost a whole 3-person night by itself), so: round each
+    /// type's even share to the NEAREST whole container (big bottles can
+    /// round to zero), then top the total up or trim it down with the
+    /// smallest-container type until the pool sits within half a unit of
+    /// the need.
+    static func suggestion(gramsNeeded: Double, types: [SupplyContainer]) -> [String: Int] {
+        guard !types.isEmpty, gramsNeeded > 0 else { return [:] }
+        let share = gramsNeeded / Double(types.count)
+        var counts: [SupplyContainer: Int] = [:]
+        for t in types {
+            counts[t] = max(0, Int((share / t.grams).rounded()))
+        }
+        guard let finest = types.min(by: { $0.grams < $1.grams }) else { return [:] }
+
+        var total = counts.reduce(0.0) { $0 + $1.key.grams * Double($1.value) }
+        while total < gramsNeeded - finest.grams / 2 {
+            counts[finest, default: 0] += 1
+            total += finest.grams
+        }
+        while let c = counts[finest], c > 0, total > gramsNeeded + finest.grams / 2 {
+            counts[finest] = c - 1
+            total -= finest.grams
+        }
+        // Degenerate case (only huge bottles picked, tiny need): make sure
+        // the list isn't empty.
+        if counts.values.allSatisfy({ $0 == 0 }) {
+            counts[finest] = max(1, Int((gramsNeeded / finest.grams).rounded()))
+        }
+
+        var out: [String: Int] = [:]
+        for (t, c) in counts { out[t.rawValue] = c }
+        return out
+    }
+
+    /// Total grams represented by a shopping list.
+    static func grams(of supplies: [String: Int]) -> Double {
+        supplies.reduce(0) { acc, entry in
+            guard let c = SupplyContainer(rawValue: entry.key) else { return acc }
+            return acc + c.grams * Double(max(entry.value, 0))
+        }
+    }
+
+    /// Reserved supplies key carrying the driver fingerprint (ignored by
+    /// grams(of:) and the UI since it's not a SupplyContainer raw value).
+    static let fingerprintKey = "_fp"
+
+    /// Deterministic fingerprint of everything the suggestion depends on.
+    /// Stored inside the supplies dict; when the crew/target/window drift
+    /// away from it, editors' devices recalculate automatically — while
+    /// manual count edits (same drivers) are left alone.
+    static func fingerprint(target: Double, hours: Double, nights: Int, totalSpread: Double, types: [SupplyContainer]) -> Int {
+        let s = "\(Int((target * 1000).rounded()))|\(Int((hours * 10).rounded()))|\(nights)|\(Int(totalSpread.rounded()))|\(types.map(\.rawValue).sorted().joined(separator: ","))"
+        // djb2 — stable across launches/devices (unlike Hasher).
+        var h = 5381
+        for b in s.utf8 { h = (h &* 33) &+ Int(b) }
+        return h
+    }
+
+    /// Suggestion with the fingerprint baked in.
+    static func fingerprintedSuggestion(target: Double, hours: Double, nights: Int, totalSpread: Double, types: [SupplyContainer]) -> [String: Int] {
+        let need = gramsNeeded(target: target, hours: hours, nights: nights, totalSpread: totalSpread)
+        var out = suggestion(gramsNeeded: need, types: types)
+        out[fingerprintKey] = fingerprint(target: target, hours: hours, nights: nights, totalSpread: totalSpread, types: types)
+        return out
+    }
+
+    /// Chronological peak BAC from timestamped gram events — same walk
+    /// as the live Widmark simulation (accumulate per drink, decay
+    /// between drinks, track the max).
+    static func peakBAC(events: [(at: Date, grams: Double)], weightKg: Double, sex: Sex) -> Double {
+        guard !events.isEmpty, weightKg > 0 else { return 0 }
+        let body = weightKg * 1000 * sex.r
+        var bac = 0.0
+        var peak = 0.0
+        var last = events.map(\.at).min() ?? Date()
+        for e in events.sorted(by: { $0.at < $1.at }) {
+            bac = max(0, bac - decayPerHour * e.at.timeIntervalSince(last) / 3600)
+            bac += e.grams / body * 100
+            peak = max(peak, bac)
+            last = e.at
+        }
+        return peak
+    }
+}
+
+/// Fetch + mutate events. Same shape as InvitesService: a slow polling
+/// loop (events change rarely), RLS-scoped selects, all writes through
+/// the SECURITY DEFINER RPCs from migration 042.
+@MainActor
+final class EventsService: ObservableObject {
+    @Published private(set) var events: [SeshEvent] = []
+    @Published private(set) var membersByEvent: [UUID: [EventMember]] = [:]
+    @Published private(set) var profilesById: [UUID: Profile] = [:]
+    @Published var error: String?
+
+    private var pollTask: Task<Void, Never>?
+
+    /// Events awaiting my RSVP — drives the PLAN tab badge. Past events
+    /// don't nag.
+    func pendingCount(for uid: UUID) -> Int {
+        events.filter { ev in
+            !ev.isPast && (membersByEvent[ev.id]?.contains {
+                $0.profileId == uid && $0.status == "pending"
+            } ?? false)
+        }.count
+    }
+
+    func myStatus(in event: SeshEvent, uid: UUID) -> String? {
+        membersByEvent[event.id]?.first { $0.profileId == uid }?.status
+    }
+
+    func goingProfiles(for event: SeshEvent) -> [Profile] {
+        (membersByEvent[event.id] ?? [])
+            .filter { $0.status == "going" }
+            .compactMap { profilesById[$0.profileId] }
+    }
+
+    func start() {
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refresh()
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+            }
+        }
+    }
+
+    func stop() {
+        pollTask?.cancel()
+        pollTask = nil
+        events = []
+        membersByEvent = [:]
+    }
+
+    func refresh() async {
+        guard supabase.auth.currentUser != nil else { return }
+        do {
+            // RLS scopes this to events I host or am invited to. Reach
+            // back 90 days so finished events live on in PAST EVENTS.
+            let cutoff = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-90 * 86_400))
+            let evs: [SeshEvent] = try await supabase
+                .from("events")
+                .select()
+                .gte("starts_at", value: cutoff)
+                .order("starts_at", ascending: true)
+                .execute()
+                .value
+            self.events = evs
+
+            let ids = evs.map { $0.id.uuidString.lowercased() }
+            guard !ids.isEmpty else {
+                membersByEvent = [:]
+                return
+            }
+            let members: [EventMember] = try await supabase
+                .from("event_members")
+                .select()
+                .in("event_id", values: ids)
+                .execute()
+                .value
+            membersByEvent = Dictionary(grouping: members, by: \.eventId)
+
+            // Hydrate any attendee profiles we haven't cached yet — the
+            // calculator needs weight/sex, the roster needs name/avatar.
+            let missing = Set(members.map(\.profileId)).subtracting(profilesById.keys)
+            if !missing.isEmpty {
+                let ps: [Profile] = try await supabase
+                    .from("profiles")
+                    .select()
+                    .in("id", values: missing.map { $0.uuidString.lowercased() })
+                    .execute()
+                    .value
+                for p in ps { profilesById[p.id] = p }
+            }
+
+            if let uid = supabase.auth.currentUser?.id {
+                await autoRecalcStaleLists(uid: uid)
+            }
+
+            // An armed event whose start time has passed but whose sesh
+            // hasn't spun up yet: kick the (idempotent) server lifecycle
+            // now instead of waiting for the next cron tick, then reload
+            // so the LIVE banner and auto-join land immediately.
+            let due = evs.contains {
+                $0.autoLive && $0.liveSessionId == nil && $0.startsAt <= Date()
+            }
+            if due {
+                _ = try? await supabase.rpc("run_event_live_lifecycle").execute()
+                let fresh: [SeshEvent] = try await supabase
+                    .from("events")
+                    .select()
+                    .gte("starts_at", value: cutoff)
+                    .order("starts_at", ascending: true)
+                    .execute()
+                    .value
+                self.events = fresh
+            }
+        } catch {
+            // Transient blip — next poll recovers; stale list is fine.
+        }
+    }
+
+    /// Create → returns the new event id (already refreshed) or nil.
+    func create(
+        title: String, kind: EventKind, startsAt: Date,
+        durationHours: Double, nights: Int, targetBAC: Double,
+        autoLive: Bool = false
+    ) async -> UUID? {
+        struct P: Encodable {
+            let p_title: String
+            let p_kind: String
+            let p_starts_at: String
+            let p_duration_hours: Double
+            let p_nights: Int
+            let p_target_bac: Double
+            let p_auto_live: Bool
+        }
+        do {
+            let id: UUID = try await supabase.rpc("create_event", params: P(
+                p_title: title,
+                p_kind: kind.rawValue,
+                p_starts_at: ISO8601DateFormatter().string(from: startsAt),
+                p_duration_hours: durationHours,
+                p_nights: nights,
+                p_target_bac: targetBAC,
+                p_auto_live: autoLive
+            )).execute().value
+            await refresh()
+            return id
+        } catch {
+            self.error = "Couldn't create the event."
+            return nil
+        }
+    }
+
+    /// Host-only: set the event's location as a real venue — the group
+    /// gets checked in there automatically when the live sesh starts.
+    func setLocation(eventId: UUID, venue: Venue) async {
+        patch(eventId) { $0.locationKind = "venue"; $0.locationName = venue.name }
+        struct P: Encodable {
+            let p_event: String
+            let p_kind: String
+            let p_name: String
+            let p_payload: Venue
+        }
+        _ = try? await supabase.rpc("set_event_location", params: P(
+            p_event: eventId.uuidString.lowercased(),
+            p_kind: "venue",
+            p_name: venue.name,
+            p_payload: venue
+        )).execute()
+    }
+
+    /// Host-only: set the event's location as a free spot/address — it
+    /// becomes the group's pre-game location when the live sesh starts.
+    func setLocation(eventId: UUID, spot: LooseSpot) async {
+        patch(eventId) { $0.locationKind = "spot"; $0.locationName = spot.name }
+        struct P: Encodable {
+            let p_event: String
+            let p_kind: String
+            let p_name: String
+            let p_payload: LooseSpot
+        }
+        _ = try? await supabase.rpc("set_event_location", params: P(
+            p_event: eventId.uuidString.lowercased(),
+            p_kind: "spot",
+            p_name: spot.name ?? "Pre-game",
+            p_payload: spot
+        )).execute()
+    }
+
+    func clearLocation(eventId: UUID) async {
+        patch(eventId) { $0.locationKind = nil; $0.locationName = nil }
+        struct P: Encodable {
+            let p_event: String
+            let p_kind: String?
+            let p_name: String?
+            let p_payload: String?
+        }
+        _ = try? await supabase.rpc("set_event_location", params: P(
+            p_event: eventId.uuidString.lowercased(),
+            p_kind: nil, p_name: nil, p_payload: nil
+        )).execute()
+    }
+
+    /// Host-only: arm/disarm the automatic live start.
+    func setAutoLive(eventId: UUID, _ on: Bool) async {
+        patch(eventId) { $0.autoLive = on }
+        struct P: Encodable { let p_event: String; let p_on: Bool }
+        _ = try? await supabase.rpc("set_event_auto_live", params: P(
+            p_event: eventId.uuidString.lowercased(),
+            p_on: on
+        )).execute()
+    }
+
+    /// Host-only: upload a cover photo (event-covers bucket, upsert) and
+    /// record its public URL on the event. Cache-busted with a version
+    /// query so AsyncImage picks up replacements.
+    func uploadCover(eventId: UUID, jpeg: Data) async {
+        let path = "\(eventId.uuidString.lowercased())/cover.jpg"
+        do {
+            _ = try await supabase.storage.from("event-covers")
+                .upload(path, data: jpeg, options: .init(contentType: "image/jpeg", upsert: true))
+            let base = try supabase.storage.from("event-covers").getPublicURL(path: path)
+            let url = "\(base.absoluteString)?v=\(Int(Date().timeIntervalSince1970))"
+            patch(eventId) { $0.coverURL = url }
+            struct P: Encodable { let p_event: String; let p_url: String }
+            _ = try? await supabase.rpc("set_event_cover", params: P(
+                p_event: eventId.uuidString.lowercased(),
+                p_url: url
+            )).execute()
+        } catch {
+            self.error = "Couldn't upload the photo."
+        }
+    }
+
+    /// Σ weight·r/100 over an event's going members + ghosts.
+    func totalSpread(for event: SeshEvent) -> Double {
+        let going = (membersByEvent[event.id] ?? [])
+            .filter { $0.status == "going" }
+            .compactMap { profilesById[$0.profileId] }
+        let p = going.reduce(0.0) { $0 + EventProvisioning.spread(weightKg: $1.weightKg, sex: $1.sex) }
+        let g = event.ghosts.reduce(0.0) { $0 + EventProvisioning.spread(weightKg: $1.weightKg, sex: $1.sex) }
+        return p + g
+    }
+
+    /// Auto-recalculate calculated lists whose drivers (crew, target,
+    /// window, container types) changed since the list was built. The
+    /// recalculation is deterministic, so ANY going member's device may
+    /// perform it (through its own permissive RPC) — otherwise a stale
+    /// one-person list sat frozen whenever the host's phone was closed.
+    /// Manual count edits keep the stored fingerprint, so they're never
+    /// clobbered.
+    private func autoRecalcStaleLists(uid: UUID) async {
+        for ev in events {
+            guard !ev.isBYOB, !ev.supplies.isEmpty, !ev.isPast else { continue }
+            let mine = membersByEvent[ev.id]?.first { $0.profileId == uid }
+            guard ev.hostId == uid || mine?.status == "going" else { continue }
+
+            let spread = totalSpread(for: ev)
+            guard spread > 0 else { continue }
+            let types = SupplyContainer.allCases.filter { ev.supplies.keys.contains($0.rawValue) }
+            guard !types.isEmpty else { continue }
+
+            let fp = EventProvisioning.fingerprint(
+                target: ev.targetBAC, hours: ev.durationHours,
+                nights: ev.nights, totalSpread: spread, types: types
+            )
+            if ev.supplies[EventProvisioning.fingerprintKey] != fp {
+                let fresh = EventProvisioning.fingerprintedSuggestion(
+                    target: ev.targetBAC, hours: ev.durationHours,
+                    nights: ev.nights, totalSpread: spread, types: types
+                )
+                patch(ev.id) { $0.supplies = fresh }
+                struct P: Encodable { let p_event: String; let p_supplies: [String: Int] }
+                _ = try? await supabase.rpc("auto_recalc_event_supplies", params: P(
+                    p_event: ev.id.uuidString.lowercased(),
+                    p_supplies: fresh
+                )).execute()
+            }
+        }
+    }
+
+    func invite(eventId: UUID, recipientIds: [UUID]) async {
+        guard !recipientIds.isEmpty else { return }
+        struct P: Encodable { let p_event: String; let p_recipients: [String] }
+        do {
+            _ = try await supabase.rpc("invite_to_event", params: P(
+                p_event: eventId.uuidString.lowercased(),
+                p_recipients: recipientIds.map { $0.uuidString.lowercased() }
+            )).execute()
+            await refresh()
+        } catch {
+            self.error = "Couldn't send invites."
+        }
+    }
+
+    func respond(eventId: UUID, going: Bool) async {
+        struct P: Encodable { let p_event: String; let p_status: String }
+        do {
+            _ = try await supabase.rpc("respond_to_event", params: P(
+                p_event: eventId.uuidString.lowercased(),
+                p_status: going ? "going" : "declined"
+            )).execute()
+            await refresh()
+        } catch {
+            self.error = "Couldn't save your RSVP."
+        }
+    }
+
+    func leave(eventId: UUID) async {
+        struct P: Encodable { let p_event: String }
+        _ = try? await supabase.rpc("leave_event", params: P(
+            p_event: eventId.uuidString.lowercased()
+        )).execute()
+        await refresh()
+    }
+
+    func cancel(eventId: UUID) async {
+        struct P: Encodable { let p_event: String }
+        _ = try? await supabase.rpc("cancel_event", params: P(
+            p_event: eventId.uuidString.lowercased()
+        )).execute()
+        await refresh()
+    }
+
+    /// Host-only writes. Optimistic local patch first so steppers feel
+    /// instant; the poll self-heals if the server rejects.
+    func setSupplies(eventId: UUID, _ supplies: [String: Int]) async {
+        patch(eventId) { $0.supplies = supplies }
+        struct P: Encodable { let p_event: String; let p_supplies: [String: Int] }
+        _ = try? await supabase.rpc("set_event_supplies", params: P(
+            p_event: eventId.uuidString.lowercased(),
+            p_supplies: supplies
+        )).execute()
+    }
+
+    func updatePlan(eventId: UUID, targetBAC: Double? = nil, durationHours: Double? = nil, nights: Int? = nil) async {
+        patch(eventId) { ev in
+            if let targetBAC { ev.targetBAC = targetBAC }
+            if let durationHours { ev.durationHours = durationHours }
+            if let nights { ev.nights = nights }
+        }
+        struct P: Encodable {
+            let p_event: String
+            let p_target_bac: Double?
+            let p_duration_hours: Double?
+            let p_nights: Int?
+        }
+        _ = try? await supabase.rpc("update_event_plan", params: P(
+            p_event: eventId.uuidString.lowercased(),
+            p_target_bac: targetBAC,
+            p_duration_hours: durationHours,
+            p_nights: nights
+        )).execute()
+    }
+
+    func setGhosts(eventId: UUID, _ ghosts: [GhostMember]) async {
+        patch(eventId) { $0.ghosts = ghosts }
+        struct P: Encodable { let p_event: String; let p_ghosts: [GhostMember] }
+        _ = try? await supabase.rpc("set_event_ghosts", params: P(
+            p_event: eventId.uuidString.lowercased(),
+            p_ghosts: ghosts
+        )).execute()
+    }
+
+    /// Host-only: flip planning mode (calc/byob) or edit permission.
+    func setModes(eventId: UUID, planMode: String? = nil, editMode: String? = nil) async {
+        patch(eventId) { ev in
+            if let planMode { ev.planMode = planMode }
+            if let editMode { ev.editMode = editMode }
+        }
+        struct P: Encodable { let p_event: String; let p_plan_mode: String?; let p_edit_mode: String? }
+        _ = try? await supabase.rpc("set_event_modes", params: P(
+            p_event: eventId.uuidString.lowercased(),
+            p_plan_mode: planMode,
+            p_edit_mode: editMode
+        )).execute()
+    }
+
+    /// Write MY bring-list slice (BYOB mode).
+    func setMyBYO(eventId: UUID, uid: UUID, _ items: [String: Int]) async {
+        patch(eventId) { $0.byo[uid.uuidString.lowercased()] = items }
+        struct P: Encodable { let p_event: String; let p_items: [String: Int] }
+        _ = try? await supabase.rpc("set_event_byo", params: P(
+            p_event: eventId.uuidString.lowercased(),
+            p_items: items
+        )).execute()
+    }
+
+    private func patch(_ id: UUID, _ mutate: (inout SeshEvent) -> Void) {
+        guard let idx = events.firstIndex(where: { $0.id == id }) else { return }
+        var ev = events[idx]
+        mutate(&ev)
+        events[idx] = ev
+    }
+}
+
 @MainActor
 final class InvitesService: ObservableObject {
     /// Pending invites for the signed-in user, newest first. Drives the
@@ -10240,6 +11074,2772 @@ private struct LivePulseDot: View {
 
 // MARK: - Session view (the former ContentView)
 
+// MARK: - First-run walkthrough
+
+/// Five-page welcome tour shown once per account on first sign-in (and
+/// replayable from the profile sheet). One idea per page — what each tab
+/// is for — so a brand-new user knows the lay of the land in 30 seconds.
+private struct WelcomeTourView: View {
+    let onDone: () -> Void
+    @State private var page = 0
+
+    private struct TourPage {
+        let icon: String
+        let kicker: String
+        let title: String
+        let text: String
+    }
+
+    private static let pages: [TourPage] = [
+        TourPage(
+            icon: "sparkles",
+            kicker: "WELCOME",
+            title: "Welcome to sesh",
+            text: "Your night, tracked — from the first pour to the morning recap. Here's the quick lay of the land."
+        ),
+        TourPage(
+            icon: "gauge.medium",
+            kicker: "PLAN",
+            title: "Plan the party before it starts",
+            text: "Create a party or a trip, invite the crew, pick a level — and the calculator tells you exactly how much to buy. Tonight's own planner lives here too."
+        ),
+        TourPage(
+            icon: "dot.radiowaves.left.and.right",
+            kicker: "LIVE",
+            title: "Log as you go",
+            text: "One tap per drink. Check in to bars, bring your crew, and watch everyone's BAC in real time."
+        ),
+        TourPage(
+            icon: "square.stack.fill",
+            kicker: "NIGHTLINE",
+            title: "Your friends' nights",
+            text: "Stories and recaps from your friends land here — and you can see who's out right now."
+        ),
+        TourPage(
+            icon: "map.fill",
+            kicker: "DEALS",
+            title: "Drink smarter, pay less",
+            text: "Tonight's specials around you, on the map. Check in and the menu knows the deals."
+        ),
+    ]
+
+    private var isLast: Bool { page == Self.pages.count - 1 }
+
+    var body: some View {
+        ZStack {
+            AtmosphereBackground(accent: .whiskey)
+
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    Button {
+                        onDone()
+                    } label: {
+                        Text("SKIP")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .tracking(2)
+                            .foregroundStyle(Color.bronze)
+                            .padding(.vertical, 10)
+                            .padding(.horizontal, 14)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+                .padding(.top, 14)
+                .padding(.trailing, 10)
+
+                TabView(selection: $page) {
+                    ForEach(Array(Self.pages.enumerated()), id: \.offset) { idx, p in
+                        tourPage(p).tag(idx)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+
+                HStack(spacing: 7) {
+                    ForEach(Self.pages.indices, id: \.self) { idx in
+                        Capsule()
+                            .fill(idx == page ? Color.whiskey : Color.cream.opacity(0.15))
+                            .frame(width: idx == page ? 22 : 7, height: 7)
+                    }
+                }
+                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: page)
+                .padding(.bottom, 24)
+
+                PrimaryGlowButton(
+                    title: isLast ? "Let's go" : "Next",
+                    systemImage: isLast ? "checkmark" : "arrow.right"
+                ) {
+                    if isLast {
+                        onDone()
+                    } else {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                            page += 1
+                        }
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 28)
+            }
+        }
+    }
+
+    private func tourPage(_ p: TourPage) -> some View {
+        VStack(spacing: 22) {
+            Spacer()
+            ZStack {
+                Circle()
+                    .fill(Color.whiskey.opacity(0.1))
+                    .frame(width: 110, height: 110)
+                Circle()
+                    .strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1)
+                    .frame(width: 110, height: 110)
+                Image(systemName: p.icon)
+                    .font(.system(size: 42, weight: .semibold))
+                    .foregroundStyle(Color.whiskey)
+            }
+            VStack(spacing: 10) {
+                SectionLabel(p.kicker, color: .whiskey)
+                Text(p.title)
+                    .font(.system(size: 26, weight: .heavy, design: .rounded))
+                    .tracking(-0.8)
+                    .foregroundStyle(Color.cream)
+                    .multilineTextAlignment(.center)
+                Text(p.text)
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.7))
+                    .lineSpacing(3)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 36)
+            Spacer()
+            Spacer()
+        }
+    }
+}
+
+/// Profile sheet + first-run tour in one modifier. The tour pops
+/// automatically the first time an account lands in the app, and is
+/// replayable from the profile sheet's "Replay the tour" row. Extracted
+/// from SessionView.body to keep its chain inside the type-checker's
+/// budget.
+private struct ProfileAndTourModifier: ViewModifier {
+    @Binding var profileOpen: Bool
+    @Binding var tourOpen: Bool
+    let seenKey: String
+    let profile: Profile
+    @ObservedObject var auth: AuthService
+    @ObservedObject var admin: AdminService
+    @ObservedObject var friends: FriendsService
+    @ObservedObject var feed: FeedService
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $profileOpen) {
+                ProfileSheet(
+                    profile: profile, auth: auth, admin: admin,
+                    friends: friends, feed: feed,
+                    onReplayTour: { tourOpen = true }
+                )
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(Color.ink)
+            }
+            .fullScreenCover(isPresented: $tourOpen) {
+                WelcomeTourView {
+                    UserDefaults.standard.set(true, forKey: seenKey)
+                    tourOpen = false
+                }
+            }
+            .onAppear {
+                if !UserDefaults.standard.bool(forKey: seenKey) {
+                    tourOpen = true
+                }
+            }
+    }
+}
+
+/// One-line dismissible hint shown on a tab until the user closes it.
+/// Device-level flag — the tour handles the real per-account onboarding;
+/// these are just gentle nudges toward each tab's core action.
+private struct TabHintChip: View {
+    let text: String
+    private let storageKey: String
+    @State private var hidden: Bool
+
+    init(_ text: String, key: String) {
+        self.text = text
+        let k = "sesh.hint.\(key).v1"
+        self.storageKey = k
+        _hidden = State(initialValue: UserDefaults.standard.bool(forKey: k))
+    }
+
+    var body: some View {
+        if !hidden {
+            HStack(spacing: 10) {
+                Image(systemName: "lightbulb.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.whiskey)
+                Text(text)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.8))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 6)
+                Button {
+                    UserDefaults.standard.set(true, forKey: storageKey)
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        hidden = true
+                    }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.bronze)
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PressScaleStyle())
+                .accessibilityLabel("Dismiss hint")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.inkElev)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+            )
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+}
+
+// MARK: - Events UI
+
+/// Identifiable wrapper so `.sheet(item:)` can present an event by id
+/// while the sheet itself stays live against the polling service.
+struct EventRef: Identifiable, Equatable {
+    let id: UUID
+}
+
+/// The three plannable levels. Friendlier than raw BAC, mapped to a peak
+/// target under the hood — capped well below the danger tier by design.
+enum EventTier: String, CaseIterable, Identifiable {
+    case mellow, merry, lit
+    var id: String { rawValue }
+
+    var target: Double {
+        switch self {
+        case .mellow: return 0.04
+        case .merry:  return 0.065
+        case .lit:    return 0.10
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .mellow: return "MELLOW"
+        case .merry:  return "MERRY"
+        case .lit:    return "LIT"
+        }
+    }
+
+    var blurb: String {
+        switch self {
+        case .mellow: return "easy buzz"
+        case .merry:  return "party pace"
+        case .lit:    return "big night"
+        }
+    }
+
+    static func nearest(to bac: Double) -> EventTier {
+        allCases.min { abs($0.target - bac) < abs($1.target - bac) } ?? .merry
+    }
+}
+
+/// Three-segment target level picker used by the composer and the
+/// event's supply calculator.
+private struct EventTierPicker: View {
+    @Binding var tier: EventTier
+    var enabled: Bool = true
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(EventTier.allCases) { t in
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        tier = t
+                    }
+                } label: {
+                    VStack(spacing: 3) {
+                        Text(t.label)
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .tracking(1.6)
+                            .foregroundStyle(tier == t ? Color.whiskey : Color.bronze)
+                        Text(t.blurb)
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(tier == t ? 0.7 : 0.4))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(tier == t ? Color.cream.opacity(0.08) : Color.cream.opacity(0.02))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(
+                                tier == t ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.06),
+                                lineWidth: 1
+                            )
+                    )
+                }
+                .buttonStyle(PressScaleStyle())
+                .disabled(!enabled)
+            }
+        }
+    }
+}
+
+/// One event in the PLAN tab's UPCOMING list. Pending invites carry
+/// inline GOING / CAN'T buttons so RSVPing never requires a detour.
+private struct EventCard: View {
+    let event: SeshEvent
+    let goingCount: Int
+    let myStatus: String?
+    /// Rendered in the PAST EVENTS shelf: dimmed, no RSVP, "ran live" line.
+    var isPastShelf: Bool = false
+    let onTap: () -> Void
+    let onRSVP: (Bool) -> Void
+
+    private var dateLine: String {
+        if isPastShelf {
+            let day = event.startsAt.formatted(.dateTime.day().month(.abbreviated))
+            return event.liveEndedAt != nil ? "RAN LIVE · \(day)".uppercased() : day.uppercased()
+        }
+        let day = event.startsAt.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+        let time = event.startsAt.formatted(date: .omitted, time: .shortened)
+        return "\(day) · \(time)".uppercased()
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    if let cover = event.coverURL, let url = URL(string: cover) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image.resizable().scaledToFill()
+                            default:
+                                Rectangle().fill(Color.whiskey.opacity(0.12))
+                            }
+                        }
+                        .frame(width: 44, height: 44)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
+                        )
+                    } else {
+                        ZStack {
+                            Circle()
+                                .fill(Color.whiskey.opacity(0.12))
+                                .frame(width: 38, height: 38)
+                            Image(systemName: event.kindValue.icon)
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(Color.whiskey)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(event.title)
+                            .font(.system(size: 16, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .lineLimit(1)
+                        HStack(spacing: 6) {
+                            if event.isLiveNow {
+                                HStack(spacing: 4) {
+                                    SonarDot(size: 5, color: .whiskey)
+                                    Text("LIVE NOW")
+                                        .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                                        .tracking(1.4)
+                                        .foregroundStyle(Color.whiskey)
+                                }
+                            } else {
+                                Text(dateLine)
+                                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                    .tracking(1.2)
+                                    .foregroundStyle(Color.bronze)
+                                if !isPastShelf {
+                                    Text("· \(event.startsAt.formatted(.relative(presentation: .named)))".uppercased())
+                                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                                        .tracking(1.0)
+                                        .foregroundStyle(Color.cream.opacity(0.45))
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text("\(goingCount)")
+                            .font(.system(size: 20, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .monospacedDigit()
+                        SectionLabel("Going")
+                    }
+                }
+
+                if myStatus == "pending" && !isPastShelf {
+                    HStack(spacing: 8) {
+                        Button {
+                            onRSVP(true)
+                        } label: {
+                            Text("I'M GOING")
+                                .font(.system(size: 11, weight: .black, design: .monospaced))
+                                .tracking(1.6)
+                                .foregroundStyle(Color.ink)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(Color.whiskey)
+                                )
+                        }
+                        .buttonStyle(PressScaleStyle())
+
+                        Button {
+                            onRSVP(false)
+                        } label: {
+                            Text("CAN'T")
+                                .font(.system(size: 11, weight: .black, design: .monospaced))
+                                .tracking(1.6)
+                                .foregroundStyle(Color.cream.opacity(0.7))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(Color.cream.opacity(0.06))
+                                )
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+                } else if myStatus == "declined" {
+                    Text("You declined — tap to change your mind")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.bronze)
+                }
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.inkElev)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(
+                                myStatus == "pending" ? Color.whiskey.opacity(0.35) : Color.cream.opacity(0.06),
+                                lineWidth: 1
+                            )
+                    )
+            )
+            .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
+            .opacity(isPastShelf ? 0.72 : (myStatus == "declined" ? 0.6 : 1))
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
+/// Full event screen: who's coming (RSVP + ghosts) and the supply
+/// calculator — how much to buy for everyone to land on the target level.
+private struct EventDetailSheet: View {
+    let eventId: UUID
+    @ObservedObject var events: EventsService
+    @ObservedObject var friends: FriendsService
+    let profile: Profile
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+
+    @State private var invitePickerOpen = false
+    @State private var addGuestOpen = false
+    @State private var confirmCancel = false
+    @State private var confirmLeave = false
+    /// Local mirror of the target tier so the picker feels instant; the
+    /// authoritative value lives on the event row.
+    @State private var tier: EventTier = .merry
+    /// Which container types the shopping list uses.
+    @State private var selectedTypes: [SupplyContainer] = [.beerCan, .wineBottle, .vodkaBottle]
+    /// Local mirrors of the window controls.
+    @State private var days: Int = 1
+    @State private var hoursPerDay: Double = 6
+    /// Cover photo picker selection (host only).
+    @State private var coverItem: PhotosPickerItem?
+    @State private var locationSheetOpen = false
+    /// Night report data for ended events: what was actually drunk (the
+    /// linked session's ledger), the squad schnaps, and the route.
+    @State private var nightDrinks: [SessionDrink] = []
+    @State private var nightSnaps: [SessionSnap] = []
+    @State private var nightRoute: [NightRouteStop] = []
+    @State private var nightLoaded = false
+
+    struct NightRouteStop: Identifiable, Equatable {
+        let id = UUID()
+        let name: String
+        let lat: Double
+        let lon: Double
+        var coordinate: CLLocationCoordinate2D {
+            CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
+    }
+
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+    private var event: SeshEvent? { events.events.first { $0.id == eventId } }
+    private var members: [EventMember] { events.membersByEvent[eventId] ?? [] }
+    private var isHost: Bool { event?.hostId == profile.id }
+    private var myStatus: String? { members.first { $0.profileId == profile.id }?.status }
+    /// Host always edits; going members too when the host allows it.
+    private var canEdit: Bool {
+        guard let ev = event else { return false }
+        return isHost || (ev.editMode == "everyone" && myStatus == "going")
+    }
+    /// Postgres writes byo keys as lowercase uuid text.
+    private var myUidKey: String { profile.id.uuidString.lowercased() }
+
+    private var goingProfiles: [Profile] {
+        members.filter { $0.status == "going" }
+            .compactMap { events.profilesById[$0.profileId] }
+    }
+
+    private var headcount: Int { goingProfiles.count + (event?.ghosts.count ?? 0) }
+
+    /// Σ weight·r/100 over everyone who drinks — the calculator's
+    /// denominator.
+    private var totalSpread: Double {
+        let p = goingProfiles.reduce(0.0) {
+            $0 + EventProvisioning.spread(weightKg: $1.weightKg, sex: $1.sex)
+        }
+        let g = (event?.ghosts ?? []).reduce(0.0) {
+            $0 + EventProvisioning.spread(weightKg: $1.weightKg, sex: $1.sex)
+        }
+        return p + g
+    }
+
+    var body: some View {
+        ZStack {
+            AtmosphereBackground(accent: .whiskey)
+            if let ev = event {
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        coverBanner(ev)
+                        header(ev)
+                        liveStateRow(ev)
+                        locationRow(ev)
+                        if myStatus == "pending" && ev.liveEndedAt == nil {
+                            rsvpButtons(ev)
+                        }
+                        squadSection(ev)
+                        if ev.liveEndedAt != nil {
+                            nightReportSection(ev)
+                        } else {
+                            calculatorSection(ev)
+                        }
+                        dangerZone(ev)
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 32)
+                }
+            } else {
+                VStack(spacing: 10) {
+                    Text("This event is gone")
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    Text("The host may have cancelled it.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.bronze)
+                }
+            }
+        }
+        .onAppear { syncLocalState() }
+        .onChange(of: event) { _, _ in syncLocalState() }
+        .task(id: eventId) {
+            // Load the night report once for ended events: what everyone
+            // actually drank + the squad schnaps from the linked sesh.
+            guard let ev = event, ev.liveEndedAt != nil,
+                  let sid = ev.liveSessionId, !nightLoaded else { return }
+            nightLoaded = true
+            let sidStr = sid.uuidString.lowercased()
+            if let drinks: [SessionDrink] = try? await supabase
+                .from("session_drinks")
+                .select()
+                .eq("session_id", value: sidStr)
+                .order("created_at", ascending: true)
+                .execute()
+                .value {
+                nightDrinks = drinks
+            }
+            if let snaps: [SessionSnap] = try? await supabase
+                .from("session_snaps")
+                .select()
+                .eq("session_id", value: sidStr)
+                .order("created_at", ascending: true)
+                .execute()
+                .value {
+                nightSnaps = snaps
+            }
+            // The group's route (bars + pre-game markers) for the map —
+            // same table the group recap builds from.
+            struct RouteRow: Decodable {
+                let name: String
+                let lat: Double?
+                let lon: Double?
+            }
+            if let rows: [RouteRow] = try? await supabase
+                .from("session_stops")
+                .select("name, lat, lon, arrived_at")
+                .eq("session_id", value: sidStr)
+                .order("arrived_at", ascending: true)
+                .execute()
+                .value {
+                nightRoute = rows.compactMap { r in
+                    guard let lat = r.lat, let lon = r.lon else { return nil }
+                    return NightRouteStop(name: r.name, lat: lat, lon: lon)
+                }
+            }
+        }
+        .onChange(of: coverItem) { _, item in
+            guard let item, let ev = event, isHost else { return }
+            let t: Task<Void, Never> = Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let jpeg = Self.downscaledJPEG(data) {
+                    await events.uploadCover(eventId: ev.id, jpeg: jpeg)
+                }
+                coverItem = nil
+            }
+            _ = t
+        }
+        .sheet(isPresented: $invitePickerOpen) {
+            EventFriendPicker(
+                friends: friends,
+                alreadyIn: Set(members.map(\.profileId))
+            ) { ids in
+                let t: Task<Void, Never> = Task {
+                    await events.invite(eventId: eventId, recipientIds: ids)
+                }
+                _ = t
+            }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+        .sheet(isPresented: $addGuestOpen) {
+            AddPersonSheet { name, sex, age, weightKg in
+                guard let ev = event else { return }
+                let ghost = GhostMember(name: name, sex: sex, age: age, weightKg: weightKg)
+                let t: Task<Void, Never> = Task {
+                    await events.setGhosts(eventId: ev.id, ev.ghosts + [ghost])
+                }
+                _ = t
+            }
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+        .sheet(isPresented: $locationSheetOpen) {
+            EventLocationSheet(
+                startsAt: event?.startsAt ?? Date(),
+                currentName: event?.locationName,
+                onPickVenue: { venue in
+                    let t: Task<Void, Never> = Task {
+                        await events.setLocation(eventId: eventId, venue: venue)
+                    }
+                    _ = t
+                },
+                onPickSpot: { spot in
+                    let t: Task<Void, Never> = Task {
+                        await events.setLocation(eventId: eventId, spot: spot)
+                    }
+                    _ = t
+                },
+                onClear: {
+                    let t: Task<Void, Never> = Task {
+                        await events.clearLocation(eventId: eventId)
+                    }
+                    _ = t
+                }
+            )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+    }
+
+    /// Event location: tappable for the host while the event is upcoming,
+    /// read-only for everyone else, hidden entirely when unset and locked.
+    @ViewBuilder
+    private func locationRow(_ ev: SeshEvent) -> some View {
+        let editable = isHost && ev.liveEndedAt == nil
+        if let name = ev.locationName {
+            Button {
+                if editable { locationSheetOpen = true }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: ev.locationKind == "venue" ? "mappin.circle.fill" : "house.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.whiskey)
+                        .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(name)
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .lineLimit(1)
+                        Text(ev.locationKind == "venue"
+                             ? "Everyone checks in here when the sesh starts"
+                             : "Group pre-game location when the sesh starts")
+                            .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.bronze)
+                    }
+                    Spacer(minLength: 8)
+                    if editable {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Color.bronze)
+                    }
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.inkElev)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+                )
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(!editable)
+        } else if editable {
+            Button {
+                locationSheetOpen = true
+            } label: {
+                HStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.whiskey.opacity(0.12))
+                            .frame(width: 34, height: 34)
+                        Image(systemName: "mappin.and.ellipse")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Color.whiskey)
+                    }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Set a location")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        Text("A bar to check into, or a pre-game address")
+                            .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.bronze)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.bronze)
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.inkElev)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
+                )
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+    }
+
+    /// Downscale to ≤1400px and recompress — covers don't need originals.
+    private static func downscaledJPEG(_ data: Data, maxDim: CGFloat = 1400) -> Data? {
+        guard let img = UIImage(data: data) else { return nil }
+        let scale = min(1, maxDim / max(img.size.width, img.size.height))
+        let size = CGSize(width: img.size.width * scale, height: img.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let resized = renderer.image { _ in img.draw(in: CGRect(origin: .zero, size: size)) }
+        return resized.jpegData(compressionQuality: 0.72)
+    }
+
+    /// Pull the event's persisted tier + container selection into local
+    /// state (first appear and whenever another device changes them).
+    private func syncLocalState() {
+        guard let ev = event else { return }
+        tier = EventTier.nearest(to: ev.targetBAC)
+        days = ev.nights
+        hoursPerDay = ev.durationHours
+        if !ev.supplies.isEmpty {
+            let types = ev.supplies.keys.compactMap(SupplyContainer.init(rawValue:))
+            if !types.isEmpty {
+                selectedTypes = SupplyContainer.allCases.filter { types.contains($0) }
+            }
+        }
+    }
+
+    // MARK: header
+
+    /// Cover photo banner (host can add/replace; everyone sees it).
+    @ViewBuilder
+    private func coverBanner(_ ev: SeshEvent) -> some View {
+        if let cover = ev.coverURL, let url = URL(string: cover) {
+            ZStack(alignment: .bottomTrailing) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    default:
+                        Rectangle().fill(Color.inkElev)
+                    }
+                }
+                .frame(height: 150)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [.clear, Color.ink.opacity(0.45)],
+                                startPoint: .center, endPoint: .bottom
+                            )
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+                )
+
+                if isHost {
+                    coverPickerButton(compact: true)
+                        .padding(10)
+                }
+            }
+            .padding(.top, 20)
+        } else if isHost {
+            coverPickerButton(compact: false)
+                .padding(.top, 20)
+        }
+    }
+
+    private func coverPickerButton(compact: Bool) -> some View {
+        PhotosPicker(selection: $coverItem, matching: .images) {
+            HStack(spacing: 6) {
+                Image(systemName: "photo.fill")
+                    .font(.system(size: 11, weight: .bold))
+                Text(compact ? "CHANGE" : "ADD A COVER PHOTO")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(1.4)
+            }
+            .foregroundStyle(compact ? Color.cream : Color.bronze)
+            .padding(.horizontal, compact ? 10 : 14)
+            .padding(.vertical, compact ? 7 : 12)
+            .frame(maxWidth: compact ? nil : .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(compact ? Color.ink.opacity(0.6) : Color.cream.opacity(0.03))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
+            )
+        }
+    }
+
+    /// LIVE banner while the linked sesh runs; quiet receipt afterwards.
+    @ViewBuilder
+    private func liveStateRow(_ ev: SeshEvent) -> some View {
+        if ev.isLiveNow {
+            HStack(spacing: 10) {
+                SonarDot(size: 7, color: .whiskey)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("LIVE NOW")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(2)
+                        .foregroundStyle(Color.whiskey)
+                    Text("The group sesh is running — log your drinks on the LIVE tab.")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.7))
+                }
+                Spacer()
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.whiskey.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1)
+            )
+        } else if let ended = ev.liveEndedAt {
+            StatRow(icon: "checkmark.seal.fill",
+                    title: "This night ran live",
+                    value: ended.formatted(.dateTime.day().month(.abbreviated)))
+        }
+    }
+
+    private func header(_ ev: SeshEvent) -> some View {
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(Color.whiskey.opacity(0.12))
+                    .frame(width: 52, height: 52)
+                Image(systemName: ev.kindValue.icon)
+                    .font(.system(size: 21, weight: .bold))
+                    .foregroundStyle(Color.whiskey)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                SectionLabel(ev.kindValue.label)
+                Text(ev.title)
+                    .font(.system(size: 24, weight: .heavy, design: .rounded))
+                    .tracking(-0.8)
+                    .foregroundStyle(Color.cream)
+                    .lineLimit(2)
+                HStack(spacing: 6) {
+                    Text(ev.startsAt.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()).uppercased())
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(Color.bronze)
+                    Text("· \(ev.startsAt.formatted(.relative(presentation: .named)))".uppercased())
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .tracking(1.0)
+                        .foregroundStyle(Color.cream.opacity(0.45))
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 20)
+    }
+
+    private func rsvpButtons(_ ev: SeshEvent) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                let t: Task<Void, Never> = Task {
+                    await events.respond(eventId: ev.id, going: true)
+                }
+                _ = t
+            } label: {
+                Text("I'M GOING")
+                    .font(.system(size: 12, weight: .black, design: .monospaced))
+                    .tracking(1.8)
+                    .foregroundStyle(Color.ink)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.whiskey)
+                    )
+                    .shadow(color: Color.whiskey.opacity(0.4), radius: 14, y: 7)
+            }
+            .buttonStyle(PressScaleStyle())
+
+            Button {
+                let t: Task<Void, Never> = Task {
+                    await events.respond(eventId: ev.id, going: false)
+                }
+                _ = t
+            } label: {
+                Text("CAN'T MAKE IT")
+                    .font(.system(size: 12, weight: .black, design: .monospaced))
+                    .tracking(1.8)
+                    .foregroundStyle(Color.cream.opacity(0.7))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.cream.opacity(0.06))
+                    )
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+    }
+
+    // MARK: squad
+
+    private func squadSection(_ ev: SeshEvent) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel("Squad · \(headcount) going")
+
+            VStack(spacing: 6) {
+                ForEach(members.sorted(by: memberSort), id: \.profileId) { m in
+                    memberRow(m, ev: ev)
+                }
+                ForEach(ev.ghosts) { ghost in
+                    ghostRow(ghost, ev: ev)
+                }
+            }
+
+            if isHost {
+                Button {
+                    invitePickerOpen = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "paperplane.fill")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("INVITE FRIENDS")
+                            .font(.system(size: 13, weight: .black, design: .monospaced))
+                            .tracking(2)
+                    }
+                    .foregroundStyle(Color.ink)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.whiskey)
+                    )
+                    .shadow(color: Color.whiskey.opacity(0.35), radius: 12, y: 6)
+                }
+                .buttonStyle(PressScaleStyle())
+
+                // A guest can't retroactively join a night that already
+                // happened — the add affordance disappears once it ran.
+                if ev.liveEndedAt == nil {
+                    Button {
+                        addGuestOpen = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 10, weight: .bold))
+                            Text("Add a guest who's not on sesh")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        }
+                        .foregroundStyle(Color.bronze)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+            }
+        }
+    }
+
+    private func memberSort(_ a: EventMember, _ b: EventMember) -> Bool {
+        func rank(_ s: String) -> Int { s == "going" ? 0 : (s == "pending" ? 1 : 2) }
+        if rank(a.status) != rank(b.status) { return rank(a.status) < rank(b.status) }
+        return a.createdAt < b.createdAt
+    }
+
+    private func memberRow(_ m: EventMember, ev: SeshEvent) -> some View {
+        let prof = events.profilesById[m.profileId]
+        return HStack(spacing: 10) {
+            AvatarView(
+                urlString: prof?.avatarURL,
+                initial: String((prof?.name ?? "?").prefix(1)).uppercased(),
+                size: 28
+            )
+            Text(prof?.name ?? "Friend")
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.cream)
+            if ev.hostId == m.profileId {
+                Text("HOST")
+                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.whiskey)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.6), lineWidth: 1))
+            }
+            Spacer()
+            Text(m.status.uppercased())
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .tracking(1.2)
+                .foregroundStyle(
+                    m.status == "going" ? Color.whiskey
+                    : (m.status == "pending" ? Color.bronze : Color.cream.opacity(0.35))
+                )
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.cream.opacity(0.04))
+        )
+        .opacity(m.status == "declined" ? 0.55 : 1)
+    }
+
+    private func ghostRow(_ ghost: GhostMember, ev: SeshEvent) -> some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle().fill(Color.cream.opacity(0.07)).frame(width: 28, height: 28)
+                Image(systemName: "person.fill.questionmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.bronze)
+            }
+            Text(ghost.name)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.cream)
+            Text("GUEST")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .tracking(1.2)
+                .foregroundStyle(Color.bronze)
+            Spacer()
+            if isHost {
+                Button {
+                    let remaining = ev.ghosts.filter { $0.id != ghost.id }
+                    let t: Task<Void, Never> = Task {
+                        await events.setGhosts(eventId: ev.id, remaining)
+                    }
+                    _ = t
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.bronze)
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.cream.opacity(0.04))
+        )
+    }
+
+    // MARK: supply calculator
+
+    private func calculatorSection(_ ev: SeshEvent) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionLabel(ev.isBYOB ? "Who brings what" : "Supply calculator")
+
+            VStack(alignment: .leading, spacing: 12) {
+                if isHost {
+                    modeToggles(ev)
+                    CalmDivider()
+                }
+
+                EventTierPicker(tier: Binding(
+                    get: { tier },
+                    set: { newTier in
+                        tier = newTier
+                        if !ev.isBYOB {
+                            applySuggestion(ev, tierOverride: newTier)
+                        }
+                        let t: Task<Void, Never> = Task {
+                            await events.updatePlan(eventId: ev.id, targetBAC: newTier.target)
+                        }
+                        _ = t
+                    }
+                ), enabled: canEdit)
+
+                StatRow(icon: "person.2.fill", title: "Drinking crew", value: "\(headcount)")
+                windowControls(ev)
+
+                CalmDivider()
+
+                if ev.isBYOB {
+                    byobContent(ev)
+                } else {
+                    calcContent(ev)
+                }
+
+                if !canEdit && !ev.isBYOB {
+                    Text("Only \(events.profilesById[ev.hostId]?.name ?? "the host") can edit the list.")
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.4))
+                }
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.inkElev)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Color.cream.opacity(0.06), lineWidth: 1)
+                    )
+            )
+            .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+
+            Disclaimer()
+        }
+    }
+
+    /// Host settings: how is this event planned, and who may edit it.
+    private func modeToggles(_ ev: SeshEvent) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Auto-start: the server opens a live group sesh at start time
+            // with everyone who RSVP'd going. Locked once it has fired.
+            HStack(spacing: 10) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ev.autoLive ? Color.whiskey : Color.bronze)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Start LIVE automatically")
+                        .font(CalmType.body())
+                        .foregroundStyle(Color.cream.opacity(0.85))
+                    Text("Everyone going joins a group sesh at \(ev.startsAt.formatted(date: .omitted, time: .shortened))")
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.bronze)
+                }
+                Spacer(minLength: 8)
+                Toggle("", isOn: Binding(
+                    get: { ev.autoLive },
+                    set: { on in
+                        let t: Task<Void, Never> = Task {
+                            await events.setAutoLive(eventId: ev.id, on)
+                        }
+                        _ = t
+                    }
+                ))
+                    .labelsHidden()
+                    .tint(Color.whiskey)
+                    .disabled(ev.liveSessionId != nil)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                SectionLabel("Planning")
+                HStack(spacing: 8) {
+                    modeChip("CALCULATED", on: !ev.isBYOB) {
+                        let t: Task<Void, Never> = Task {
+                            await events.setModes(eventId: ev.id, planMode: "calc")
+                        }
+                        _ = t
+                    }
+                    modeChip("EVERYONE BRINGS", on: ev.isBYOB) {
+                        let t: Task<Void, Never> = Task {
+                            await events.setModes(eventId: ev.id, planMode: "byob")
+                        }
+                        _ = t
+                    }
+                }
+            }
+            if !ev.isBYOB {
+                VStack(alignment: .leading, spacing: 6) {
+                    SectionLabel("Who can edit")
+                    HStack(spacing: 8) {
+                        modeChip("ONLY ME", on: ev.editMode == "host") {
+                            let t: Task<Void, Never> = Task {
+                                await events.setModes(eventId: ev.id, editMode: "host")
+                            }
+                            _ = t
+                        }
+                        modeChip("EVERYONE GOING", on: ev.editMode == "everyone") {
+                            let t: Task<Void, Never> = Task {
+                                await events.setModes(eventId: ev.id, editMode: "everyone")
+                            }
+                            _ = t
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func modeChip(_ label: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .tracking(1.2)
+                .foregroundStyle(on ? Color.whiskey : Color.bronze)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .background(
+                    Capsule().fill(on ? Color.cream.opacity(0.08) : Color.cream.opacity(0.02))
+                )
+                .overlay(
+                    Capsule().strokeBorder(
+                        on ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.06),
+                        lineWidth: 1
+                    )
+                )
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+
+    /// Days + hours-per-day. Editable for anyone with edit rights,
+    /// read-only StatRow otherwise.
+    @ViewBuilder
+    private func windowControls(_ ev: SeshEvent) -> some View {
+        if canEdit {
+            HStack {
+                HStack(spacing: 10) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.bronze)
+                        .frame(width: 20)
+                    Text("Days")
+                        .font(CalmType.body())
+                        .foregroundStyle(Color.cream.opacity(0.85))
+                }
+                Spacer()
+                miniStepper(
+                    value: days, range: 1...14,
+                    onChange: { newDays in
+                        days = newDays
+                        if !ev.supplies.isEmpty {
+                            applySuggestion(ev, nightsOverride: newDays)
+                        }
+                        let t: Task<Void, Never> = Task {
+                            await events.updatePlan(eventId: ev.id, nights: newDays)
+                        }
+                        _ = t
+                    }
+                )
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    HStack(spacing: 10) {
+                        Image(systemName: "hourglass")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.bronze)
+                            .frame(width: 20)
+                        Text("Hours per day")
+                            .font(CalmType.body())
+                            .foregroundStyle(Color.cream.opacity(0.85))
+                    }
+                    Spacer()
+                    Text("\(formatHours(hoursPerDay)) h")
+                        .font(CalmType.body(14, weight: .bold).monospacedDigit())
+                        .foregroundStyle(Color.cream)
+                        .contentTransition(.numericText())
+                }
+                TintedSlider(value: Binding(
+                    get: { hoursPerDay },
+                    set: { newHours in
+                        hoursPerDay = newHours
+                        if !ev.supplies.isEmpty {
+                            applySuggestion(ev, hoursOverride: newHours)
+                        }
+                        let t: Task<Void, Never> = Task {
+                            await events.updatePlan(eventId: ev.id, durationHours: newHours)
+                        }
+                        _ = t
+                    }
+                ), range: 2...12, step: 0.5, accent: .whiskey)
+            }
+        } else {
+            StatRow(icon: "hourglass", title: "Window",
+                    value: ev.nights > 1
+                        ? "\(formatHours(ev.durationHours)) h × \(ev.nights) days"
+                        : "\(formatHours(ev.durationHours)) h")
+        }
+    }
+
+    private func miniStepper(value: Int, range: ClosedRange<Int>, onChange: @escaping (Int) -> Void) -> some View {
+        HStack(spacing: 0) {
+            Button {
+                if value > range.lowerBound { onChange(value - 1) }
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 12, weight: .black))
+                    .foregroundStyle(value > range.lowerBound ? Color.cream.opacity(0.8) : Color.cream.opacity(0.25))
+                    .frame(width: 34, height: 30)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(value <= range.lowerBound)
+
+            Text("\(value)")
+                .font(.system(size: 15, weight: .black, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .monospacedDigit()
+                .frame(minWidth: 26)
+                .contentTransition(.numericText(value: Double(value)))
+
+            Button {
+                if value < range.upperBound { onChange(value + 1) }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .black))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 34, height: 30)
+                    .background(Color.whiskey)
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.cream.opacity(0.05))
+        )
+    }
+
+    // MARK: calculated-list mode
+
+    @ViewBuilder
+    private func calcContent(_ ev: SeshEvent) -> some View {
+        let gramsNeeded = EventProvisioning.gramsNeeded(
+            target: tier.target, hours: ev.durationHours,
+            nights: ev.nights, totalSpread: totalSpread
+        )
+        let currentGrams = EventProvisioning.grams(of: ev.supplies)
+        let resulting = EventProvisioning.resultingBAC(
+            totalGrams: currentGrams, hours: ev.durationHours,
+            nights: ev.nights, totalSpread: totalSpread
+        )
+        let perPersonDrinks = headcount > 0
+            ? currentGrams / Double(headcount) / Double(max(ev.nights, 1)) / EventProvisioning.gramsPerStandardDrink
+            : 0
+        // Editors' devices recalculate stale lists automatically (driver
+        // fingerprint, EventsService.autoRecalcStaleLists). A viewer can
+        // still catch the brief gap before an editor's next poll — show
+        // them why the number looks off.
+        let fpNow = EventProvisioning.fingerprint(
+            target: tier.target, hours: ev.durationHours,
+            nights: ev.nights, totalSpread: totalSpread, types: selectedTypes
+        )
+        let stale = !canEdit && currentGrams > 0
+            && ev.supplies[EventProvisioning.fingerprintKey] != fpNow
+
+        SectionLabel("What are you buying?")
+        supplyTypeChips(ev)
+
+        if headcount == 0 {
+            Text("Add someone to the squad and the calculator wakes up.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.bronze)
+        } else if ev.supplies.isEmpty {
+            if canEdit {
+                Button {
+                    applySuggestion(ev)
+                } label: {
+                    Text("CALCULATE THE LIST")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(1.8)
+                        .foregroundStyle(Color.ink)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.whiskey)
+                        )
+                }
+                .buttonStyle(PressScaleStyle())
+            } else {
+                Text("The list hasn't been built yet.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.bronze)
+            }
+        } else {
+            VStack(spacing: 6) {
+                ForEach(selectedTypes) { type in
+                    supplyRow(type, ev: ev)
+                }
+            }
+
+            if stale {
+                staleNotice(ev, needed: gramsNeeded, current: currentGrams)
+            }
+
+            resultLine(resulting: resulting, perPersonDrinks: perPersonDrinks, needed: gramsNeeded, current: currentGrams)
+
+            if canEdit {
+                Button {
+                    applySuggestion(ev)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("RECALCULATE THE LIST")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .tracking(1.4)
+                    }
+                    .foregroundStyle(Color.bronze)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.cream.opacity(0.03))
+                    )
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+        }
+    }
+
+    /// Amber note a viewer sees in the moment between the crew changing
+    /// and an editor's device auto-recalculating the list.
+    private func staleNotice(_ ev: SeshEvent, needed: Double, current: Double) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color(red: 0.91, green: 0.58, blue: 0.29))
+            Text("The crew changed — this list is being recalculated. It currently covers \(Int((current / max(needed, 1) * 100).rounded()))% of the \(tier.label) target.")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.8))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(red: 0.91, green: 0.58, blue: 0.29).opacity(0.08))
+        )
+    }
+
+    // MARK: everyone-brings mode
+
+    @ViewBuilder
+    private func byobContent(_ ev: SeshEvent) -> some View {
+        let pooled = ev.pooledBYO
+        let pooledGrams = EventProvisioning.grams(of: pooled)
+        let resulting = EventProvisioning.resultingBAC(
+            totalGrams: pooledGrams, hours: ev.durationHours,
+            nights: ev.nights, totalSpread: totalSpread
+        )
+        let perPersonDrinks = headcount > 0
+            ? pooledGrams / Double(headcount) / Double(max(ev.nights, 1)) / EventProvisioning.gramsPerStandardDrink
+            : 0
+
+        if myStatus == "going" {
+            SectionLabel("What are you bringing?")
+            myBringChips(ev)
+            let mine = ev.byo[myUidKey] ?? [:]
+            let myTypes = SupplyContainer.allCases.filter { (mine[$0.rawValue] ?? 0) > 0 }
+            if !myTypes.isEmpty {
+                VStack(spacing: 6) {
+                    ForEach(myTypes) { type in
+                        byoRow(type, ev: ev, mine: mine)
+                    }
+                }
+            }
+            CalmDivider()
+        }
+
+        SectionLabel("The pool")
+        if pooled.isEmpty {
+            Text("Nobody has added anything yet — tap a drink above to claim what you're bringing.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.bronze)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            VStack(spacing: 6) {
+                ForEach(byoContributors(ev), id: \.0) { key, name, summary in
+                    HStack(spacing: 10) {
+                        Text(name)
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        Spacer(minLength: 8)
+                        Text(summary)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.bronze)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.cream.opacity(key == myUidKey ? 0.06 : 0.03))
+                    )
+                }
+            }
+
+            resultLine(resulting: resulting, perPersonDrinks: perPersonDrinks,
+                       needed: EventProvisioning.gramsNeeded(
+                           target: tier.target, hours: ev.durationHours,
+                           nights: ev.nights, totalSpread: totalSpread
+                       ),
+                       current: pooledGrams)
+        }
+    }
+
+    /// (uid-key, display name, "5× Beer · 1× Wine") per contributor.
+    private func byoContributors(_ ev: SeshEvent) -> [(String, String, String)] {
+        ev.byo.compactMap { key, slice -> (String, String, String)? in
+            let items = slice.filter { $0.value > 0 }
+            guard !items.isEmpty else { return nil }
+            let name: String
+            if key == myUidKey {
+                name = "You"
+            } else if let uid = UUID(uuidString: key), let p = events.profilesById[uid] {
+                name = p.name
+            } else {
+                name = "Someone"
+            }
+            let summary = items
+                .compactMap { k, v -> (SupplyContainer, Int)? in
+                    guard let c = SupplyContainer(rawValue: k) else { return nil }
+                    return (c, v)
+                }
+                .sorted { $0.0.rawValue < $1.0.rawValue }
+                .map { "\($1)× \($0.label)" }
+                .joined(separator: " · ")
+            return (key, name, summary)
+        }
+        .sorted { $0.1 < $1.1 }
+    }
+
+    /// Tap a type to start bringing it (adds one); tap again to drop it.
+    private func myBringChips(_ ev: SeshEvent) -> some View {
+        let mine = ev.byo[myUidKey] ?? [:]
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(SupplyContainer.allCases) { type in
+                    let on = (mine[type.rawValue] ?? 0) > 0
+                    Button {
+                        var items = mine
+                        items[type.rawValue] = on ? 0 : 1
+                        let t: Task<Void, Never> = Task {
+                            await events.setMyBYO(eventId: ev.id, uid: profile.id, items)
+                        }
+                        _ = t
+                    } label: {
+                        HStack(spacing: 6) {
+                            DrinkGlyph(
+                                option: DrinkOption(
+                                    category: type.category, name: type.label,
+                                    detail: type.unit, volumeML: type.volumeML, abv: type.abv
+                                ),
+                                size: 16
+                            )
+                            Text(type.label.uppercased())
+                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                .tracking(1.0)
+                                .foregroundStyle(on ? Color.whiskey : Color.bronze)
+                        }
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule().fill(on ? Color.cream.opacity(0.08) : Color.cream.opacity(0.02))
+                        )
+                        .overlay(
+                            Capsule().strokeBorder(
+                                on ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.06),
+                                lineWidth: 1
+                            )
+                        )
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+            }
+        }
+    }
+
+    /// One of MY bring-list rows — stepper always live for my own items.
+    private func byoRow(_ type: SupplyContainer, ev: SeshEvent, mine: [String: Int]) -> some View {
+        let count = mine[type.rawValue] ?? 0
+        return HStack(spacing: 12) {
+            DrinkGlyph(
+                option: DrinkOption(
+                    category: type.category, name: type.label,
+                    detail: type.unit, volumeML: type.volumeML, abv: type.abv
+                ),
+                size: 24
+            )
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(Color.smoke))
+            .overlay(Circle().strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(type.label)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                Text(type.unit.uppercased())
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .tracking(1.0)
+                    .foregroundStyle(Color.bronze)
+            }
+            Spacer(minLength: 8)
+
+            miniStepper(value: count, range: 0...99) { newCount in
+                var items = mine
+                items[type.rawValue] = newCount
+                let t: Task<Void, Never> = Task {
+                    await events.setMyBYO(eventId: ev.id, uid: profile.id, items)
+                }
+                _ = t
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.cream.opacity(0.03))
+        )
+    }
+
+    private func supplyTypeChips(_ ev: SeshEvent) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(SupplyContainer.allCases) { type in
+                    let on = selectedTypes.contains(type)
+                    Button {
+                        guard canEdit else { return }
+                        var types = selectedTypes
+                        if on {
+                            guard types.count > 1 else { return }
+                            types.removeAll { $0 == type }
+                        } else {
+                            types = SupplyContainer.allCases.filter { types.contains($0) || $0 == type }
+                        }
+                        selectedTypes = types
+                        applySuggestion(ev, typesOverride: types)
+                    } label: {
+                        HStack(spacing: 6) {
+                            DrinkGlyph(
+                                option: DrinkOption(
+                                    category: type.category, name: type.label,
+                                    detail: type.unit, volumeML: type.volumeML, abv: type.abv
+                                ),
+                                size: 16
+                            )
+                            Text(type.label.uppercased())
+                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                .tracking(1.0)
+                                .foregroundStyle(on ? Color.whiskey : Color.bronze)
+                        }
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule().fill(on ? Color.cream.opacity(0.08) : Color.cream.opacity(0.02))
+                        )
+                        .overlay(
+                            Capsule().strokeBorder(
+                                on ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.06),
+                                lineWidth: 1
+                            )
+                        )
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+            }
+        }
+    }
+
+    private func supplyRow(_ type: SupplyContainer, ev: SeshEvent) -> some View {
+        let count = ev.supplies[type.rawValue] ?? 0
+        return HStack(spacing: 12) {
+            DrinkGlyph(
+                option: DrinkOption(
+                    category: type.category, name: type.label,
+                    detail: type.unit, volumeML: type.volumeML, abv: type.abv
+                ),
+                size: 24
+            )
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(Color.smoke))
+            .overlay(Circle().strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(type.label)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                Text(type.unit.uppercased())
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .tracking(1.0)
+                    .foregroundStyle(Color.bronze)
+            }
+            Spacer(minLength: 8)
+
+            if canEdit {
+                miniStepper(value: count, range: 0...999) { newCount in
+                    setCount(newCount, for: type, ev: ev)
+                }
+            } else {
+                Text("× \(count)")
+                    .font(.system(size: 15, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .monospacedDigit()
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.cream.opacity(0.03))
+        )
+    }
+
+    private func resultLine(resulting: Double, perPersonDrinks: Double, needed: Double, current: Double) -> some View {
+        let landedTier = EventTier.nearest(to: resulting)
+        let danger = resulting >= 0.15
+        let hot = resulting > 0.12 && !danger
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("Lands everyone at")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.7))
+                Text("≈ \(bacUnit.formatted(resulting))\(bacUnit.symbol)")
+                    .font(.system(size: 16, weight: .black, design: .rounded).monospacedDigit())
+                    .foregroundStyle(danger ? Color(red: 0.85, green: 0.32, blue: 0.23) : Color.whiskey)
+                    .contentTransition(.numericText())
+                Text("· \(landedTier.label)")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(danger ? Color(red: 0.85, green: 0.32, blue: 0.23) : Color.bronze)
+            }
+            Text("≈ \(perPersonDrinks.formatted(.number.precision(.fractionLength(0)))) standard drinks each\(current > 0 && needed > 0 ? "" : "")")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.5))
+            if danger {
+                Text("That's blackout territory — cut the list down.")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.85, green: 0.32, blue: 0.23))
+            } else if hot {
+                Text("Above the LIT target — heavy night, pace it.")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.91, green: 0.58, blue: 0.29))
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func setCount(_ count: Int, for type: SupplyContainer, ev: SeshEvent) {
+        var supplies = ev.supplies
+        supplies[type.rawValue] = count
+        let t: Task<Void, Never> = Task {
+            await events.setSupplies(eventId: ev.id, supplies)
+        }
+        _ = t
+    }
+
+    /// Rebuild the whole list from the calculator (tier + selected types),
+    /// stamping the driver fingerprint so other devices know it's fresh.
+    private func applySuggestion(
+        _ ev: SeshEvent,
+        tierOverride: EventTier? = nil,
+        typesOverride: [SupplyContainer]? = nil,
+        hoursOverride: Double? = nil,
+        nightsOverride: Int? = nil
+    ) {
+        guard canEdit, !ev.isBYOB else { return }
+        let t = tierOverride ?? tier
+        let types = typesOverride ?? selectedTypes
+        let suggestion = EventProvisioning.fingerprintedSuggestion(
+            target: t.target,
+            hours: hoursOverride ?? ev.durationHours,
+            nights: nightsOverride ?? ev.nights,
+            totalSpread: totalSpread,
+            types: types
+        )
+        let task: Task<Void, Never> = Task {
+            await events.setSupplies(eventId: ev.id, suggestion)
+        }
+        _ = task
+    }
+
+    // MARK: night report (ended events)
+
+    private struct MemberNightStat {
+        let profile: Profile
+        let plannedSummary: String?
+        let stdDrinks: Double
+        let peak: Double
+    }
+
+    /// "5× Beer · 1× Wine" from a BYOB slice.
+    private func byoSummary(_ slice: [String: Int]?) -> String? {
+        guard let slice else { return nil }
+        let items = slice.filter { $0.value > 0 }
+        guard !items.isEmpty else { return nil }
+        return items
+            .compactMap { k, v -> (SupplyContainer, Int)? in
+                guard let c = SupplyContainer(rawValue: k) else { return nil }
+                return (c, v)
+            }
+            .sorted { $0.0.rawValue < $1.0.rawValue }
+            .map { "\($1)× \($0.label)" }
+            .joined(separator: " · ")
+    }
+
+    /// Per-member actuals from the linked session's ledger: personal
+    /// drinks in full, shared rounds split across the going crew — the
+    /// same arithmetic the live group used that night.
+    private func nightStats(_ ev: SeshEvent) -> [MemberNightStat] {
+        let going = members.filter { $0.status == "going" }
+            .compactMap { events.profilesById[$0.profileId] }
+        let n = max(going.count, 1)
+        let sharedRows = nightDrinks.filter(\.shared)
+        return going.map { p in
+            var gramEvents: [(at: Date, grams: Double)] =
+                nightDrinks
+                    .filter { $0.profileId == p.id && !$0.shared }
+                    .map { (at: $0.createdAt, grams: $0.grams) }
+            gramEvents += sharedRows.map { (at: $0.createdAt, grams: $0.grams / Double(n)) }
+            let total = gramEvents.reduce(0.0) { $0 + $1.grams }
+            return MemberNightStat(
+                profile: p,
+                plannedSummary: ev.isBYOB
+                    ? byoSummary(ev.byo[p.id.uuidString.lowercased()])
+                    : nil,
+                stdDrinks: total / EventProvisioning.gramsPerStandardDrink,
+                peak: EventProvisioning.peakBAC(events: gramEvents, weightKg: p.weightKg, sex: p.sex)
+            )
+        }
+        .sorted { $0.peak > $1.peak }
+    }
+
+    private func nightReportSection(_ ev: SeshEvent) -> some View {
+        let stats = nightStats(ev)
+        let avgPeak = stats.isEmpty ? 0 : stats.map(\.peak).reduce(0, +) / Double(stats.count)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            SectionLabel("How it went")
+
+            VStack(alignment: .leading, spacing: 12) {
+                StatRow(icon: "scope", title: "Target level",
+                        value: "\(EventTier.nearest(to: ev.targetBAC).label) · \(bacUnit.formatted(ev.targetBAC))\(bacUnit.symbol)")
+                StatRow(icon: "flame.fill", title: "Group peak (avg)",
+                        value: stats.isEmpty
+                            ? "—"
+                            : "\(EventTier.nearest(to: avgPeak).label) · \(bacUnit.formatted(avgPeak))\(bacUnit.symbol)",
+                        valueColor: .whiskey)
+                if !nightRoute.isEmpty {
+                    StatRow(icon: "mappin.and.ellipse", title: "Stops",
+                            value: "\(nightRoute.count)")
+                }
+
+                if !ev.isBYOB, let plan = shoppingSummary(ev.supplies) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        SectionLabel("The plan said")
+                        Text(plan)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.cream.opacity(0.7))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                if !nightRoute.isEmpty {
+                    nightRouteMap
+                }
+
+                CalmDivider()
+
+                SectionLabel(ev.isBYOB ? "Brought vs drunk" : "Who drank what")
+                if stats.isEmpty || nightDrinks.isEmpty {
+                    Text(nightLoaded
+                         ? "No drinks were logged during this night."
+                         : "Loading the night…")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.bronze)
+                } else {
+                    VStack(spacing: 6) {
+                        ForEach(stats, id: \.profile.id) { s in
+                            memberNightRow(s)
+                        }
+                    }
+                }
+
+                if !nightSnaps.isEmpty {
+                    CalmDivider()
+                    SectionLabel("Squad schnaps · \(nightSnaps.count)")
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+                        ForEach(nightSnaps) { snap in
+                            // Square base first, image as an overlay: a
+                            // bare scaledToFill AsyncImage feeds its own
+                            // size into the grid and the tiles go wonky.
+                            Rectangle()
+                                .fill(Color.smoke)
+                                .aspectRatio(1, contentMode: .fit)
+                                .overlay(
+                                    AsyncImage(url: snap.url) { phase in
+                                        switch phase {
+                                        case .success(let image):
+                                            image.resizable().scaledToFill()
+                                        default:
+                                            Color.clear
+                                        }
+                                    }
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+                                )
+                        }
+                    }
+                }
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.inkElev)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Color.cream.opacity(0.06), lineWidth: 1)
+                    )
+            )
+            .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+
+            Disclaimer()
+        }
+    }
+
+    /// Where the group went — markers + route line, same treatment as a
+    /// posted night on the timeline.
+    private var nightRouteMap: some View {
+        let coords = nightRoute.map(\.coordinate)
+        // A single stop has no bounding box, so `.automatic` zooms to the
+        // max — frame the neighbourhood instead (same trick as posts).
+        let initialCamera: MapCameraPosition = coords.count == 1
+            ? .region(MKCoordinateRegion(
+                center: coords[0],
+                latitudinalMeters: 1500,
+                longitudinalMeters: 1500))
+            : .automatic
+        return VStack(alignment: .leading, spacing: 8) {
+            SectionLabel("Where the night went")
+            Map(initialPosition: initialCamera) {
+                ForEach(nightRoute) { stop in
+                    Marker(stop.name, systemImage: "mappin", coordinate: stop.coordinate)
+                        .tint(Color.whiskey)
+                }
+                if coords.count > 1 {
+                    MapPolyline(coordinates: coords)
+                        .stroke(Color.whiskey, lineWidth: 3)
+                }
+            }
+            .frame(height: 180)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+            )
+            // The route in words, in arrival order.
+            Text(nightRoute.map(\.name).joined(separator: "  →  "))
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.cream.opacity(0.65))
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// "24× Beer · 3× Wine · 1× Vodka" from the calculated list.
+    private func shoppingSummary(_ supplies: [String: Int]) -> String? {
+        let items = supplies
+            .compactMap { k, v -> (SupplyContainer, Int)? in
+                guard let c = SupplyContainer(rawValue: k), v > 0 else { return nil }
+                return (c, v)
+            }
+            .sorted { $0.0.rawValue < $1.0.rawValue }
+        guard !items.isEmpty else { return nil }
+        return items.map { "\($1)× \($0.label)" }.joined(separator: " · ")
+    }
+
+    private func memberNightRow(_ s: MemberNightStat) -> some View {
+        HStack(spacing: 10) {
+            AvatarView(
+                urlString: s.profile.avatarURL,
+                initial: String(s.profile.name.prefix(1)).uppercased(),
+                size: 28
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(s.profile.name)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .lineLimit(1)
+                if let planned = s.plannedSummary {
+                    Text("brought \(planned)")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.bronze)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("≈ \(Int(s.stdDrinks.rounded())) \(Int(s.stdDrinks.rounded()) == 1 ? "drink" : "drinks")")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.7))
+                Text("peak \(bacUnit.formatted(s.peak))\(bacUnit.symbol) · \(EventTier.nearest(to: s.peak).label)")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced).monospacedDigit())
+                    .foregroundStyle(s.peak >= 0.15
+                        ? Color(red: 0.85, green: 0.32, blue: 0.23)
+                        : Color.whiskey)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.cream.opacity(0.04))
+        )
+    }
+
+    // MARK: danger zone
+
+    @ViewBuilder
+    private func dangerZone(_ ev: SeshEvent) -> some View {
+        if isHost {
+            Button {
+                confirmCancel = true
+            } label: {
+                Text("CANCEL EVENT")
+                    .font(.system(size: 12, weight: .black, design: .monospaced))
+                    .tracking(1.8)
+                    .foregroundStyle(Color(red: 0.85, green: 0.32, blue: 0.23))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color(red: 0.85, green: 0.32, blue: 0.23).opacity(0.1))
+                    )
+            }
+            .buttonStyle(PressScaleStyle())
+            .confirmationDialog("Cancel \(ev.title)?", isPresented: $confirmCancel, titleVisibility: .visible) {
+                Button("Cancel the event", role: .destructive) {
+                    let t: Task<Void, Never> = Task {
+                        await events.cancel(eventId: ev.id)
+                    }
+                    _ = t
+                    dismiss()
+                }
+                Button("Keep it", role: .cancel) {}
+            }
+        } else if myStatus != nil {
+            Button {
+                confirmLeave = true
+            } label: {
+                Text("LEAVE EVENT")
+                    .font(.system(size: 12, weight: .black, design: .monospaced))
+                    .tracking(1.8)
+                    .foregroundStyle(Color.cream.opacity(0.6))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.cream.opacity(0.05))
+                    )
+            }
+            .buttonStyle(PressScaleStyle())
+            .confirmationDialog("Leave \(ev.title)?", isPresented: $confirmLeave, titleVisibility: .visible) {
+                Button("Leave event", role: .destructive) {
+                    let t: Task<Void, Never> = Task {
+                        await events.leave(eventId: ev.id)
+                    }
+                    _ = t
+                    dismiss()
+                }
+                Button("Stay", role: .cancel) {}
+            }
+        }
+    }
+}
+
+/// Lean multi-select friend picker for event invites (the session picker
+/// is welded to join codes + the invites table, so events get their own).
+private struct EventFriendPicker: View {
+    @ObservedObject var friends: FriendsService
+    let alreadyIn: Set<UUID>
+    var onInvite: ([UUID]) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var selected: Set<UUID> = []
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    SectionLabel("Invite friends")
+                    Text("Who's coming?")
+                        .font(.system(size: 24, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                }
+                .padding(.top, 22)
+
+                if friends.friends.isEmpty {
+                    Text("Add friends first — the friends tab lives behind your profile.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.bronze)
+                }
+
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 6) {
+                        ForEach(friends.friends) { f in
+                            let inEvent = alreadyIn.contains(f.id)
+                            let on = selected.contains(f.id)
+                            Button {
+                                guard !inEvent else { return }
+                                if on { selected.remove(f.id) } else { selected.insert(f.id) }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    AvatarView(
+                                        urlString: f.avatarURL,
+                                        initial: String(f.name.prefix(1)).uppercased(),
+                                        size: 30
+                                    )
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(f.name)
+                                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(Color.cream)
+                                        if let u = f.username {
+                                            Text("@\(u)")
+                                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                                .foregroundStyle(Color.bronze)
+                                        }
+                                    }
+                                    Spacer()
+                                    if inEvent {
+                                        Text("IN")
+                                            .font(.system(size: 9, weight: .black, design: .monospaced))
+                                            .tracking(1.2)
+                                            .foregroundStyle(Color.bronze)
+                                    } else {
+                                        Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .foregroundStyle(on ? Color.whiskey : Color.cream.opacity(0.25))
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(Color.cream.opacity(on ? 0.06 : 0.03))
+                                )
+                            }
+                            .buttonStyle(PressScaleStyle())
+                            .opacity(inEvent ? 0.5 : 1)
+                        }
+                    }
+                    .padding(.bottom, 90)
+                }
+            }
+            .padding(.horizontal, 22)
+
+            VStack {
+                Spacer()
+                PrimaryGlowButton(
+                    title: selected.isEmpty ? "Pick friends" : "Send \(selected.count) invite\(selected.count == 1 ? "" : "s")",
+                    systemImage: "paperplane.fill"
+                ) {
+                    onInvite(Array(selected))
+                    dismiss()
+                }
+                .disabled(selected.isEmpty)
+                .opacity(selected.isEmpty ? 0.5 : 1)
+                .padding(.horizontal, 22)
+                .padding(.bottom, 20)
+            }
+        }
+    }
+}
+
+/// Dual-mode place search for event locations: bar mode reuses the same
+/// POI bias as the check-in sheet; spot mode searches anything, including
+/// street addresses, so a pre-game at someone's flat works.
+@MainActor
+private final class EventPlaceSearch: ObservableObject {
+    struct Hit: Identifiable, Equatable {
+        let id = UUID()
+        let name: String
+        let detail: String
+        let lat: Double
+        let lon: Double
+    }
+
+    @Published private(set) var hits: [Hit] = []
+    private var current: MKLocalSearch?
+
+    func search(_ query: String, barsOnly: Bool) {
+        current?.cancel()
+        current = nil
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else {
+            hits = []
+            return
+        }
+        let req = MKLocalSearch.Request()
+        req.naturalLanguageQuery = q
+        if barsOnly {
+            req.resultTypes = [.pointOfInterest]
+            req.pointOfInterestFilter = MKPointOfInterestFilter(
+                including: [.nightlife, .restaurant, .brewery, .winery]
+            )
+        } else {
+            req.resultTypes = [.address, .pointOfInterest]
+        }
+        let s = MKLocalSearch(request: req)
+        current = s
+        s.start { [weak self] resp, _ in
+            let items = (resp?.mapItems ?? []).prefix(12).map { item in
+                Hit(
+                    name: item.name ?? "Unknown place",
+                    detail: item.placemark.title ?? "",
+                    lat: item.placemark.coordinate.latitude,
+                    lon: item.placemark.coordinate.longitude
+                )
+            }
+            Task { @MainActor [weak self] in
+                self?.hits = Array(items)
+            }
+        }
+    }
+}
+
+/// Pick the event's location: a bar (auto check-in at live start) or any
+/// place/address (becomes the group pre-game spot at live start).
+private struct EventLocationSheet: View {
+    let startsAt: Date
+    let currentName: String?
+    var onPickVenue: (Venue) -> Void
+    var onPickSpot: (LooseSpot) -> Void
+    var onClear: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @StateObject private var search = EventPlaceSearch()
+    @State private var query = ""
+    @State private var isVenue = true
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    SectionLabel("Event location")
+                    Text("Where's it happening?")
+                        .font(.system(size: 24, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                }
+                .padding(.top, 22)
+
+                HStack(spacing: 8) {
+                    kindChip("BAR · CHECK-IN", on: isVenue) { isVenue = true }
+                    kindChip("SPOT · PRE-GAME", on: !isVenue) { isVenue = false }
+                }
+
+                Text(isVenue
+                     ? "The whole group gets checked in here the moment the sesh starts."
+                     : "Search a place or a street address — it becomes the group's pre-game location when the sesh starts.")
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                TextField(
+                    "", text: $query,
+                    prompt: Text(isVenue ? "Search bars…" : "Bar, flat, address…")
+                        .foregroundColor(Color.cream.opacity(0.3))
+                )
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .autocorrectionDisabled()
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.inkElev)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
+                    )
+                    .onChange(of: query) { _, q in
+                        search.search(q, barsOnly: isVenue)
+                    }
+                    .onChange(of: isVenue) { _, bars in
+                        search.search(query, barsOnly: bars)
+                    }
+
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 6) {
+                        ForEach(search.hits) { hit in
+                            Button {
+                                if isVenue {
+                                    onPickVenue(Venue(
+                                        id: UUID(),
+                                        name: hit.name,
+                                        address: hit.detail.isEmpty ? nil : hit.detail,
+                                        city: nil,
+                                        lat: hit.lat,
+                                        lon: hit.lon,
+                                        createdAt: Date()
+                                    ))
+                                } else {
+                                    onPickSpot(LooseSpot(
+                                        id: UUID(),
+                                        name: hit.name,
+                                        lat: hit.lat,
+                                        lon: hit.lon,
+                                        at: startsAt
+                                    ))
+                                }
+                                dismiss()
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: isVenue ? "mappin.circle.fill" : "mappin")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(Color.whiskey)
+                                        .frame(width: 20)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(hit.name)
+                                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(Color.cream)
+                                            .lineLimit(1)
+                                        if !hit.detail.isEmpty {
+                                            Text(hit.detail)
+                                                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                                                .foregroundStyle(Color.bronze)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(Color.cream.opacity(0.03))
+                                )
+                            }
+                            .buttonStyle(PressScaleStyle())
+                        }
+                    }
+                    .padding(.bottom, 24)
+                }
+
+                if currentName != nil {
+                    Button {
+                        onClear()
+                        dismiss()
+                    } label: {
+                        Text("REMOVE LOCATION")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .tracking(1.6)
+                            .foregroundStyle(Color.cream.opacity(0.6))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.cream.opacity(0.05))
+                            )
+                    }
+                    .buttonStyle(PressScaleStyle())
+                    .padding(.bottom, 16)
+                }
+            }
+            .padding(.horizontal, 22)
+        }
+    }
+
+    private func kindChip(_ label: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { action() }
+        } label: {
+            Text(label)
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .tracking(1.2)
+                .foregroundStyle(on ? Color.whiskey : Color.bronze)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    Capsule().fill(on ? Color.cream.opacity(0.08) : Color.cream.opacity(0.02))
+                )
+                .overlay(
+                    Capsule().strokeBorder(
+                        on ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.06),
+                        lineWidth: 1
+                    )
+                )
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
+/// Create a new event: what, when, how long, how hard.
+private struct EventComposerSheet: View {
+    @ObservedObject var events: EventsService
+    var onCreated: (UUID) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var title = ""
+    @State private var kind: EventKind = .party
+    @State private var startsAt = Calendar.current.date(
+        bySettingHour: 20, minute: 0, second: 0,
+        of: Date().addingTimeInterval(86400)
+    ) ?? Date().addingTimeInterval(86400)
+    @State private var hours: Double = 6
+    @State private var nights: Int = 1
+    @State private var tier: EventTier = .merry
+    @State private var autoLive = false
+    @State private var creating = false
+    /// Optional event location, picked right in the composer.
+    @State private var locationSheetOpen = false
+    @State private var pickedVenue: Venue?
+    @State private var pickedSpot: LooseSpot?
+
+    private var pickedLocationName: String? {
+        pickedVenue?.name ?? pickedSpot?.name
+    }
+
+    var body: some View {
+        ZStack {
+            AtmosphereBackground(accent: .whiskey)
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        SectionLabel("New event")
+                        Text("Plan something")
+                            .font(.system(size: 32, weight: .heavy, design: .rounded))
+                            .tracking(-1.2)
+                            .foregroundStyle(Color.cream)
+                    }
+                    .padding(.top, 18)
+
+                    TextField(
+                        "", text: $title,
+                        prompt: Text("Sara's birthday, Åre trip…")
+                            .foregroundColor(Color.cream.opacity(0.3))
+                    )
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.inkElev)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
+                        )
+
+                    HStack(spacing: 8) {
+                        ForEach(EventKind.allCases) { k in
+                            Button {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    kind = k
+                                    // A trip usually spans a weekend —
+                                    // nudge the default, never override
+                                    // an explicit choice.
+                                    if k == .trip && nights == 1 { nights = 2 }
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: k.icon)
+                                        .font(.system(size: 11, weight: .bold))
+                                    Text(k.label.uppercased())
+                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                        .tracking(1.1)
+                                }
+                                .foregroundStyle(kind == k ? Color.whiskey : Color.bronze)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                                .background(
+                                    Capsule().fill(kind == k ? Color.cream.opacity(0.08) : Color.cream.opacity(0.02))
+                                )
+                                .overlay(
+                                    Capsule().strokeBorder(
+                                        kind == k ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.06),
+                                        lineWidth: 1
+                                    )
+                                )
+                            }
+                            .buttonStyle(PressScaleStyle())
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        SectionLabel("When")
+                        DatePicker(
+                            "", selection: $startsAt,
+                            in: Date()...,
+                            displayedComponents: [.date, .hourAndMinute]
+                        )
+                            .datePickerStyle(.compact)
+                            .labelsHidden()
+                            .tint(Color.whiskey)
+                            .colorScheme(.dark)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.inkElev)
+                    )
+
+                    Button {
+                        locationSheetOpen = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.whiskey.opacity(pickedLocationName == nil ? 0.12 : 0.2))
+                                    .frame(width: 34, height: 34)
+                                Image(systemName: "mappin.and.ellipse")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(Color.whiskey)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                SectionLabel("Where")
+                                Text(pickedLocationName ?? "Set a location")
+                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(Color.cream)
+                                    .lineLimit(1)
+                                Text(pickedVenue != nil
+                                     ? "Everyone checks in here when the sesh starts"
+                                     : (pickedSpot != nil
+                                        ? "Group pre-game location when the sesh starts"
+                                        : "A bar to check into, or a pre-game address"))
+                                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.bronze)
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(Color.bronze)
+                        }
+                        .padding(14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(Color.inkElev)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .strokeBorder(
+                                    pickedLocationName == nil ? Color.cream.opacity(0.1) : Color.whiskey.opacity(0.4),
+                                    lineWidth: 1
+                                )
+                        )
+                    }
+                    .buttonStyle(PressScaleStyle())
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            SectionLabel("Hours per day")
+                            Spacer()
+                            Text("\(formatHours(hours)) h")
+                                .font(.system(size: 14, weight: .bold, design: .rounded).monospacedDigit())
+                                .foregroundStyle(Color.cream)
+                                .contentTransition(.numericText())
+                        }
+                        TintedSlider(value: $hours, range: 2...12, step: 0.5, accent: .whiskey)
+                    }
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.inkElev)
+                    )
+
+                    HStack {
+                        SectionLabel("Days")
+                        Spacer()
+                        HStack(spacing: 0) {
+                            Button {
+                                if nights > 1 { nights -= 1 }
+                            } label: {
+                                Image(systemName: "minus")
+                                    .font(.system(size: 12, weight: .black))
+                                    .foregroundStyle(Color.cream.opacity(nights > 1 ? 0.8 : 0.25))
+                                    .frame(width: 34, height: 30)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(PressScaleStyle())
+
+                            Text("\(nights)")
+                                .font(.system(size: 15, weight: .black, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                                .monospacedDigit()
+                                .frame(minWidth: 22)
+                                .contentTransition(.numericText(value: Double(nights)))
+
+                            Button {
+                                if nights < 14 { nights += 1 }
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 12, weight: .black))
+                                    .foregroundStyle(Color.ink)
+                                    .frame(width: 34, height: 30)
+                                    .background(Color.whiskey)
+                                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(PressScaleStyle())
+                        }
+                    }
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.inkElev)
+                    )
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        SectionLabel("Target level")
+                        EventTierPicker(tier: $tier)
+                        Text("Used by the supply calculator — everyone lands here, based on their own body.")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.45))
+                    }
+
+                    HStack(spacing: 10) {
+                        Image(systemName: "dot.radiowaves.left.and.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(autoLive ? Color.whiskey : Color.bronze)
+                            .frame(width: 20)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Start LIVE automatically")
+                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.85))
+                            Text("Everyone going joins a group sesh at start time")
+                                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.bronze)
+                        }
+                        Spacer(minLength: 8)
+                        Toggle("", isOn: $autoLive)
+                            .labelsHidden()
+                            .tint(Color.whiskey)
+                    }
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.inkElev)
+                    )
+
+                    PrimaryGlowButton(
+                        title: creating ? "Creating…" : "Create event",
+                        systemImage: "sparkles"
+                    ) {
+                        guard !creating else { return }
+                        creating = true
+                        Task {
+                            let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if let id = await events.create(
+                                title: trimmed,
+                                kind: kind,
+                                startsAt: startsAt,
+                                durationHours: hours,
+                                nights: nights,
+                                targetBAC: tier.target,
+                                autoLive: autoLive
+                            ) {
+                                if let v = pickedVenue {
+                                    await events.setLocation(eventId: id, venue: v)
+                                } else if let s = pickedSpot {
+                                    // Re-stamp the spot with the final start
+                                    // time — the user may have changed the
+                                    // date after picking the place.
+                                    await events.setLocation(eventId: id, spot: LooseSpot(
+                                        id: s.id, name: s.name,
+                                        lat: s.lat, lon: s.lon, at: startsAt
+                                    ))
+                                }
+                                dismiss()
+                                onCreated(id)
+                            }
+                            creating = false
+                        }
+                    }
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || creating)
+                    .opacity(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1)
+                    .padding(.bottom, 24)
+                }
+                .padding(.horizontal, 22)
+            }
+        }
+        .sheet(isPresented: $locationSheetOpen) {
+            EventLocationSheet(
+                startsAt: startsAt,
+                currentName: pickedLocationName,
+                onPickVenue: { pickedVenue = $0; pickedSpot = nil },
+                onPickSpot: { pickedSpot = $0; pickedVenue = nil },
+                onClear: { pickedVenue = nil; pickedSpot = nil }
+            )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+    }
+}
+
 private struct SessionView: View {
     let profile: Profile
     @ObservedObject var auth: AuthService
@@ -10284,6 +13884,15 @@ private struct SessionView: View {
     /// in GroupSheet's idle view so rejoining a previous group is a tap
     /// rather than another round of "what was the code again?".
     @StateObject private var savedGroups = SavedGroupsStore()
+    /// Plan-ahead events (parties/trips) — the PLAN tab's main content.
+    @StateObject private var eventsService = EventsService()
+    @State private var eventComposerOpen = false
+    @State private var openEventRef: EventRef?
+    /// The tonight planner starts collapsed — PLAN reads as events-first,
+    /// and the toggle remembers the user's preference.
+    @AppStorage("sesh.plan.tonightExpanded") private var tonightExpanded = false
+    /// PAST EVENTS shelf, collapsed by default (it's an archive).
+    @AppStorage("sesh.plan.pastExpanded") private var pastExpanded = false
     /// Location + venue services. Owned here (the topmost user-facing
     /// view) and passed into LiveSeshView so both modes share one source
     /// of truth for "where am I tonight?" and "what specials apply?".
@@ -10294,6 +13903,9 @@ private struct SessionView: View {
     @State private var hours: Double = 1
     @State private var menuOpen = false
     @State private var profileOpen = false
+    /// First-run feature walkthrough — shown once per account, replayable
+    /// from the profile sheet.
+    @State private var tourOpen = false
     /// Which group sheet is open, if any. Driven by GroupBar taps in
     /// each page. Using a scope-tagged value lets one `.sheet` handle
     /// both modes — fewer state vars, no chance of both sheets fighting.
@@ -11096,7 +14708,8 @@ private struct SessionView: View {
                 BottomTabBar(tab: $tab, liveActive: liveActive,
                              friendsLive: friendsPulse.pulses.contains { $0.live },
                              newOnNightline: liveStories.hasUnseenNightline,
-                             unseenCount: liveStories.unseenNightlineCount)
+                             unseenCount: liveStories.unseenNightlineCount,
+                             eventInvites: eventsService.pendingCount(for: profile.id))
             }
 
             // Floating invite banner — pinned just below the ModeTopBar.
@@ -11445,6 +15058,8 @@ private struct SessionView: View {
             recordSavedGroup(from: planGroup)
             recordSavedGroup(from: liveGroup)
             friends.start()
+            eventsService.start()
+            sweepStaleJourney()
             // Every journey entry created while in a live group carries the
             // group's id — the group recap selects by IDENTITY, so a
             // member's parallel personal stops can never leak into it.
@@ -11475,12 +15090,7 @@ private struct SessionView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
-        .sheet(isPresented: $profileOpen) {
-            ProfileSheet(profile: profile, auth: auth, admin: admin, friends: friends, feed: feed)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(Color.ink)
-        }
+        .modifier(profileSheets)
         .sheet(isPresented: $friendsSheetOpen) {
             FriendsView(friends: friends, auth: auth)
                 .presentationBackground(Color.ink)
@@ -11516,6 +15126,39 @@ private struct SessionView: View {
         }
     }
 
+    /// Per-account, so a second account on the same phone still gets the
+    /// tour — same keying pattern as the nightline last-seen marker.
+    private var tourSeenKey: String { "sesh.tour.seen.v1.\(profile.id)" }
+
+    /// Sweep journey leftovers from a previous night whose end was never
+    /// captured here (ended while away, then resumed straight into a NEW
+    /// session — the old night's recap/clear gets skipped and its pre-game
+    /// spot haunts the next sesh). Delayed a beat so resumeIfAny settles
+    /// first; a multi-day trip session then protects its own entries.
+    private func sweepStaleJourney() {
+        let sweep: Task<Void, Never> = Task { [weak journey, weak liveGroup] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            journey?.purgeStale(before: liveGroup?.session?.createdAt)
+        }
+        _ = sweep
+    }
+
+    /// Profile sheet + first-run tour, bundled into one chain entry to
+    /// keep SessionView.body inside the type-checker's budget (the tour
+    /// is opened from the profile sheet, so they travel together).
+    private var profileSheets: some ViewModifier {
+        ProfileAndTourModifier(
+            profileOpen: $profileOpen,
+            tourOpen: $tourOpen,
+            seenKey: tourSeenKey,
+            profile: profile,
+            auth: auth,
+            admin: admin,
+            friends: friends,
+            feed: feed
+        )
+    }
+
     /// DEALS — the venue-offers discovery map (Phase A). Embedded as a tab,
     /// so it shows no close button; navigation is the bottom bar.
     ///
@@ -11532,6 +15175,19 @@ private struct SessionView: View {
 
     /// TIMELINE — the friends feed of posted nights.
     private var timelinePage: some View {
+        VStack(spacing: 0) {
+            TabHintChip(
+                "Stories and recaps from your friends land here.",
+                key: "nightline"
+            )
+            .padding(.horizontal, 20)
+            .padding(.top, 6)
+
+            timelineFeed
+        }
+    }
+
+    private var timelineFeed: some View {
         TimelineFeedView(
             feed: feed,
             pulse: friendsPulse,
@@ -11623,12 +15279,246 @@ private struct SessionView: View {
     private var planPage: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
+                TabHintChip(
+                    "Plan a party or a trip — invite the crew and know exactly how much to buy.",
+                    key: "plan.events"
+                )
+
+                tonightToggle
+                if tonightExpanded {
+                    tonightPlannerStack
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
+                eventsSection
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 6)
+            .padding(.bottom, 130)
+        }
+        // The tab's one primary action stays pinned above the scroll — an
+        // expanded PAST EVENTS shelf must never push it off screen.
+        .overlay(alignment: .bottom) {
+            PrimaryGlowButton(title: "Plan an event", systemImage: "plus") {
+                eventComposerOpen = true
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 26)
+            .padding(.bottom, 10)
+            .background(
+                LinearGradient(
+                    colors: [Color.ink.opacity(0), Color.ink.opacity(0.88), Color.ink],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .allowsHitTesting(false)
+            )
+        }
+        .animation(.spring(response: 0.55, dampingFraction: 0.82), value: status)
+        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: planGroup.isActive)
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: tonightExpanded)
+        .sheet(isPresented: $eventComposerOpen) {
+            EventComposerSheet(events: eventsService) { newId in
+                openEventRef = EventRef(id: newId)
+            }
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+        .sheet(item: $openEventRef) { ref in
+            EventDetailSheet(
+                eventId: ref.id,
+                events: eventsService,
+                friends: friends,
+                profile: profile
+            )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+        // An armed event just went live server-side: if I'm going and not
+        // already in a live group, resume — the lifecycle job added my
+        // membership row, so resumeIfAny drops me straight into the sesh.
+        .onChange(of: eventsService.events) { _, evs in
+            guard liveGroup.session == nil,
+                  evs.contains(where: {
+                      $0.isLiveNow && eventsService.myStatus(in: $0, uid: profile.id) == "going"
+                  })
+            else { return }
+            let t: Task<Void, Never> = Task { await liveGroup.resumeIfAny() }
+            _ = t
+        }
+    }
+
+    /// "Mauritz's party is live" — headline for the LIVE tab banner when
+    /// the current live group belongs to an event.
+    private var liveEventForBanner: SeshEvent? {
+        eventsService.events.first {
+            $0.isLiveNow && $0.liveSessionId != nil && $0.liveSessionId == liveGroup.session?.id
+        }
+    }
+
+    private var eventLiveHeadline: String? {
+        guard let ev = liveEventForBanner else { return nil }
+        if ev.hostId == profile.id {
+            return "Your \(ev.kindValue.label.lowercased()) is live"
+        }
+        let host = eventsService.profilesById[ev.hostId]?.name
+            .split(separator: " ").first.map(String.init) ?? "The host"
+        return "\(host)'s \(ev.kindValue.label.lowercased()) is live"
+    }
+
+    /// Collapsed entry point for the pre-night planner — "tonight is just
+    /// an event too". Expanding reveals the full classic planner below.
+    private var tonightToggle: some View {
+        Button {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                tonightExpanded.toggle()
+            }
+        } label: {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(Color.whiskey.opacity(0.12))
+                        .frame(width: 34, height: 34)
+                    Image(systemName: "moon.stars.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.whiskey)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    SectionLabel("Tonight")
+                    Text(combinedOrder.isEmpty
+                         ? "Plan tonight's drinks"
+                         : "\(combinedOrder.count) \(combinedOrder.count == 1 ? "drink" : "drinks") planned · \(status.label)")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.bronze)
+                    .rotationEffect(.degrees(tonightExpanded ? 180 : 0))
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.inkElev)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Color.cream.opacity(0.06), lineWidth: 1)
+                    )
+            )
+            .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+
+    /// Upcoming events + pending invites. Empty state teaches the feature.
+    @ViewBuilder
+    private var eventsSection: some View {
+        let upcoming = eventsService.events.filter { !$0.isPast }
+        let past = eventsService.events.filter(\.isPast)
+            .sorted { $0.startsAt > $1.startsAt }
+
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Upcoming")
+                .font(.system(size: 20, weight: .heavy, design: .rounded))
+                .tracking(-0.5)
+                .foregroundStyle(Color.cream)
+                .padding(.top, 4)
+            if upcoming.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Nothing planned yet")
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    Text("Plan a party, a pregame or a weekend trip — invite the crew, pick a level, and the calculator tells you exactly how much to buy.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.cream.opacity(0.025))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+                )
+            } else {
+                ForEach(upcoming) { ev in
+                    eventCardRow(ev)
+                }
+            }
+
+            // The GROUP NIGHTS shelf, but for events: every party or trip
+            // whose night has run (or whose window passed) settles here.
+            // Collapsed by default — it's an archive, not a to-do.
+            if !past.isEmpty {
+                Button {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                        pastExpanded.toggle()
+                    }
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("Past events")
+                            .font(.system(size: 20, weight: .heavy, design: .rounded))
+                            .tracking(-0.5)
+                            .foregroundStyle(Color.cream)
+                        Text("\(past.count)")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.bronze)
+                        Spacer()
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(Color.bronze)
+                            .rotationEffect(.degrees(pastExpanded ? 180 : 0))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 10)
+
+                if pastExpanded {
+                    ForEach(past.prefix(10)) { ev in
+                        eventCardRow(ev, past: true)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: pastExpanded)
+    }
+
+    private func eventCardRow(_ ev: SeshEvent, past: Bool = false) -> some View {
+        EventCard(
+            event: ev,
+            goingCount: (eventsService.membersByEvent[ev.id] ?? [])
+                .filter { $0.status == "going" }.count
+                + ev.ghosts.count,
+            myStatus: eventsService.myStatus(in: ev, uid: profile.id),
+            isPastShelf: past,
+            onTap: { openEventRef = EventRef(id: ev.id) },
+            onRSVP: { going in
+                let t: Task<Void, Never> = Task {
+                    await eventsService.respond(eventId: ev.id, going: going)
+                }
+                _ = t
+            }
+        )
+    }
+
+    /// The classic pre-night planner, unchanged — now lives behind the
+    /// Tonight toggle so the tab reads events-first.
+    @ViewBuilder
+    private var tonightPlannerStack: some View {
                 // The readout leads — it's the number you open the app for.
-                // Same two cards as LIVE so the readout is identical in both.
-                BACNowCard(bac: bac, status: status)
-                SoberByCard(
+                // One hero card: BAC + status + advice + sober-by milestones.
+                TonightHeroCard(
                     bac: bac,
                     status: status,
+                    advice: vibe.advice,
                     hoursSober: hoursUntil(bacThreshold: 0.0),
                     hoursEU: hoursUntil(bacThreshold: 0.02),
                     hoursUS: hoursUntil(bacThreshold: 0.08)
@@ -11655,8 +15545,6 @@ private struct SessionView: View {
                 if planGroup.isActive {
                     GroupRoster(group: planGroup, selfId: profile.id, hours: hours)
                 }
-
-                VibeCard(status: status, message: vibe)
 
                 VStack(spacing: 12) {
                     OrderCard(
@@ -11694,14 +15582,12 @@ private struct SessionView: View {
                         }
                     )
 
-                    InputRow(
-                        kicker: "02",
-                        title: "Duration",
-                        valueText: formatHours(hours),
-                        unit: "hours",
-                        accent: status.color
+                    CollapsibleControlRow(
+                        icon: "hourglass",
+                        title: "Tonight's window",
+                        valueText: "\(formatHours(hours)) h"
                     ) {
-                        TintedSlider(value: $hours, range: 0...12, step: 0.25, accent: status.color)
+                        TintedSlider(value: $hours, range: 0...12, step: 0.25, accent: .whiskey)
                             .onChange(of: hours) { _, newValue in
                                 guard planGroup.isActive else { return }
                                 let t: Task<Void, Never> = Task {
@@ -11722,13 +15608,6 @@ private struct SessionView: View {
 
                 Disclaimer()
                     .padding(.top, 4)
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 6)
-            .padding(.bottom, 72)
-        }
-        .animation(.spring(response: 0.55, dampingFraction: 0.82), value: status)
-        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: planGroup.isActive)
     }
 
     /// LIVE page — the existing LiveSeshView, embedded inline. The
@@ -11746,6 +15625,8 @@ private struct SessionView: View {
             journey: journey,
             profile: profile,
             embedded: true,
+            eventLiveHeadline: eventLiveHeadline,
+            eventLiveTitle: liveEventForBanner?.title,
             onOpenGroupSheet: { groupSheetScope = .live },
             onExitLiveTimeline: {
                 // Solo END handler: clear the timeline and slide back to
@@ -12054,6 +15935,148 @@ private struct BACReadout: View {
 // across modes. Compact by design — these sit at the top of each page.
 
 /// "RIGHT NOW" — the live/projected BAC with the tier scale beneath it.
+/// The calm-pass hero: BAC readout, status, one-line advice, and the
+/// sober-by milestones merged into a single surface. Replaces the old
+/// BACNowCard + SoberByCard + VibeCard stack — the BAC number is the only
+/// loud element on the screen.
+private struct TonightHeroCard: View {
+    let bac: Double
+    let status: Status
+    let advice: String
+    let hoursSober: Double
+    let hoursEU: Double
+    let hoursUS: Double
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+    private var soberAt: Date { Date().addingTimeInterval(hoursSober * 3600) }
+
+    var body: some View {
+        CalmCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    SectionLabel("Right now")
+                    Spacer()
+                    StatusPill(status: status)
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(bacUnit.formatted(bac))
+                        .font(CalmType.hero(46))
+                        .tracking(-1.5)
+                        .foregroundStyle(status.color)
+                        .monospacedDigit()
+                        .contentTransition(.numericText(value: bac))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    Text(bacUnit.caption)
+                        .font(CalmType.label(12))
+                        .tracking(2)
+                        .foregroundStyle(Color.bronze)
+                        .padding(.bottom, 8)
+                }
+
+                BACScale(bac: bac, status: status)
+
+                Text(advice)
+                    .font(CalmType.body())
+                    .foregroundStyle(Color.cream.opacity(0.82))
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if hoursSober > 0 {
+                    CalmDivider()
+                    HStack(spacing: 0) {
+                        soberColumn(
+                            label: "CLEAR",
+                            value: SoberByCard.formatDuration(hoursSober),
+                            detail: soberAt.formatted(.dateTime.hour().minute())
+                        )
+                        if hoursEU > 0 {
+                            soberColumn(
+                                label: "EU LIMIT",
+                                value: SoberByCard.formatDuration(hoursEU),
+                                detail: "\(bacUnit.formattedLimit(0.02))\(bacUnit.symbol)"
+                            )
+                        }
+                        if hoursUS > 0 {
+                            soberColumn(
+                                label: "US LIMIT",
+                                value: SoberByCard.formatDuration(hoursUS),
+                                detail: "\(bacUnit.formattedLimit(0.08))\(bacUnit.symbol)"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func soberColumn(label: String, value: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            SectionLabel(label)
+            Text(value)
+                .font(CalmType.body(14, weight: .bold).monospacedDigit())
+                .foregroundStyle(Color.cream)
+                .contentTransition(.numericText())
+            Text(detail)
+                .font(CalmType.label(9))
+                .tracking(1)
+                .foregroundStyle(Color.bronze)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A quiet one-line row that expands into its control on tap — used for
+/// secondary settings (like the night's duration) that used to be a full
+/// standalone card.
+private struct CollapsibleControlRow<Control: View>: View {
+    let icon: String
+    let title: String
+    let valueText: String
+    @ViewBuilder var control: () -> Control
+    @State private var expanded = false
+
+    var body: some View {
+        CalmCard(padding: 14) {
+            VStack(spacing: 4) {
+                Button {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        expanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: icon)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.bronze)
+                            .frame(width: 20)
+                        Text(title)
+                            .font(CalmType.body())
+                            .foregroundStyle(Color.cream.opacity(0.85))
+                        Spacer(minLength: 8)
+                        Text(valueText)
+                            .font(CalmType.body(14, weight: .bold).monospacedDigit())
+                            .foregroundStyle(Color.cream)
+                            .contentTransition(.numericText())
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Color.bronze)
+                            .rotationEffect(.degrees(expanded ? 180 : 0))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if expanded {
+                    control()
+                        .padding(.top, 10)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+        }
+    }
+}
+
 private struct BACNowCard: View {
     let bac: Double
     let status: Status
@@ -12717,21 +16740,11 @@ private struct OrderCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
-                HStack(spacing: 10) {
-                    Text("01")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .tracking(2)
-                        .foregroundStyle(Color.bronze)
-                    Text(groupActive ? "YOUR TAB" : "DRINKS")
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .tracking(2.4)
-                        .foregroundStyle(Color.cream.opacity(0.78))
-                }
+                SectionLabel(groupActive ? "Your tab" : "Drinks")
                 Spacer()
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("\(order.count)")
-                        .font(.system(size: 38, weight: .heavy, design: .rounded))
-                        .italic()
+                        .font(.system(size: 28, weight: .heavy, design: .rounded))
                         .foregroundStyle(Color.cream)
                         .monospacedDigit()
                         .contentTransition(.numericText(value: Double(order.count)))
@@ -12756,35 +16769,11 @@ private struct OrderCard: View {
             }
 
             if order.isEmpty {
-                Button(action: onOpen) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(Color.ink)
-                            .frame(width: 26, height: 26)
-                            .background(Circle().fill(Color.whiskey))
-                            .shadow(color: Color.whiskey.opacity(0.6), radius: 10)
-                        Text("ORDER YOUR FIRST DRINK")
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .tracking(2.2)
-                            .foregroundStyle(Color.cream)
-                        Spacer()
-                    }
-                    .padding(.vertical, 12)
-                    .padding(.horizontal, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color.whiskey.opacity(0.06))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(
-                                Color.whiskey.opacity(0.28),
-                                style: StrokeStyle(lineWidth: 1, dash: [4, 4])
-                            )
-                    )
-                }
-                .buttonStyle(PressScaleStyle())
+                PrimaryGlowButton(
+                    title: "Order your first drink",
+                    systemImage: "plus",
+                    action: onOpen
+                )
             } else {
                 VStack(spacing: 6) {
                     ForEach(groups) { group in
@@ -12800,29 +16789,21 @@ private struct OrderCard: View {
 
                 HStack(spacing: 8) {
                     Button(action: onOpen) {
-                        HStack(spacing: 10) {
+                        HStack(spacing: 8) {
                             Image(systemName: "plus")
                                 .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(Color.ink)
-                                .frame(width: 28, height: 28)
-                                .background(Circle().fill(Color.whiskey))
-                            Text(groupActive ? "FOR ME" : "ADD ANOTHER DRINK")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            Text(groupActive ? "FOR ME" : "ADD A DRINK")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
                                 .tracking(1.8)
-                                .foregroundStyle(Color.cream)
-                            Spacer(minLength: 0)
                         }
-                        .padding(.vertical, 10)
-                        .padding(.horizontal, 10)
+                        .foregroundStyle(Color.ink)
                         .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
                         .background(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.whiskey.opacity(0.12))
+                                .fill(Color.whiskey)
                         )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .strokeBorder(Color.whiskey.opacity(0.45), lineWidth: 1)
-                        )
+                        .shadow(color: Color.whiskey.opacity(0.4), radius: 14, y: 7)
                     }
                     .buttonStyle(PressScaleStyle())
 
@@ -12830,29 +16811,21 @@ private struct OrderCard: View {
                         Button(action: onOpenShared) {
                             HStack(spacing: 8) {
                                 Image(systemName: "person.2.fill")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundStyle(Color.ink)
-                                    .frame(width: 28, height: 28)
-                                    .background(Circle().fill(Color.whiskey))
+                                    .font(.system(size: 12, weight: .bold))
                                 Text("FOR GROUP")
-                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
                                     .tracking(1.8)
-                                    .foregroundStyle(Color.whiskey)
-                                Spacer(minLength: 0)
                             }
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 10)
+                            .foregroundStyle(Color.whiskey)
                             .frame(maxWidth: .infinity)
+                            .padding(.vertical, 13)
                             .background(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(Color.whiskey.opacity(0.04))
+                                    .fill(Color.inkElev)
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .strokeBorder(
-                                        Color.whiskey.opacity(0.4),
-                                        style: StrokeStyle(lineWidth: 1, dash: [3, 3])
-                                    )
+                                    .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
                             )
                         }
                         .buttonStyle(PressScaleStyle())
@@ -12863,13 +16836,14 @@ private struct OrderCard: View {
         .padding(.vertical, 16)
         .padding(.horizontal, 18)
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.cream.opacity(0.025))
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.inkElev)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Color.cream.opacity(0.06), lineWidth: 1)
+                )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(Color.cream.opacity(0.06), lineWidth: 1)
-        )
+        .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
     }
 }
 
@@ -13083,6 +17057,8 @@ private struct ProfileSheet: View {
     @ObservedObject var friends: FriendsService
     /// Timeline service — used here to load the user's own posted seshs.
     @ObservedObject var feed: FeedService
+    /// Re-opens the first-run walkthrough (closes this sheet first).
+    var onReplayTour: (() -> Void)? = nil
 
     /// The user's own posted seshs (Instagram-style grid) + a tapped one.
     @State private var myPosts: [TimelinePost] = []
@@ -13099,12 +17075,17 @@ private struct ProfileSheet: View {
 
     private let postCols = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
-    init(profile: Profile, auth: AuthService, admin: AdminService, friends: FriendsService, feed: FeedService) {
+    init(
+        profile: Profile, auth: AuthService, admin: AdminService,
+        friends: FriendsService, feed: FeedService,
+        onReplayTour: (() -> Void)? = nil
+    ) {
         self.profile = profile
         self.auth = auth
         self.admin = admin
         self.friends = friends
         self.feed = feed
+        self.onReplayTour = onReplayTour
         _name = State(initialValue: profile.name)
         _age = State(initialValue: Double(profile.age))
         _sex = State(initialValue: profile.sex)
@@ -13165,14 +17146,10 @@ private struct ProfileSheet: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("PROFILE")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .tracking(2.4)
-                            .foregroundStyle(Color.bronze)
+                        SectionLabel("Profile")
                         Text(profile.name)
-                            .font(.system(size: 42, weight: .heavy, design: .rounded))
-                            .italic()
-                            .tracking(-1.8)
+                            .font(.system(size: 36, weight: .heavy, design: .rounded))
+                            .tracking(-1.2)
                             .foregroundStyle(Color.cream)
                     }
 
@@ -13339,7 +17316,7 @@ private struct ProfileSheet: View {
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
                                 .fill(dirty ? Color.cream : Color.cream.opacity(0.35))
                         )
-                        .shadow(color: Color.whiskey.opacity(dirty ? 0.5 : 0), radius: 20, y: 10)
+                        .shadow(color: .black.opacity(dirty ? 0.4 : 0), radius: 14, y: 7)
                     }
                     .disabled(!dirty || saving)
                     .buttonStyle(PressScaleStyle())
@@ -13477,6 +17454,45 @@ private struct ProfileSheet: View {
                                         .tracking(2.0)
                                         .foregroundStyle(Color.cream)
                                     Text("Questions or trouble? We're here.")
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.55))
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(Color.bronze)
+                            }
+                            .padding(.vertical, 14)
+                            .padding(.horizontal, 18)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(Color.whiskey.opacity(0.08))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+
+                    // Replay the first-run tour — for anyone who skipped it
+                    // or wants the 30-second refresher.
+                    if let onReplayTour {
+                        Button {
+                            dismiss()
+                            onReplayTour()
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "questionmark.circle.fill")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(Color.whiskey)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("REPLAY THE TOUR")
+                                        .font(.system(size: 12, weight: .black, design: .monospaced))
+                                        .tracking(2.0)
+                                        .foregroundStyle(Color.cream)
+                                    Text("A 30-second tour of the four tabs.")
                                         .font(.system(size: 11, weight: .medium, design: .rounded))
                                         .foregroundStyle(Color.cream.opacity(0.55))
                                 }
@@ -14321,8 +18337,6 @@ private struct MenuSheet: View {
     @State private var category: DrinkCategory = .beer
     @State private var addedTick: Int = 0
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
-
     private var groups: [OrderGroup] { aggregateOrder(order) }
 
     private var specialsHeader: String {
@@ -14341,26 +18355,21 @@ private struct MenuSheet: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("MENU")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .tracking(2.4)
-                            .foregroundStyle(Color.bronze)
+                        SectionLabel("Menu")
                         Text("Order")
-                            .font(.system(size: 38, weight: .heavy, design: .rounded))
-                            .italic()
-                            .tracking(-1.8)
+                            .font(.system(size: 32, weight: .heavy, design: .rounded))
+                            .tracking(-1.2)
                             .foregroundStyle(Color.cream)
                     }
                     Spacer()
                     if !order.isEmpty {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text("\(order.count)")
-                                .font(.system(size: 32, weight: .heavy, design: .rounded))
-                                .italic()
+                                .font(.system(size: 26, weight: .heavy, design: .rounded))
                                 .foregroundStyle(Color.cream)
                                 .monospacedDigit()
                                 .contentTransition(.numericText(value: Double(order.count)))
-                            Text(order.count == 1 ? "on tab" : "on tab")
+                            Text("on tab")
                                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                                 .tracking(1.6)
                                 .foregroundStyle(Color.bronze)
@@ -14413,16 +18422,18 @@ private struct MenuSheet: View {
                     .padding(.top, 2)
                 }
 
-                LazyVGrid(columns: columns, spacing: 8) {
-                    ForEach(DrinkCategory.allCases) { cat in
-                        CategoryTile(category: cat, selected: category == cat) {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                category = cat
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(DrinkCategory.allCases) { cat in
+                            CategoryTile(category: cat, selected: category == cat) {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    category = cat
+                                }
                             }
                         }
                     }
+                    .padding(.horizontal, 22)
                 }
-                .padding(.horizontal, 22)
 
                 HStack(spacing: 8) {
                     Text(category.label.uppercased())
@@ -14488,8 +18499,7 @@ private struct MenuSheet: View {
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .fill(Color.cream)
                     )
-                    .shadow(color: Color.whiskey.opacity(0.55), radius: 22, y: 10)
-                    .shadow(color: .black.opacity(0.4), radius: 16, y: 8)
+                    .shadow(color: .black.opacity(0.45), radius: 16, y: 8)
                 }
                 .buttonStyle(PressScaleStyle())
                 .padding(.horizontal, 22)
@@ -14507,31 +18517,27 @@ private struct CategoryTile: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 5) {
-                // 24pt emoji equivalence: outer size = 24 / 0.62 ≈ 38.7
-                // so the custom icon matches the emoji's optical size.
-                categoryGlyph(category, size: 38)
+            HStack(spacing: 7) {
+                categoryGlyph(category, size: 24)
                 Text(category.label.uppercased())
-                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(1.1)
-                    .foregroundStyle(selected ? Color.cream : Color.bronze)
+                    .foregroundStyle(selected ? Color.whiskey : Color.bronze)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 11)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                Capsule()
                     .fill(selected ? Color.cream.opacity(0.08) : Color.cream.opacity(0.02))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                Capsule()
                     .strokeBorder(
-                        selected ? Color.whiskey.opacity(0.5) : Color.cream.opacity(0.06),
+                        selected ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.06),
                         lineWidth: 1
                     )
             )
-            .shadow(color: selected ? Color.whiskey.opacity(0.35) : .clear, radius: 10, y: 4)
         }
         .buttonStyle(PressScaleStyle())
     }
@@ -14570,11 +18576,10 @@ private struct OptionRow: View {
             if count == 0 {
                 Button(action: onAdd) {
                     Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(Color.ink)
-                        .frame(width: 30, height: 30)
+                        .frame(width: 34, height: 34)
                         .background(Circle().fill(Color.whiskey))
-                        .shadow(color: Color.whiskey.opacity(0.45), radius: 8)
                 }
                 .buttonStyle(PressScaleStyle())
                 .transition(.scale.combined(with: .opacity))
@@ -14591,7 +18596,6 @@ private struct OptionRow: View {
 
                     Text("\(count)")
                         .font(.system(size: 15, weight: .heavy, design: .rounded))
-                        .italic()
                         .foregroundStyle(Color.cream)
                         .monospacedDigit()
                         .frame(minWidth: 22)
@@ -14858,19 +18862,12 @@ private struct Disclaimer: View {
     private var bacUnit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Rectangle()
-                .fill(Color.whiskey.opacity(0.6))
-                .frame(width: 2)
-                .frame(maxHeight: .infinity)
-
-            Text("Widmark estimate based on drink volume, ABV, body weight and time. Legal limits vary: \(bacUnit.formattedLimit(0.02))\(bacUnit.symbol) in much of the EU, \(bacUnit.formattedLimit(0.08))\(bacUnit.symbol) in the US & UK. Not a legal or medical reference. Never use to decide whether to drive.")
-                .font(.system(size: 11, weight: .regular))
-                .lineSpacing(4)
-                .foregroundStyle(Color.bronze)
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(.leading, 4)
+        Text("Widmark estimate based on drink volume, ABV, body weight and time. Legal limits vary: \(bacUnit.formattedLimit(0.02))\(bacUnit.symbol) in much of the EU, \(bacUnit.formattedLimit(0.08))\(bacUnit.symbol) in the US & UK. Not a legal or medical reference. Never use to decide whether to drive.")
+            .font(.system(size: 11, weight: .regular))
+            .lineSpacing(4)
+            .foregroundStyle(Color.bronze.opacity(0.85))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 4)
     }
 }
 
@@ -15073,11 +19070,11 @@ private struct GroupBar: View {
             HStack(spacing: compact ? 9 : 12) {
                 ZStack {
                     Circle()
-                        .fill(Color.whiskey.opacity(session == nil ? 0.12 : 0.22))
+                        .fill(session == nil ? Color.cream.opacity(0.05) : Color.whiskey.opacity(0.18))
                         .frame(width: compact ? 28 : 32, height: compact ? 28 : 32)
                     Image(systemName: session == nil ? "person.2" : "person.2.fill")
                         .font(.system(size: compact ? 12 : 13, weight: .bold))
-                        .foregroundStyle(Color.whiskey)
+                        .foregroundStyle(session == nil ? Color.bronze : Color.whiskey)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -15139,10 +19136,7 @@ private struct GroupBar: View {
                         lineWidth: 1
                     )
             )
-            .shadow(
-                color: (session == nil ? Color.black : Color.whiskey).opacity(compact ? 0.12 : 0.18),
-                radius: compact ? 10 : 18, y: compact ? 5 : 10
-            )
+            .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
         }
         .buttonStyle(PressScaleStyle())
     }
@@ -15170,11 +19164,14 @@ private struct BottomTabBar: View {
     /// How many unseen stories/posts — shown as a number in a whiskey
     /// ring on the NIGHTLINE tab.
     var unseenCount: Int = 0
+    /// Event invites awaiting the user's RSVP — numbered ring on PLAN.
+    var eventInvites: Int = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 0) {
-            item(.plan,     icon: "gauge.medium",                  label: "PLAN")
+            item(.plan,     icon: "gauge.medium",                  label: "PLAN",
+                 badgeCount: eventInvites)
             item(.live,     icon: "dot.radiowaves.left.and.right", label: "LIVE", pulse: liveActive)
             item(.timeline, icon: "square.stack.fill",             label: "NIGHTLINE",
                  pulse: friendsLive,
@@ -15614,13 +19611,13 @@ private struct VenueChip: View {
             HStack(spacing: compact ? 9 : 12) {
                 ZStack {
                     Circle()
-                        .fill(Color.whiskey.opacity(venues.currentVenue == nil ? 0.14 : 0.32))
+                        .fill(venues.currentVenue == nil ? Color.cream.opacity(0.05) : Color.whiskey.opacity(0.18))
                         .frame(width: compact ? 28 : 32, height: compact ? 28 : 32)
                     Image(systemName: venues.currentVenue == nil
                           ? "mappin.and.ellipse"
                           : "mappin.circle.fill")
                         .font(.system(size: compact ? 12 : 13, weight: .bold))
-                        .foregroundStyle(Color.whiskey)
+                        .foregroundStyle(venues.currentVenue == nil ? Color.bronze : Color.whiskey)
                 }
 
                 if let v = venues.currentVenue {
@@ -15713,10 +19710,7 @@ private struct VenueChip: View {
                         lineWidth: 1
                     )
             )
-            .shadow(
-                color: (venues.currentVenue == nil ? Color.black : Color.whiskey).opacity(compact ? 0.12 : 0.18),
-                radius: compact ? 10 : 18, y: compact ? 5 : 10
-            )
+            .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
         }
         .buttonStyle(PressScaleStyle())
     }
@@ -15812,14 +19806,10 @@ private struct VenueSheet: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("CHECK IN")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .tracking(2.4)
-                            .foregroundStyle(Color.bronze)
+                        SectionLabel("Check in")
                         Text("Tonight at…")
-                            .font(.system(size: 34, weight: .heavy, design: .rounded))
-                            .italic()
-                            .tracking(-1.4)
+                            .font(.system(size: 32, weight: .heavy, design: .rounded))
+                            .tracking(-1.2)
                             .foregroundStyle(Color.cream)
                     }
 
@@ -16681,12 +20671,11 @@ private struct MapKitResultRow: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(
-                        hasOffer ? Color.whiskey.opacity(0.6)
+                        hasOffer ? Color.whiskey.opacity(0.5)
                         : (isCurrent ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.06)),
-                        lineWidth: hasOffer ? 1.5 : 1
+                        lineWidth: 1
                     )
             )
-            .shadow(color: hasOffer ? Color.whiskey.opacity(0.28) : .clear, radius: 12, y: 4)
             .opacity(isPending ? 0.7 : 1)
         }
         .buttonStyle(PressScaleStyle())
@@ -17220,11 +21209,11 @@ private struct GroupSheet: View {
                 .padding(.vertical, 16)
                 .background(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.whiskey.opacity(0.12))
+                        .fill(Color.inkElev)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.whiskey.opacity(0.45), lineWidth: 1)
+                        .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
                 )
             }
             .buttonStyle(PressScaleStyle())
@@ -17260,7 +21249,7 @@ private struct GroupSheet: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(Color.whiskey)
             )
-            .shadow(color: Color.whiskey.opacity(0.5), radius: 18, y: 8)
+            .shadow(color: Color.whiskey.opacity(0.4), radius: 14, y: 7)
         }
         .buttonStyle(PressScaleStyle())
         .disabled(group.busy)
@@ -17609,11 +21598,11 @@ private struct GroupSheet: View {
                     .padding(.horizontal, 16)
                     .background(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.whiskey.opacity(0.12))
+                            .fill(Color.inkElev)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1)
+                            .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
                     )
                 }
                 .buttonStyle(PressScaleStyle())
@@ -18404,6 +22393,10 @@ private struct LiveSeshView: View {
     /// modal). Suppresses the duplicate close header and the "Started…"
     /// chrome that the parent ModeTopBar already covers.
     var embedded: Bool = false
+    /// "Mauritz's party is live" — set when the running group sesh was
+    /// auto-started by a planned event; renders the banner up top.
+    var eventLiveHeadline: String? = nil
+    var eventLiveTitle: String? = nil
     /// Tap-handler for the live GroupBar — opens the parent's group
     /// sheet bound to scope = .live. Only used when embedded; the modal
     /// presentation has no group sheet of its own.
@@ -19039,11 +23032,44 @@ private struct LiveSeshView: View {
             if !embedded {
                 header(bac: bac, status: status, now: now)
             }
-            // Readout leads — same two cards as PLAN.
-            BACNowCard(bac: bac, status: status)
-            SoberByCard(
+            if let headline = eventLiveHeadline {
+                HStack(spacing: 10) {
+                    SonarDot(size: 7, color: .whiskey)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(headline.uppercased())
+                            .font(.system(size: 12, weight: .black, design: .monospaced))
+                            .tracking(1.8)
+                            .foregroundStyle(Color.whiskey)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Text("\(eventLiveTitle.map { "\($0) · " } ?? "")log your drinks — the whole event sees the night together.")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.7))
+                            .lineLimit(2)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.whiskey.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1)
+                )
+            }
+
+            TabHintChip(
+                "Tap a tile at the bottom to log a drink the moment you sip it.",
+                key: "live"
+            )
+
+            // Readout leads — same single hero card as PLAN.
+            TonightHeroCard(
                 bac: bac,
                 status: status,
+                advice: vibeMessage(for: status).advice,
                 hoursSober: hoursUntil(threshold: 0.0, now: now),
                 hoursEU: hoursUntil(threshold: 0.02, now: now),
                 hoursUS: hoursUntil(threshold: 0.08, now: now)
@@ -19137,7 +23163,6 @@ private struct LiveSeshView: View {
                     addPersonOpen = true
                 }
             )
-            VibeCard(status: status, message: vibeMessage(for: status))
             timelineSection(now: now)
             Disclaimer()
                 .padding(.top, 4)
@@ -19509,15 +23534,12 @@ private struct LiveSeshView: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color.cream.opacity(0.025))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(
-                    Color.whiskey.opacity(0.18),
-                    style: StrokeStyle(lineWidth: 1, dash: [4, 4])
-                )
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
         )
     }
 
@@ -19566,12 +23588,12 @@ private struct LiveSeshView: View {
                         .padding(.vertical, 10)
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(shareModeActive ? Color.whiskey.opacity(0.10) : Color.cream.opacity(0.04))
+                                .fill(Color.whiskey.opacity(shareModeActive ? 0.16 : 0.10))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
                                 .strokeBorder(
-                                    shareModeActive ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.08),
+                                    Color.whiskey.opacity(shareModeActive ? 0.55 : 0.35),
                                     lineWidth: 1
                                 )
                         )
@@ -19584,14 +23606,12 @@ private struct LiveSeshView: View {
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: shareModeActive ? "person.2.fill" : "plus")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Color.ink)
-                        .frame(width: 28, height: 28)
-                        .background(Circle().fill(Color.whiskey))
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.bronze)
                     Text(shareModeActive ? "MORE SHARED DRINKS" : "MORE DRINKS")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .tracking(2.0)
-                        .foregroundStyle(Color.cream)
+                        .foregroundStyle(Color.cream.opacity(0.85))
                     Spacer()
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .bold))
@@ -19600,12 +23620,12 @@ private struct LiveSeshView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
                 .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.whiskey.opacity(shareModeActive ? 0.18 : 0.12))
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.inkElev)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.whiskey.opacity(shareModeActive ? 0.55 : 0.4), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
                 )
             }
             .buttonStyle(PressScaleStyle())
@@ -20465,19 +24485,14 @@ private struct LiveRoastCard: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.whiskey.opacity(0.16), Color.whiskey.opacity(0.04)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.inkElev)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Color.cream.opacity(0.06), lineWidth: 1)
                 )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(Color.whiskey.opacity(0.32), lineWidth: 1)
-        )
-        .shadow(color: Color.whiskey.opacity(0.18), radius: 18, y: 8)
+        .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
     }
 }
 
@@ -20822,14 +24837,17 @@ private struct LiveMenuSheet: View {
                                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                                         .tracking(1.4)
                                 }
-                                .foregroundStyle(selectedCategory == cat ? Color.ink : Color.cream.opacity(0.7))
+                                .foregroundStyle(selectedCategory == cat ? Color.whiskey : Color.bronze)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
                                 .background(
-                                    Capsule().fill(selectedCategory == cat ? Color.whiskey : Color.cream.opacity(0.06))
+                                    Capsule().fill(selectedCategory == cat ? Color.cream.opacity(0.08) : Color.cream.opacity(0.02))
                                 )
                                 .overlay(
-                                    Capsule().strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+                                    Capsule().strokeBorder(
+                                        selectedCategory == cat ? Color.whiskey.opacity(0.45) : Color.cream.opacity(0.06),
+                                        lineWidth: 1
+                                    )
                                 )
                             }
                             .buttonStyle(PressScaleStyle())

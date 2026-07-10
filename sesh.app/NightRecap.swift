@@ -485,6 +485,40 @@ final class NightJourneyStore: ObservableObject {
         save()
     }
 
+    /// Sweep entries left behind by a previous night whose end never got
+    /// captured on this device (ended-while-away, immediately resumed into
+    /// a NEW session — the recap/clear for the old night is skipped, and
+    /// its pre-game spot then haunted the next sesh). Anything older than
+    /// 24h that also predates the current session can't belong to tonight.
+    func purgeStale(before sessionStart: Date?) {
+        let dayAgo = Date().addingTimeInterval(-24 * 3600)
+        func isStale(_ at: Date) -> Bool {
+            at < dayAgo && at < (sessionStart ?? Date())
+        }
+
+        for stop in stops where isStale(stop.arrivedAt) {
+            for filename in stop.photoFilenames {
+                try? FileManager.default.removeItem(
+                    at: photosDirectory.appendingPathComponent(filename)
+                )
+            }
+        }
+        let staleStops = stops.contains { isStale($0.arrivedAt) }
+        let staleSpots = looseSpots.contains { isStale($0.at) }
+        let staleTakes = loosePhotos.contains { isStale($0.takenAt) }
+        guard staleStops || staleSpots || staleTakes else { return }
+
+        for take in loosePhotos where isStale(take.takenAt) {
+            try? FileManager.default.removeItem(
+                at: photosDirectory.appendingPathComponent(take.filename)
+            )
+        }
+        stops.removeAll { isStale($0.arrivedAt) }
+        looseSpots.removeAll { isStale($0.at) }
+        loosePhotos.removeAll { isStale($0.takenAt) }
+        save()
+    }
+
     /// Record a check-in. Duplicates collapse while the user is still
     /// checked in at the same bar (launch-time re-validation re-sets
     /// currentVenue with the same venue — not a new stop, even if a food
@@ -874,13 +908,24 @@ struct NightRecap: Codable, Identifiable {
         // spots) — ending it used to silently produce NOTHING, stranding
         // the photos. Anchor the grace window on the earliest activity
         // instead of the first drink; bail only when there's truly nothing.
+        //
+        // When drinks DO exist, the anchor still reaches back to journey
+        // activity from the same night (within 12h of the first drink).
+        // Anchoring on the first drink alone silently dropped any pre-game
+        // spot or check-in more than 90 minutes older than it — the classic
+        // event pre-game, marked hours before the first pour, vanished from
+        // the personal recap while the group recap (built from the server
+        // route, which has no grace filter) kept it.
+        let activity = journeyStops.map(\.arrivedAt)
+            + loosePhotos.map(\.takenAt)
+            + looseSpots.map(\.at)
         let anchor: Date
         if let first = events.first {
-            anchor = first.when
+            let sameNight = first.when.addingTimeInterval(-12 * 3600)
+            anchor = activity
+                .filter { $0 >= sameNight && $0 <= first.when }
+                .min() ?? first.when
         } else {
-            let activity = journeyStops.map(\.arrivedAt)
-                + loosePhotos.map(\.takenAt)
-                + looseSpots.map(\.at)
             guard let earliest = activity.min() else { return nil }
             anchor = earliest
         }
