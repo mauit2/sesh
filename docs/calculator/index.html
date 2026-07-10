@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- Hardening: this page runs INLINE JavaScript only (the calculator math,
+     all local — nothing is sent anywhere). Styles inline, fonts pinned to
+     Google Fonts, no network calls, nothing else may load or frame us. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; connect-src 'none'" />
+<meta name="referrer" content="no-referrer" />
+<meta name="color-scheme" content="dark" />
+<meta name="theme-color" content="#140f0b" />
+<title>Sesh — plan your night</title>
+<meta name="description" content="Try Sesh's BAC calculator on the web: enter your weight and sex, add the drinks you're planning, and see your estimated BAC, your level, and when you'll be clear." />
+<link rel="canonical" href="https://seshapp.xyz/calculator/" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#140f0b; --bg-elev:#1d1610; --cream:#f3e9d8; --cream-dim:#cdbfa8;
+    --whiskey:#e8843c; --bronze:#b3895a; --line:rgba(243,233,216,.10);
+    --sober:#82b87a; --buzzed:#e8a83c; --merry:#e8843c; --lit:#d9523b; --danger:#b82e1f;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;min-height:100vh;
+    background:
+      radial-gradient(120% 90% at 85% -10%, rgba(232,132,60,.18), transparent 55%),
+      radial-gradient(90% 70% at -10% 0%, rgba(179,137,90,.10), transparent 50%),
+      var(--bg);
+    color:var(--cream);
+    font-family:"Hanken Grotesk",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.04;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .orb{
+    position:fixed;z-index:0;pointer-events:none;
+    width:52vmax;height:52vmax;border-radius:50%;
+    background:radial-gradient(circle at 40% 40%, rgba(232,132,60,.14), transparent 62%);
+    top:-18vmax;right:-14vmax;
+    animation:drift 26s ease-in-out infinite alternate;
+    will-change:transform;
+  }
+  @keyframes drift{
+    from{transform:translate3d(0,0,0) scale(1);}
+    to{transform:translate3d(-9vmax,7vmax,0) scale(1.15);}
+  }
+  .bubbles{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+  .bubbles i{
+    position:absolute;bottom:-6vh;border-radius:50%;
+    border:1px solid rgba(232,132,60,.35);
+    background:radial-gradient(circle at 32% 30%, rgba(243,233,216,.16), rgba(232,132,60,.05));
+    opacity:0;animation-name:rise;
+    animation-timing-function:cubic-bezier(.25,.4,.45,1);
+    animation-iteration-count:infinite;will-change:transform,opacity;
+  }
+  @keyframes rise{
+    0%  {opacity:0;transform:translate3d(0,0,0) scale(.6);}
+    8%  {opacity:.85;}
+    72% {opacity:.5;}
+    100%{opacity:0;transform:translate3d(var(--sway,2vw),-108vh,0) scale(1.05);}
+  }
+  .bubbles i:nth-child(1){left:8%;  width:10px;height:10px;--sway: 3vw; animation-duration:13s;}
+  .bubbles i:nth-child(2){left:22%; width:6px; height:6px; --sway:-2vw; animation-duration:17s; animation-delay:3.2s;}
+  .bubbles i:nth-child(3){left:45%; width:12px;height:12px;--sway: 4vw; animation-duration:15s; animation-delay:6.4s;}
+  .bubbles i:nth-child(4){left:68%; width:7px; height:7px; --sway:-3vw; animation-duration:19s; animation-delay:1.6s;}
+  .bubbles i:nth-child(5){left:86%; width:9px; height:9px; --sway: 2vw; animation-duration:14s; animation-delay:8.5s;}
+
+  .wrap{position:relative;z-index:1;max-width:60rem;margin:0 auto;padding:44px 22px 60px;}
+
+  .reveal{opacity:0;transform:translateY(14px);animation:up .8s cubic-bezier(.2,.7,.2,1) forwards;}
+  .d1{animation-delay:.05s}.d2{animation-delay:.18s}.d3{animation-delay:.32s}.d4{animation-delay:.46s}
+  @keyframes up{to{opacity:1;transform:none;}}
+
+  .eyebrow{
+    font-family:var(--mono);font-size:11px;font-weight:700;
+    letter-spacing:.36em;text-transform:uppercase;color:var(--bronze);margin:0 0 14px;
+  }
+  h1{font-family:"Fraunces",Georgia,serif;font-weight:800;
+    font-size:clamp(2.4rem,8vw,3.8rem);line-height:1;letter-spacing:-.04em;
+    margin:0 0 10px;color:var(--cream);}
+  h1 em{font-style:italic;color:var(--whiskey);display:inline-block;
+    animation:tipsy 5.5s ease-in-out infinite;transform-origin:50% 85%;}
+  @keyframes tipsy{
+    0%,100%{transform:rotate(0deg) translateY(0);}
+    30%    {transform:rotate(-2.4deg) translateY(-2px);}
+    65%    {transform:rotate(1.8deg) translateY(1px);}
+  }
+  .tag{color:var(--cream-dim);font-size:15.5px;line-height:1.6;margin:0 0 34px;max-width:38rem;}
+
+  .grid{display:grid;grid-template-columns:1fr;gap:16px;}
+  @media (min-width:760px){.grid{grid-template-columns:1fr 1fr;align-items:start;}}
+
+  .panel{
+    background:linear-gradient(180deg, rgba(243,233,216,.035), rgba(243,233,216,.015));
+    border:1px solid var(--line);border-radius:20px;padding:22px;
+  }
+  .label{
+    font-family:var(--mono);font-size:10.5px;font-weight:700;
+    letter-spacing:.3em;text-transform:uppercase;color:var(--bronze);
+    margin:0 0 14px;
+  }
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 6px;}
+  .row + .slider{margin-bottom:20px;}
+  .row .name{font-size:14.5px;font-weight:600;color:var(--cream);}
+  .row .val{font-family:var(--mono);font-size:13.5px;font-weight:700;color:var(--whiskey);}
+
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;width:100%;height:26px;background:transparent;margin:0;
+  }
+  input[type=range]::-webkit-slider-runnable-track{
+    height:4px;border-radius:2px;background:linear-gradient(90deg, rgba(232,132,60,.55), rgba(232,132,60,.18));
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:20px;height:20px;border-radius:50%;margin-top:-8px;
+    background:var(--cream);border:2px solid var(--whiskey);
+    box-shadow:0 2px 10px rgba(0,0,0,.5);cursor:pointer;
+  }
+  input[type=range]::-moz-range-track{
+    height:4px;border-radius:2px;background:linear-gradient(90deg, rgba(232,132,60,.55), rgba(232,132,60,.18));
+  }
+  input[type=range]::-moz-range-thumb{
+    width:16px;height:16px;border-radius:50%;
+    background:var(--cream);border:2px solid var(--whiskey);cursor:pointer;
+  }
+  input[type=range]:focus-visible{outline:2px solid var(--whiskey);outline-offset:4px;border-radius:4px;}
+
+  .seg{display:flex;gap:8px;margin-bottom:20px;}
+  .seg button{
+    flex:1;padding:10px 8px;border-radius:999px;cursor:pointer;
+    font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--bronze);background:rgba(243,233,216,.02);border:1px solid var(--line);
+    transition:color .15s ease,border-color .15s ease,transform .15s ease;
+  }
+  .seg button:hover{transform:translateY(-1px);}
+  .seg button:active{transform:translateY(0);}
+  .seg button:focus-visible{outline:2px solid var(--whiskey);outline-offset:3px;}
+  .seg button[aria-pressed=true]{color:var(--whiskey);border-color:rgba(232,132,60,.5);background:rgba(243,233,216,.06);}
+
+  .drink{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:10px 12px;border-radius:14px;background:rgba(243,233,216,.025);
+    border:1px solid transparent;margin-bottom:8px;
+    transition:border-color .15s ease;
+  }
+  .drink.on{border-color:rgba(232,132,60,.35);}
+  .drink .info b{display:block;font-size:14.5px;font-weight:600;color:var(--cream);}
+  .drink .info span{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;color:var(--bronze);}
+  .step{display:flex;align-items:center;gap:2px;background:rgba(243,233,216,.05);border-radius:12px;padding:3px;}
+  .step button{
+    width:34px;height:30px;border:0;border-radius:9px;cursor:pointer;font-size:16px;font-weight:800;
+    background:transparent;color:var(--cream);transition:background .15s ease,transform .15s ease;
+  }
+  .step button.plus{background:var(--whiskey);color:#140f0b;}
+  .step button:hover{transform:translateY(-1px);}
+  .step button:active{transform:translateY(0);}
+  .step button:focus-visible{outline:2px solid var(--whiskey);outline-offset:2px;}
+  .step .n{min-width:26px;text-align:center;font-family:var(--mono);font-weight:800;font-size:14px;}
+
+  /* the readout — web twin of the app's Tonight hero */
+  .hero{position:sticky;top:18px;}
+  .status{
+    display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;
+    border:1px solid var(--line);font-family:var(--mono);font-size:11px;font-weight:700;
+    letter-spacing:.24em;text-transform:uppercase;color:var(--cream);margin-bottom:12px;
+  }
+  .status i{width:7px;height:7px;border-radius:50%;background:var(--sober);position:relative;}
+  .status i::after{
+    content:"";position:absolute;inset:-3px;border-radius:50%;
+    border:1px solid currentColor;color:inherit;
+    animation:sonar 2.2s ease-out infinite;
+  }
+  @keyframes sonar{
+    0%  {transform:scale(.6);opacity:.9;}
+    70%,100%{transform:scale(2.4);opacity:0;}
+  }
+  .big{
+    font-family:"Fraunces",Georgia,serif;font-weight:800;letter-spacing:-.04em;
+    font-size:clamp(3.4rem,12vw,4.6rem);line-height:1;margin:2px 0 2px;color:var(--sober);
+    transition:color .3s ease;
+  }
+  .big small{font-size:.35em;letter-spacing:.02em;color:var(--bronze);font-family:var(--mono);font-weight:700;}
+  .alt{font-family:var(--mono);font-size:12px;letter-spacing:.14em;color:var(--cream-dim);margin:0 0 18px;}
+
+  .scale{position:relative;height:26px;margin:0 0 20px;}
+  .scale .track{
+    position:absolute;left:0;right:0;top:10px;height:4px;border-radius:2px;
+    background:linear-gradient(90deg,var(--sober),var(--buzzed),var(--merry),var(--lit),var(--danger));
+    opacity:.85;
+  }
+  .scale .tick{position:absolute;top:4px;width:1px;height:16px;background:rgba(243,233,216,.4);}
+  .scale .tick span{
+    position:absolute;top:18px;left:50%;transform:translateX(-50%);
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;color:var(--bronze);white-space:nowrap;
+  }
+  .scale .thumb{
+    position:absolute;top:5px;width:14px;height:14px;border-radius:50%;margin-left:-7px;
+    background:var(--cream);border:2px solid var(--sober);box-shadow:0 0 12px rgba(0,0,0,.6);
+    transition:left .25s cubic-bezier(.2,.7,.2,1),border-color .3s ease;
+  }
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;}
+  .stat{padding:12px;border-radius:14px;background:rgba(243,233,216,.03);border:1px solid var(--line);}
+  .stat .k{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:var(--bronze);margin:0 0 5px;}
+  .stat .v{font-family:var(--mono);font-size:13.5px;font-weight:800;color:var(--cream);margin:0;}
+  .advice{font-size:14px;line-height:1.55;color:var(--cream-dim);margin:0 0 4px;}
+
+  .cta{margin-top:20px;display:flex;gap:10px;flex-wrap:wrap;}
+  a{font-weight:600;font-size:14px;text-decoration:none;color:var(--cream);
+    padding:10px 18px;border-radius:999px;border:1px solid var(--line);
+    transition:border-color .18s ease,color .18s ease,transform .18s ease;}
+  a:hover{border-color:var(--whiskey);color:var(--whiskey);transform:translateY(-2px);}
+  a:focus-visible{outline:2px solid var(--whiskey);outline-offset:3px;}
+  a:active{transform:translateY(0);}
+
+  .foot{margin-top:40px;font-size:12.5px;line-height:1.7;color:rgba(205,191,168,.55);max-width:44rem;}
+
+  @media (prefers-reduced-motion: reduce){
+    .orb,.bubbles i,.status i::after,h1 em{animation:none;}
+    .reveal{animation:none;opacity:1;transform:none;}
+    .scale .thumb,a,.seg button,.step button{transition:none;}
+  }
+</style>
+</head>
+<body>
+  <div class="orb" aria-hidden="true"></div>
+  <div class="bubbles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+
+  <div class="wrap">
+    <header class="reveal d1">
+      <p class="eyebrow">Sesh · plan mode, on the web</p>
+      <h1>Plan your <em>night.</em></h1>
+      <p class="tag">The same Widmark estimate the app runs in PLAN mode. Tell it who you are,
+        add the drinks you're planning over the evening, and see where you'd land —
+        all in your browser, nothing leaves this page.</p>
+    </header>
+
+    <div class="grid">
+      <section class="panel reveal d2" aria-label="Your details and drinks">
+        <p class="label">You</p>
+
+        <div class="row"><span class="name">Weight</span><span class="val" id="wVal">75 kg</span></div>
+        <input class="slider" type="range" id="weight" min="40" max="140" value="75" step="1" aria-label="Body weight in kilograms" />
+
+        <div class="row" style="margin-top:14px"><span class="name">Sex</span></div>
+        <div class="seg" role="group" aria-label="Sex">
+          <button type="button" id="sexM" aria-pressed="true">Male</button>
+          <button type="button" id="sexF" aria-pressed="false">Female</button>
+        </div>
+
+        <div class="row"><span class="name">Age</span><span class="val" id="aVal">25</span></div>
+        <input class="slider" type="range" id="age" min="18" max="99" value="25" step="1" aria-label="Age in years" />
+        <p class="advice" style="font-size:12px;margin:-8px 0 20px">Age is for context — the Widmark estimate itself uses weight and sex.</p>
+
+        <div class="row"><span class="name">Drinking window</span><span class="val" id="hVal">6 h</span></div>
+        <input class="slider" type="range" id="hours" min="1" max="12" value="6" step="0.5" aria-label="Drinking window in hours" />
+
+        <p class="label" style="margin-top:26px">Tonight's drinks</p>
+        <div id="drinks"></div>
+      </section>
+
+      <section class="panel hero reveal d3" aria-label="Estimated result" aria-live="polite">
+        <p class="label">Where you'd land</p>
+        <span class="status"><i id="statusDot"></i><span id="statusText">Sober</span></span>
+        <p class="big" id="bacBig">0.00<small>‰</small></p>
+        <p class="alt" id="bacAlt">0.000 % BAC · 0 standard drinks</p>
+
+        <div class="scale" aria-hidden="true">
+          <div class="track"></div>
+          <div class="tick" style="left:10%"><span>0.2‰ EU</span></div>
+          <div class="tick" style="left:40%"><span>0.8‰ US</span></div>
+          <div class="thumb" id="thumb" style="left:0%"></div>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><p class="k">Clear</p><p class="v" id="soberBy">—</p></div>
+          <div class="stat"><p class="k">EU limit</p><p class="v" id="euBy">—</p></div>
+          <div class="stat"><p class="k">US limit</p><p class="v" id="usBy">—</p></div>
+        </div>
+
+        <p class="advice" id="advice">Add a drink to see the night take shape.</p>
+
+        <div class="cta">
+          <a href="../">← seshapp.xyz</a>
+          <a href="../privacy/">Privacy</a>
+        </div>
+      </section>
+    </div>
+
+    <p class="foot reveal d4">Widmark estimate based on drink volume, ABV, body weight and time,
+      assuming the drinks are spread across the window. Legal limits vary: 0.2‰ in much of the EU,
+      0.8‰ in the US &amp; UK. Individual results differ — this is not a legal or medical reference,
+      and never a reason to decide whether to drive. The full experience — live tracking, group
+      seshes, recaps — lives in the Sesh app.</p>
+  </div>
+
+<script>
+"use strict";
+// Same math as the app's PLAN mode: grams = ml × abv × 0.789;
+// BAC% = grams / (kg × 1000 × r) × 100 − 0.015 × hours (clamped ≥ 0).
+var CATALOG = [
+  { id:"beerS",   name:"Small beer",    detail:"33 CL · 5%",   ml:330, abv:0.05  },
+  { id:"beerL",   name:"Large beer",    detail:"50 CL · 5%",   ml:500, abv:0.05  },
+  { id:"cider",   name:"Cider",         detail:"33 CL · 4.5%", ml:330, abv:0.045 },
+  { id:"wine",    name:"Glass of wine", detail:"15 CL · 12%",  ml:150, abv:0.12  },
+  { id:"bubbles", name:"Bubbles",       detail:"10 CL · 12%",  ml:100, abv:0.12  },
+  { id:"shot",    name:"Shot",          detail:"4 CL · 40%",   ml:40,  abv:0.40  },
+  { id:"cocktail",name:"Cocktail",      detail:"6 CL · 40%",   ml:60,  abv:0.40  }
+];
+var TIERS = [
+  { max:0.02,     label:"Sober",  color:"var(--sober)",  advice:"Clear head. Water between rounds keeps it that way." },
+  { max:0.05,     label:"Buzzed", color:"var(--buzzed)", advice:"Warm and social — the sweet spot. Pace it and it stays this good." },
+  { max:0.08,     label:"Merry",  color:"var(--merry)",  advice:"Party pace. Grab water and something to eat between rounds." },
+  { max:0.15,     label:"Lit",    color:"var(--lit)",    advice:"Big night. Slow down, hand over your keys, look after your crew." },
+  { max:Infinity, label:"Danger", color:"var(--danger)", advice:"That's blackout territory — cut the plan down, seriously." }
+];
+var state = { weight:75, sex:"m", age:25, hours:6, counts:{} };
+
+function $(id){ return document.getElementById(id); }
+
+function buildDrinks(){
+  var host = $("drinks");
+  CATALOG.forEach(function(d){
+    var row = document.createElement("div");
+    row.className = "drink"; row.id = "row-" + d.id;
+    row.innerHTML =
+      '<span class="info"><b>' + d.name + '</b><span>' + d.detail + '</span></span>' +
+      '<span class="step">' +
+        '<button type="button" aria-label="Remove one ' + d.name + '" data-id="' + d.id + '" data-d="-1">−</button>' +
+        '<span class="n" id="n-' + d.id + '">0</span>' +
+        '<button type="button" class="plus" aria-label="Add one ' + d.name + '" data-id="' + d.id + '" data-d="1">+</button>' +
+      '</span>';
+    host.appendChild(row);
+  });
+  host.addEventListener("click", function(e){
+    var b = e.target.closest("button[data-id]");
+    if(!b) return;
+    var id = b.getAttribute("data-id");
+    var delta = parseInt(b.getAttribute("data-d"), 10);
+    state.counts[id] = Math.max(0, (state.counts[id] || 0) + delta);
+    render();
+  });
+}
+
+function fmtDuration(h){
+  if(h <= 0) return "now";
+  var mins = Math.round(h * 60), hh = Math.floor(mins / 60), mm = mins % 60;
+  return hh > 0 ? (hh + "h " + (mm > 0 ? mm + "m" : "")).trim() : mm + " min";
+}
+function clockAfter(hoursFromNow){
+  var t = new Date(Date.now() + hoursFromNow * 3600 * 1000);
+  return t.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
+}
+
+function render(){
+  $("wVal").textContent = state.weight + " kg";
+  $("aVal").textContent = state.age;
+  $("hVal").textContent = (state.hours % 1 ? state.hours.toFixed(1) : state.hours) + " h";
+  $("sexM").setAttribute("aria-pressed", state.sex === "m");
+  $("sexF").setAttribute("aria-pressed", state.sex === "f");
+
+  var grams = 0, total = 0;
+  CATALOG.forEach(function(d){
+    var n = state.counts[d.id] || 0;
+    $("n-" + d.id).textContent = n;
+    $("row-" + d.id).className = "drink" + (n > 0 ? " on" : "");
+    grams += n * d.ml * d.abv * 0.789;
+    total += n;
+  });
+
+  var r = state.sex === "m" ? 0.68 : 0.55;
+  var raw = grams / (state.weight * 1000 * r) * 100;   // BAC% with zero decay
+  var bac = Math.max(0, raw - 0.015 * state.hours);    // at the end of the window
+
+  var tier = TIERS[0];
+  for(var i = 0; i < TIERS.length; i++){ if(bac < TIERS[i].max){ tier = TIERS[i]; break; } }
+
+  $("bacBig").innerHTML = (bac * 10).toFixed(2) + "<small>‰</small>";
+  $("bacBig").style.color = tier.color;
+  $("bacAlt").textContent = bac.toFixed(3) + " % BAC · " +
+    (grams / 12).toFixed(grams > 0 ? 1 : 0).replace(/\.0$/, "") + " standard drinks";
+  $("statusText").textContent = tier.label;
+  $("statusDot").style.background = tier.color;
+  $("statusDot").style.color = tier.color;
+
+  var pct = Math.min(bac / 0.20, 1) * 100;
+  $("thumb").style.left = pct + "%";
+  $("thumb").style.borderColor = tier.color;
+
+  // Sober / limit ETAs: decay continues after the window closes.
+  function eta(threshold){
+    if(bac <= threshold) return total > 0 ? "already" : "—";
+    var h = (bac - threshold) / 0.015;
+    return fmtDuration(h) + " · " + clockAfter(state.hours + h);
+  }
+  $("soberBy").textContent = eta(0);
+  $("euBy").textContent = eta(0.02);
+  $("usBy").textContent = eta(0.08);
+
+  $("advice").textContent = total === 0
+    ? "Add a drink to see the night take shape."
+    : tier.advice;
+}
+
+buildDrinks();
+$("weight").addEventListener("input", function(){ state.weight = +this.value; render(); });
+$("age").addEventListener("input",    function(){ state.age    = +this.value; render(); });
+$("hours").addEventListener("input",  function(){ state.hours  = +this.value; render(); });
+$("sexM").addEventListener("click",   function(){ state.sex = "m"; render(); });
+$("sexF").addEventListener("click",   function(){ state.sex = "f"; render(); });
+render();
+</script>
+</body>
+</html>
