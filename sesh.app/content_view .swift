@@ -447,9 +447,10 @@ enum DrinkCatalog {
         switch category {
         case .beer:
             return [
-                .init(category: .beer, name: "Small beer", detail: "33 cl · 5%",  volumeML: 330, abv: 0.05),
-                .init(category: .beer, name: "Large beer", detail: "50 cl · 5%",  volumeML: 500, abv: 0.05),
-                .init(category: .beer, name: "Pint",       detail: "57 cl · 5%",  volumeML: 568, abv: 0.05),
+                .init(category: .beer, name: "Small beer",  detail: "33 cl · 5%",  volumeML: 330, abv: 0.05),
+                .init(category: .beer, name: "Medium beer", detail: "40 cl · 5%",  volumeML: 400, abv: 0.05),
+                .init(category: .beer, name: "Large beer",  detail: "50 cl · 5%",  volumeML: 500, abv: 0.05),
+                .init(category: .beer, name: "Pint",        detail: "57 cl · 5%",  volumeML: 568, abv: 0.05),
                 .init(category: .beer, name: "Guinness",   detail: "Pint · 4.2%", volumeML: 568, abv: 0.042, customGlyph: .guinness),
             ]
         case .wine:
@@ -2034,6 +2035,55 @@ final class SessionService: ObservableObject {
         }
     }
 
+    /// Enter an EVENT's auto-started session as a real JOIN, not a resume.
+    /// Membership already exists server-side (the lifecycle enrolls going
+    /// members at start; respond_to_event enrolls late RSVPs), so there's
+    /// no join RPC — but the entry must behave like the user tapped JOIN:
+    /// release any current group (direct switch) and flag the entry
+    /// user-initiated so the drink-carry machinery moves the running
+    /// night in (solo→group and group→group alike). A missing or
+    /// released in_live membership means the user LEFT this sesh on
+    /// purpose — never drag them back.
+    func joinEventSession(id: UUID) async {
+        guard session?.id != id, let uid = myId else { return }
+        busy = true; defer { busy = false }
+        do {
+            struct MemberFlag: Decodable {
+                let inLive: Bool
+                enum CodingKeys: String, CodingKey { case inLive = "in_live" }
+            }
+            let membership: [MemberFlag] = try await supabase
+                .from("session_members")
+                .select("in_live")
+                .eq("session_id", value: id.uuidString.lowercased())
+                .eq("profile_id", value: uid.uuidString.lowercased())
+                .eq("in_live", value: true)
+                .execute()
+                .value
+            guard !membership.isEmpty else { return }
+
+            let row: SeshSession = try await supabase
+                .from("sessions")
+                .select()
+                .eq("id", value: id.uuidString.lowercased())
+                .single()
+                .execute()
+                .value
+            guard row.activeLive else { return }
+
+            if let old = session, old.id != row.id {
+                await silentlyRelease(old)
+            }
+            entryWasUserInitiated = true
+            followingGroupVenue = true
+            await enter(session: row)
+        } catch {
+            // The membership exists server-side; let resume find it so the
+            // user at least lands in the sesh (without the drink carry).
+            await resumeIfAny()
+        }
+    }
+
     /// Leave the group in this mode. Per-mode model (migration 007):
     /// flips just my `in_<scope>` flag on the session_members row,
     /// leaving `in_<other>` untouched. So:
@@ -3357,9 +3407,15 @@ final class VenueService: ObservableObject {
 
     /// If the user is checked into a venue whose row no longer exists in
     /// the fetched list (deleted, renamed), drop the check-in so the chip
-    /// doesn't show a ghost.
+    /// doesn't show a ghost. ONLY table-managed (curated) venues get this
+    /// treatment: a check-in that never came from the table — an event's
+    /// auto check-in place (source .user) — must not be dropped just
+    /// because the fetch doesn't contain it. Doing so during a live sesh
+    /// minted a phantom checkout + "between bars" stop on EVERY venues
+    /// refresh, then the group broadcast re-checked everyone in — an
+    /// endless loop of phantom stops nobody created.
     private func reconcileCurrent() {
-        guard let cur = currentVenue else { return }
+        guard let cur = currentVenue, cur.source == .curated else { return }
         if !venues.contains(where: { $0.id == cur.id }) {
             currentVenue = nil
         } else if let fresh = venues.first(where: { $0.id == cur.id }), fresh != cur {
@@ -3962,13 +4018,19 @@ final class EventsService: ObservableObject {
     /// clobbered.
     private func autoRecalcStaleLists(uid: UUID) async {
         for ev in events {
-            guard !ev.isBYOB, !ev.supplies.isEmpty, !ev.isPast else { continue }
+            guard !ev.isBYOB, !ev.isPast else { continue }
             let mine = membersByEvent[ev.id]?.first { $0.profileId == uid }
             guard ev.hostId == uid || mine?.status == "going" else { continue }
 
             let spread = totalSpread(for: ev)
             guard spread > 0 else { continue }
-            let types = SupplyContainer.allCases.filter { ev.supplies.keys.contains($0.rawValue) }
+            // An empty list initializes itself with the default container
+            // mix the moment there's a crew — nobody should have to press
+            // "calculate" for the plan to exist, and every crew change
+            // (RSVP, manual guest) re-derives it from the fingerprint.
+            let types: [SupplyContainer] = ev.supplies.isEmpty
+                ? [.beerCan, .wineBottle, .vodkaBottle]
+                : SupplyContainer.allCases.filter { ev.supplies.keys.contains($0.rawValue) }
             guard !types.isEmpty else { continue }
 
             let fp = EventProvisioning.fingerprint(
@@ -4071,6 +4133,9 @@ final class EventsService: ObservableObject {
             p_event: eventId.uuidString.lowercased(),
             p_ghosts: ghosts
         )).execute()
+        // A guest changes the crew's spread — recalc the shopping list
+        // right away instead of waiting for the next poll.
+        await refresh()
     }
 
     /// Host-only: flip planning mode (calc/byob) or edit permission.
@@ -6575,8 +6640,9 @@ private struct AuthView: View {
                 LoungeField(
                     label: "USERNAME",
                     text: $username,
-                    placeholder: "pick a @handle",
-                    autocapitalize: false
+                    placeholder: "yourname",
+                    autocapitalize: false,
+                    prefix: "@"
                 )
                 .focused($focus, equals: .username)
                 usernameStatus
@@ -7250,7 +7316,8 @@ private struct FriendsView: View {
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .tracking(2).foregroundStyle(Color.bronze)
             LoungeField(label: "USERNAME", text: $query,
-                        placeholder: "search by @username", autocapitalize: false)
+                        placeholder: "search username", autocapitalize: false,
+                        prefix: "@")
             if let banner {
                 Text(banner)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
@@ -7433,7 +7500,8 @@ private struct UsernameEditorView: View {
                     .font(.system(size: 26, weight: .black, design: .rounded))
                     .italic().foregroundStyle(Color.cream)
                 LoungeField(label: "USERNAME", text: $username,
-                            placeholder: "yourname", autocapitalize: false)
+                            placeholder: "yourname", autocapitalize: false,
+                            prefix: "@")
                 Text("3–20 characters · lowercase letters, numbers, underscore")
                     .font(.system(size: 11, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.5))
@@ -7508,7 +7576,8 @@ private struct FriendPickerSheet: View {
                     .padding(.top, 8)
 
                     LoungeField(label: "FIND BY USERNAME", text: $query,
-                                placeholder: "search @username", autocapitalize: false)
+                                placeholder: "search username", autocapitalize: false,
+                                prefix: "@")
 
                     if !query.trimmingCharacters(in: .whitespaces).isEmpty {
                         // Search results — display name + @username.
@@ -10609,6 +10678,26 @@ private struct LoungeField: View {
     let placeholder: String
     var keyboard: UIKeyboardType = .default
     var autocapitalize: Bool = true
+    /// Fixed prefix rendered inside the field (e.g. "@" for usernames) so
+    /// users don't type it themselves. If they do anyway, it's stripped.
+    var prefix: String? = nil
+
+    /// The bound text with any typed copy of the prefix removed — people
+    /// see "@" and instinctively type it; that must not break validation.
+    private var sanitized: Binding<String> {
+        Binding(
+            get: { text },
+            set: { newValue in
+                if let prefix, !prefix.isEmpty {
+                    var v = newValue
+                    while v.hasPrefix(prefix) { v.removeFirst(prefix.count) }
+                    text = v
+                } else {
+                    text = newValue
+                }
+            }
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -10616,17 +10705,24 @@ private struct LoungeField: View {
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .tracking(2)
                 .foregroundStyle(Color.bronze)
-            TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(Color.cream.opacity(0.3)))
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(Color.cream)
-                .tint(Color.whiskey)
-                .keyboardType(keyboard)
-                .textInputAutocapitalization(autocapitalize ? .words : .never)
-                .autocorrectionDisabled(!autocapitalize)
-                .padding(.vertical, 14)
-                .padding(.horizontal, 16)
-                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.04)))
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+            HStack(spacing: 2) {
+                if let prefix {
+                    Text(prefix)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.whiskey)
+                }
+                TextField("", text: sanitized, prompt: Text(placeholder).foregroundStyle(Color.cream.opacity(0.3)))
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(Color.cream)
+                    .tint(Color.whiskey)
+                    .keyboardType(keyboard)
+                    .textInputAutocapitalization(autocapitalize ? .words : .never)
+                    .autocorrectionDisabled(!autocapitalize)
+            }
+            .padding(.vertical, 14)
+            .padding(.horizontal, 16)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.04)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
         }
     }
 }
@@ -13434,6 +13530,10 @@ private struct EventLocationSheet: View {
                         ForEach(search.hits) { hit in
                             Button {
                                 if isVenue {
+                                    // source .user: this venue never lives
+                                    // in the venues table, so VenueService's
+                                    // reconcile pass must not drop it (that
+                                    // was the phantom-stops loop).
                                     onPickVenue(Venue(
                                         id: UUID(),
                                         name: hit.name,
@@ -13441,6 +13541,7 @@ private struct EventLocationSheet: View {
                                         city: nil,
                                         lat: hit.lat,
                                         lon: hit.lon,
+                                        source: .user,
                                         createdAt: Date()
                                     ))
                                 } else {
@@ -14566,7 +14667,14 @@ private struct SessionView: View {
     /// (Combined with the group→solo transfer on leave, my night follows me
     /// across every transition: solo↔group and group→group.)
     private func carrySoloNightIntoGroup() {
-        guard !live.drinks.isEmpty else { return }
+        // The solo sesh ALWAYS ends when a group takes over — even with
+        // zero drinks to carry. Bailing early here left a phantom solo
+        // running underneath the group: END-for-everyone then dropped the
+        // user into a zombie "LIVE SESH" they never knew existed, minted
+        // a between-bars stop, required a second END, and made the recap
+        // machinery treat the terminal end as a mid-night switch (no
+        // personal recap, no squad recap, nothing cleared).
+        guard live.isActive || !live.drinks.isEmpty else { return }
         let carried = live.drinks.sorted(by: { $0.consumedAt < $1.consumedAt })
         Task {
             for d in carried {
@@ -14574,7 +14682,9 @@ private struct SessionView: View {
             }
             // Re-sync from the DB so a concurrent enter() refresh can't drop
             // the just-carried rows, THEN clear the solo store.
-            await liveGroup.refresh()
+            if !carried.isEmpty {
+                await liveGroup.refresh()
+            }
             live.end()
         }
     }
@@ -14787,7 +14897,7 @@ private struct SessionView: View {
             guard liveGroup.isActive, liveGroup.followingGroupVenue else { return }
             if venues.currentVenue?.id != groupVenue?.id {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
-                    venues.currentVenue = groupVenue
+                    venues.currentVenue = groupVenue.map(hardenedGroupVenue)
                 }
             }
         }
@@ -15035,6 +15145,14 @@ private struct SessionView: View {
                         let heads = max(liveGroup.members.count + liveGroup.ghosts.count, 1)
                         carryDrinksIntoCurrentGroup(previous, headCount: heads, from: oldId)
                     }
+                } else if live.isActive {
+                    // Defensive normalize: an active GROUP alongside an
+                    // active SOLO is never a valid state. A solo that's
+                    // still alive next to a fresh group is tonight's night
+                    // (truly stale solos are auto-ended by endIfStale
+                    // before resume gets here) — carry it in and close it,
+                    // exactly as a user-initiated join would.
+                    carrySoloNightIntoGroup()
                 }
             } else if old != nil && new == nil {
                 ghosts.syncSink = nil
@@ -15129,6 +15247,46 @@ private struct SessionView: View {
     /// Per-account, so a second account on the same phone still gets the
     /// tour — same keying pattern as the nightline last-seen marker.
     private var tourSeenKey: String { "sesh.tour.seen.v1.\(profile.id)" }
+
+    /// A group venue that doesn't exist in the venues table (an event's
+    /// auto check-in place, or any payload written before the source fix)
+    /// must never be tagged `curated` — VenueService's reconcile pass
+    /// drops curated venues whose row is missing, which silently undid
+    /// the adoption on the next venues refresh.
+    private func hardenedGroupVenue(_ v: Venue) -> Venue {
+        guard v.source == .curated,
+              !venues.venues.contains(where: { $0.id == v.id }) else { return v }
+        var hardened = v
+        hardened.source = .user
+        return hardened
+    }
+
+    /// Adopt the event session's location (auto check-in venue or group
+    /// pre-game spot) right after entering it. The `.onChange` observers
+    /// only react to value CHANGES, and on a late join the venue/spot
+    /// arrive in the same beat as the session itself — racing the member
+    /// load, so the observer's isActive guard could reject the one and
+    /// only delta and the location never landed on the joiner's device.
+    /// Reads the session ROW as well as the published mirror, and runs a
+    /// second pass after the first poll settles.
+    private func adoptEventLocationAfterJoin(_ sid: UUID, retry: Bool = true) {
+        guard liveGroup.session?.id == sid, liveGroup.followingGroupVenue else { return }
+        if let v = liveGroup.liveVenue ?? liveGroup.session?.liveVenue,
+           venues.currentVenue?.id != v.id {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                venues.currentVenue = hardenedGroupVenue(v)
+            }
+        }
+        if let spot = liveGroup.liveLooseSpot ?? liveGroup.session?.liveLooseSpot,
+           !journey.looseSpots.contains(where: { $0.id == spot.id }) {
+            journey.adoptLooseSpot(spot)
+        }
+        if retry {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                adoptEventLocationAfterJoin(sid, retry: false)
+            }
+        }
+    }
 
     /// Sweep journey leftovers from a previous night whose end was never
     /// captured here (ended while away, then resumed straight into a NEW
@@ -15335,16 +15493,23 @@ private struct SessionView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
-        // An armed event just went live server-side: if I'm going and not
-        // already in a live group, resume — the lifecycle job added my
-        // membership row, so resumeIfAny drops me straight into the sesh.
+        // An armed event went live server-side: if I'm going, enter its
+        // sesh as a real JOIN — the drink-carry machinery then moves a
+        // running solo night (or another group's night) in with me, same
+        // as tapping JOIN by hand. joinEventSession itself refuses to
+        // re-enter a sesh the user deliberately left (in_live check).
         .onChange(of: eventsService.events) { _, evs in
-            guard liveGroup.session == nil,
-                  evs.contains(where: {
-                      $0.isLiveNow && eventsService.myStatus(in: $0, uid: profile.id) == "going"
-                  })
+            guard let liveEvent = evs.first(where: {
+                      $0.isLiveNow && $0.liveSessionId != nil
+                          && eventsService.myStatus(in: $0, uid: profile.id) == "going"
+                  }),
+                  let sid = liveEvent.liveSessionId,
+                  liveGroup.session?.id != sid
             else { return }
-            let t: Task<Void, Never> = Task { await liveGroup.resumeIfAny() }
+            let t: Task<Void, Never> = Task {
+                await liveGroup.joinEventSession(id: sid)
+                adoptEventLocationAfterJoin(sid)
+            }
             _ = t
         }
     }

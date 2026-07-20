@@ -427,6 +427,10 @@ private struct QuickAddRow: View {
 /// in the Dynamic Island expanded view in place of the old full roster
 /// list — it surfaces the single most "interesting" person and a quip
 /// rather than truncating a large group to the first few rows.
+/// The single drunkest member, on ONE line. The old version stacked a
+/// two-line roast under the name inside a padded card — the Dynamic
+/// Island's expanded view has a hard height budget and the OS simply
+/// cropped whatever didn't fit, cutting the row in half.
 private struct LeaderRoastRow: View {
     let leader: SeshActivityAttributes.RosterMember
     let roast: String?
@@ -434,41 +438,25 @@ private struct LeaderRoastRow: View {
     private var status: WidgetStatus { WidgetStatus(raw: leader.statusRaw) }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
+        HStack(spacing: 7) {
             Text("🥇")
-                .font(.system(size: 16))
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(leader.name)
-                        .font(.system(size: 12, weight: .heavy, design: .rounded))
-                        .foregroundStyle(Color.seshCream)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    Text(BACUnitSetting.current().formatted(leader.bac))
-                        .font(.system(size: 13, weight: .heavy, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(status.color)
-                }
-                if let roast, !roast.isEmpty {
-                    Text(roast)
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .italic()
-                        .foregroundStyle(Color.seshCream.opacity(0.72))
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+                .font(.system(size: 13))
+            Text(leader.name)
+                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                .foregroundStyle(Color.seshCream)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(BACUnitSetting.current().formatted(leader.bac))
+                .font(.system(size: 13, weight: .heavy, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(status.color)
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(Color.seshWhiskey.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.seshWhiskey.opacity(0.3), lineWidth: 1)
         )
     }
 }
