@@ -620,16 +620,9 @@ private struct ChatThreadView: View {
                 if m.kind != "text" {
                     HStack(spacing: 6) {
                         if let url = m.storyURL {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case .success(let image):
-                                    image.resizable().scaledToFill()
-                                default:
-                                    Rectangle().fill(Color.smoke)
-                                }
-                            }
-                            .frame(width: 30, height: 44)
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            DownsampledAsyncImage(url: url, targetPoints: 44, placeholder: Color.smoke)
+                                .frame(width: 30, height: 44)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                         }
                         Text(m.kind == "story_like"
                              ? (mine ? "You liked their story" : "Liked your story")

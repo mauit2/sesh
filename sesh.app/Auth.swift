@@ -336,16 +336,17 @@ final class AuthService: ObservableObject {
 
     private func uploadAvatar(data: Data?, userId: UUID) async throws -> String? {
         guard let data else { return nil }
+        // Avatars display at most ~72pt (~216px @3x) but appear EVERYWHERE
+        // (friends, stories, chats, map pins, every post) — a full-res upload
+        // was ~750 KB re-downloaded constantly. Downscale to 256px (~30 KB).
+        let small = ImageDownscale.jpeg(data, maxDim: 256, quality: 0.82) ?? data
         let path = "\(userId.uuidString.lowercased())/avatar.jpg"
-        _ = try await supabase.storage
-            .from("avatars")
-            .upload(
-                path,
-                data: data,
-                options: FileOptions(contentType: "image/jpeg", upsert: true)
-            )
+        // No thumbnail sibling — the avatar itself is already thumbnail-sized.
+        try await StorageUploader.uploadImage(
+            bucket: "avatars", path: path, data: small, upsert: true, thumbnail: false
+        )
         let url = try supabase.storage.from("avatars").getPublicURL(path: path)
-        // Add a cache-buster so AsyncImage re-fetches after replace
+        // Add a cache-buster so AsyncImage re-fetches after replace.
         return url.absoluteString + "?v=\(Int(Date().timeIntervalSince1970))"
     }
 

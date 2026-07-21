@@ -15,6 +15,12 @@ struct sesh_appApp: App {
     // the in-app invite poll keeps working.
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    init() {
+        // Enlarge the HTTP cache + trim the on-disk image cache so photos stop
+        // being re-downloaded on every launch (the main egress driver).
+        ImageInfra.configure()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

@@ -148,8 +148,8 @@ final class StoriesService: ObservableObject {
         }
         let trimmed = caption?.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            _ = try await supabase.storage.from("stories")
-                .upload(path, data: jpeg, options: FileOptions(contentType: "image/jpeg"))
+            try await StorageUploader.uploadImage(
+                bucket: "stories", path: path, data: jpeg)
             let inserted: LiveStory = try await supabase.from("live_stories")
                 .insert(Row(
                     profile_id: uid.uuidString.lowercased(),
@@ -1629,15 +1629,44 @@ struct DownsampledAsyncImage: View {
     private func load() async {
         guard let url else { return }
         let maxPixels = Int(targetPoints * UIScreen.main.scale)
-        let key = "\(url.absoluteString)@\(maxPixels)" as NSString
-        if let cached = RemoteImageCache.shared.object(forKey: key) {
+        let cacheKey = "\(url.absoluteString)@\(maxPixels)"
+        let memKey = cacheKey as NSString
+
+        // 1) hot in-memory → 2) persistent on-disk (survives relaunches).
+        if let cached = RemoteImageCache.shared.object(forKey: memKey) {
             image = cached; return
         }
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
-              let down = Self.downsample(data: data, maxPixels: maxPixels) else { return }
-        let cost = down.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
-        RemoteImageCache.shared.setObject(down, forKey: key, cost: cost)
+        if let disk = SeshImageCache.image(for: cacheKey) {
+            RemoteImageCache.shared.setObject(disk, forKey: memKey, cost: Self.cost(disk))
+            image = disk; return
+        }
+
+        // 3) network. For small displays, pull the tiny server-side thumbnail
+        // sibling (a few dozen KB) instead of the full original. Legacy content
+        // with no thumb 404s once, is remembered, and falls back to the original.
+        var data: Data?
+        if maxPixels <= 512, url.hasSeshThumbnails, let thumb = url.seshThumbURL,
+           !SeshImageCache.isThumbMissing(thumb.absoluteString) {
+            data = await Self.fetch(thumb)
+            if data == nil { SeshImageCache.markThumbMissing(thumb.absoluteString) }
+        }
+        if data == nil { data = await Self.fetch(url) }
+
+        guard let data, let down = Self.downsample(data: data, maxPixels: maxPixels) else { return }
+        RemoteImageCache.shared.setObject(down, forKey: memKey, cost: Self.cost(down))
+        SeshImageCache.store(down, for: cacheKey)
         if !Task.isCancelled { image = down }
+    }
+
+    private static func cost(_ img: UIImage) -> Int {
+        img.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
+    }
+
+    /// Fetch bytes, treating any non-2xx (e.g. a missing thumbnail) as a miss.
+    private static func fetch(_ u: URL) async -> Data? {
+        guard let (data, resp) = try? await URLSession.shared.data(from: u) else { return nil }
+        if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
+        return data
     }
 
     private static func downsample(data: Data, maxPixels: Int) -> UIImage? {

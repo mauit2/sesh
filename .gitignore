@@ -34,6 +34,10 @@ Package.resolved
 Pods/
 Carthage/Build/
 
+# Node maintenance scripts (scripts/) — keep deps out of the repo
+node_modules/
+scripts/package-lock.json
+
 # Backups & scratch files
 *.bak
 *~

@@ -1941,9 +1941,11 @@ final class PostService: ObservableObject {
                 let localURL = history.photoURL(filename, in: recap.id)
                 guard let data = try? Data(contentsOf: localURL) else { continue }
                 let path = "\(uidStr)/\(recapIdStr)/\(filename)"
-                _ = try await supabase.storage.from("recap-photos")
-                    .upload(path, data: data,
-                            options: FileOptions(contentType: "image/jpeg", upsert: true))
+                // Re-compress at upload too — some local originals slip through
+                // at multi-MB; 1400px/q0.7 lands ~300 KB and keeps quality.
+                let upload = ImageDownscale.jpeg(data, maxDim: 1400, quality: 0.7) ?? data
+                try await StorageUploader.uploadImage(
+                    bucket: "recap-photos", path: path, data: upload, upsert: true)
                 let pub = try supabase.storage.from("recap-photos")
                     .getPublicURL(path: path).absoluteString
                 urls.append(pub)

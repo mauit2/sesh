@@ -539,8 +539,8 @@ final class EventsService: ObservableObject {
     func uploadCover(eventId: UUID, jpeg: Data) async {
         let path = "\(eventId.uuidString.lowercased())/cover.jpg"
         do {
-            _ = try await supabase.storage.from("event-covers")
-                .upload(path, data: jpeg, options: .init(contentType: "image/jpeg", upsert: true))
+            try await StorageUploader.uploadImage(
+                bucket: "event-covers", path: path, data: jpeg, upsert: true)
             let base = try supabase.storage.from("event-covers").getPublicURL(path: path)
             let url = "\(base.absoluteString)?v=\(Int(Date().timeIntervalSince1970))"
             patch(eventId) { $0.coverURL = url }
@@ -1015,14 +1015,8 @@ struct EventCard: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
                     if let cover = event.coverURL, let url = URL(string: cover) {
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image.resizable().scaledToFill()
-                            default:
-                                Rectangle().fill(Color.whiskey.opacity(0.12))
-                            }
-                        }
+                        DownsampledAsyncImage(url: url, targetPoints: 44,
+                                              placeholder: Color.whiskey.opacity(0.12))
                         .frame(width: 44, height: 44)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(
@@ -1489,14 +1483,7 @@ struct EventDetailSheet: View {
     private func coverBanner(_ ev: SeshEvent) -> some View {
         if let cover = ev.coverURL, let url = URL(string: cover) {
             ZStack(alignment: .bottomTrailing) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    default:
-                        Rectangle().fill(Color.inkElev)
-                    }
-                }
+                DownsampledAsyncImage(url: url, targetPoints: 430, placeholder: Color.inkElev)
                 .frame(height: 150)
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -2672,14 +2659,7 @@ struct EventDetailSheet: View {
                             .fill(Color.smoke)
                             .aspectRatio(1, contentMode: .fit)
                             .overlay(
-                                AsyncImage(url: url) { phase in
-                                    switch phase {
-                                    case .success(let image):
-                                        image.resizable().scaledToFill()
-                                    default:
-                                        Color.clear
-                                    }
-                                }
+                                DownsampledAsyncImage(url: url, targetPoints: 170, placeholder: .clear)
                             )
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             .overlay(

@@ -3691,8 +3691,8 @@ final class SessionSnapsService: ObservableObject {
             let storage_path: String
         }
         do {
-            _ = try await supabase.storage.from("session-snaps")
-                .upload(path, data: jpeg, options: FileOptions(contentType: "image/jpeg"))
+            try await StorageUploader.uploadImage(
+                bucket: "session-snaps", path: path, data: jpeg)
             let inserted: SessionSnap = try await supabase.from("session_snaps")
                 .insert(Row(
                     session_id: sessionId.uuidString.lowercased(),
@@ -9952,19 +9952,11 @@ struct AvatarView: View {
             Circle()
                 .fill(Color.whiskey)
                 .shadow(color: Color.whiskey.opacity(0.5), radius: size * 0.22)
-
+            // Initial shows through until (and if) the avatar loads on top.
+            initialText
             if let urlString, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    default:
-                        initialText
-                    }
-                }
-                .clipShape(Circle())
-            } else {
-                initialText
+                DownsampledAsyncImage(url: url, targetPoints: size, placeholder: .clear)
+                    .clipShape(Circle())
             }
         }
         .frame(width: size, height: size)
