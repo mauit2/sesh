@@ -933,11 +933,13 @@ struct StoryViewer: View {
     let ctx: StoryViewerContext
     @ObservedObject var svc: StoriesService
     @ObservedObject var dm: DMService
+    @ObservedObject var feed: FeedService
     let onDelete: (LiveStory) -> Void
     let onClose: () -> Void
 
     @State private var personIndex: Int
     @State private var index = 0
+    @State private var openProfile: ProfileRef?
     @State private var dragOffset: CGFloat = 0
     /// Which way the last person-switch went — drives the slide direction.
     @State private var personSwitchForward = true
@@ -951,14 +953,21 @@ struct StoryViewer: View {
     @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
     private var unit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
 
-    init(ctx: StoryViewerContext, svc: StoriesService, dm: DMService,
+    init(ctx: StoryViewerContext, svc: StoriesService, dm: DMService, feed: FeedService,
          onDelete: @escaping (LiveStory) -> Void, onClose: @escaping () -> Void) {
         self.ctx = ctx
         self.svc = svc
         self.dm = dm
+        self.feed = feed
         self.onDelete = onDelete
         self.onClose = onClose
         _personIndex = State(initialValue: min(ctx.startPerson, max(ctx.people.count - 1, 0)))
+    }
+
+    /// The current person as a ProfileRef (id from their story rows).
+    private var personRef: ProfileRef? {
+        guard let pid = person.stories.first?.profileId else { return nil }
+        return ProfileRef(id: pid, name: person.name, username: nil, avatar: person.avatarUrl)
     }
 
     /// The person whose stories are on screen right now.
@@ -1181,19 +1190,29 @@ struct StoryViewer: View {
             }
 
             HStack(spacing: 10) {
-                AvatarView(urlString: person.avatarUrl,
-                           initial: String(person.name.prefix(1)).uppercased(),
-                           size: 34)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(person.name)
-                        .font(.system(size: 14, weight: .heavy, design: .rounded))
-                        .foregroundStyle(Color.cream)
-                    if person.stories.indices.contains(index) {
-                        Text(timeAgo(person.stories[index].createdAt))
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(Color.cream.opacity(0.55))
+                // Tap the avatar/name → the poster's profile feed.
+                Button {
+                    if let ref = personRef { openProfile = ref }
+                } label: {
+                    HStack(spacing: 10) {
+                        AvatarView(urlString: person.avatarUrl,
+                                   initial: String(person.name.prefix(1)).uppercased(),
+                                   size: 34)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(person.name)
+                                .font(.system(size: 14, weight: .heavy, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                            if person.stories.indices.contains(index) {
+                                Text(timeAgo(person.stories[index].createdAt))
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(Color.cream.opacity(0.55))
+                            }
+                        }
                     }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .disabled(person.canDelete)   // no point opening my own via story
                 Spacer()
                 if person.canDelete, person.stories.indices.contains(index) {
                     Button {
@@ -1252,6 +1271,10 @@ struct StoryViewer: View {
                 }
         )
         // Report this story / block its author (friends' stories only).
+        .sheet(item: $openProfile) { ref in
+            ProfileFeedView(user: ref, feed: feed)
+                .presentationBackground(Color.ink)
+        }
         .confirmationDialog("Report this story?", isPresented: $reportOpen, titleVisibility: .visible) {
             ForEach(ModerationService.reasons, id: \.self) { reason in
                 Button(reason) {
@@ -1463,6 +1486,7 @@ struct TimelineFeedView: View {
                     pulse: pulse,
                     stories: stories,
                     dm: dm,
+                    feed: feed,
                     profile: profile,
                     storyBAC: storyBAC,
                     storyStamp: storyStamp,
@@ -1828,12 +1852,18 @@ struct ProfileFeedView: View {
                     .padding(.top, 40)
 
                     if loading {
-                        ProgressView().tint(Color.whiskey).padding(.top, 40)
+                        ProgressView().tint(Color.whiskey).padding(.top, 60)
                     } else if posts.isEmpty {
-                        Text("No posted seshs yet.")
-                            .font(.system(size: 13, design: .rounded))
-                            .foregroundStyle(Color.cream.opacity(0.5))
-                            .padding(.top, 40)
+                        VStack(spacing: 8) {
+                            Image(systemName: "moon.stars")
+                                .font(.system(size: 26))
+                                .foregroundStyle(Color.bronze)
+                            Text("No posted seshs yet.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.5))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 60)
                     } else {
                         LazyVGrid(columns: cols, spacing: 3) {
                             ForEach(posts) { p in
@@ -1843,6 +1873,7 @@ struct ProfileFeedView: View {
                         }
                     }
                 }
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal, 14)
                 .padding(.bottom, 40)
             }

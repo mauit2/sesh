@@ -2838,6 +2838,7 @@ struct FriendsPulseStrip: View {
     @ObservedObject var pulse: FriendsPulseService
     @ObservedObject var stories: StoriesService
     @ObservedObject var dm: DMService
+    @ObservedObject var feed: FeedService
     let profile: Profile
     /// My BAC / location / drink tally at the moment of posting (nil =
     /// nothing to stamp).
@@ -2976,6 +2977,7 @@ struct FriendsPulseStrip: View {
                 ctx: ctx,
                 svc: stories,
                 dm: dm,
+                feed: feed,
                 onDelete: { story in Task { await stories.delete(story) } },
                 onClose: { viewerCtx = nil }
             )
@@ -5883,7 +5885,7 @@ private struct SessionView: View {
 
     /// CHATS — DM threads (story likes/replies land here too).
     private var chatsPage: some View {
-        ChatsView(dm: dm, friends: friends, profile: profile)
+        ChatsView(dm: dm, friends: friends, feed: feed, profile: profile)
     }
 
     private var timelineFeed: some View {

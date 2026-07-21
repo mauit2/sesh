@@ -210,6 +210,7 @@ final class DMService: ObservableObject {
 struct ChatsView: View {
     @ObservedObject var dm: DMService
     @ObservedObject var friends: FriendsService
+    @ObservedObject var feed: FeedService
     let profile: Profile
 
     @State private var openThread: UUID?
@@ -227,7 +228,7 @@ struct ChatsView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(item: $openThread) { other in
-                ChatThreadView(dm: dm, profile: profile, other: other,
+                ChatThreadView(dm: dm, feed: feed, profile: profile, other: other,
                                fallbackName: friends.friends.first(where: { $0.id == other })?.name)
             }
             .sheet(isPresented: $composeOpen) {
@@ -479,15 +480,21 @@ private struct NewChatPicker: View {
 /// One conversation — bubbles + composer, IG-style story context chips.
 private struct ChatThreadView: View {
     @ObservedObject var dm: DMService
+    @ObservedObject var feed: FeedService
     let profile: Profile
     let other: UUID
     /// Name shown before the profile hydrates (fresh conversations).
     var fallbackName: String? = nil
 
     @State private var draft = ""
+    @State private var openProfile: ProfileRef?
     @FocusState private var composerFocused: Bool
 
     private var otherProfile: Profile? { dm.profilesById[other] }
+    private var otherRef: ProfileRef {
+        ProfileRef(id: other, name: otherProfile?.name ?? fallbackName ?? "Chat",
+                   username: otherProfile?.username, avatar: otherProfile?.avatarURL)
+    }
 
     var body: some View {
         ZStack {
@@ -566,10 +573,33 @@ private struct ChatThreadView: View {
                 .background(Color.inkElev)
             }
         }
-        .navigationTitle(otherProfile?.name ?? fallbackName ?? "Chat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Color.ink, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar {
+            // Tappable name/avatar → the friend's profile feed.
+            ToolbarItem(placement: .principal) {
+                Button {
+                    openProfile = otherRef
+                } label: {
+                    HStack(spacing: 7) {
+                        AvatarView(
+                            urlString: otherProfile?.avatarURL,
+                            initial: String((otherProfile?.name ?? fallbackName ?? "?").prefix(1)).uppercased(),
+                            size: 26
+                        )
+                        Text(otherProfile?.name ?? fallbackName ?? "Chat")
+                            .font(.system(size: 16, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .sheet(item: $openProfile) { ref in
+            ProfileFeedView(user: ref, feed: feed)
+                .presentationBackground(Color.ink)
+        }
         .onAppear {
             let t: Task<Void, Never> = Task { await dm.markRead(with: other) }
             _ = t
