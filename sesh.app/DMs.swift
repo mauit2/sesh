@@ -509,7 +509,13 @@ private struct ChatThreadView: View {
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .contentShape(Rectangle())
+                        // Tap the conversation area to drop the keyboard.
+                        .onTapGesture { composerFocused = false }
                     }
+                    // Drag the messages to dismiss the keyboard, IG-style.
+                    .scrollDismissesKeyboard(.interactively)
                     .onChange(of: dm.messages(with: other).count) { _, _ in
                         if let last = dm.messages(with: other).last {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {

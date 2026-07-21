@@ -2128,6 +2128,8 @@ struct FriendAvatar: View {
 private struct FriendsView: View {
     @ObservedObject var friends: FriendsService
     @ObservedObject var auth: AuthService
+    /// Timeline service — so tapping a friend opens their posted nights.
+    @ObservedObject var feed: FeedService
     @Environment(\.dismiss) private var dismiss
     @StateObject private var moderation = ModerationService()
 
@@ -2136,6 +2138,8 @@ private struct FriendsView: View {
     @State private var searchTask: Task<Void, Never>?
     @State private var banner: String?
     @State private var showUsernameEditor = false
+    /// Tapped friend → their profile feed (past nights).
+    @State private var openProfile: ProfileRef?
 
     private var myUsername: String? {
         if case .signedIn(let p) = auth.state { return p.username }
@@ -2188,6 +2192,10 @@ private struct FriendsView: View {
             UsernameEditorView(auth: auth)
                 .presentationDetents([.height(340)])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $openProfile) { ref in
+            ProfileFeedView(user: ref, feed: feed)
+                .presentationBackground(Color.ink)
         }
     }
 
@@ -2345,20 +2353,32 @@ private struct FriendsView: View {
                     .padding(.vertical, 8)
             } else {
                 ForEach(friends.friends) { friend in
-                    HStack(spacing: 12) {
-                        FriendAvatar(name: friend.name, avatarURL: friend.avatarURL)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(friend.name).font(.system(size: 14, weight: .semibold, design: .rounded))
-                                .foregroundStyle(Color.cream)
-                            if let u = friend.username {
-                                Text("@\(u)").font(.system(size: 12, design: .rounded))
-                                    .foregroundStyle(Color.cream.opacity(0.55))
+                    Button {
+                        openProfile = ProfileRef(
+                            id: friend.id, name: friend.name,
+                            username: friend.username, avatar: friend.avatarURL
+                        )
+                    } label: {
+                        HStack(spacing: 12) {
+                            FriendAvatar(name: friend.name, avatarURL: friend.avatarURL)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(friend.name).font(.system(size: 14, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(Color.cream)
+                                if let u = friend.username {
+                                    Text("@\(u)").font(.system(size: 12, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.55))
+                                }
                             }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(Color.bronze)
                         }
-                        Spacer()
+                        .padding(.vertical, 8).padding(.horizontal, 12)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Color.cream.opacity(0.04)))
+                        .contentShape(Rectangle())
                     }
-                    .padding(.vertical, 8).padding(.horizontal, 12)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.cream.opacity(0.04)))
+                    .buttonStyle(PressScaleStyle())
                     .contextMenu {
                         Button(role: .destructive) {
                             Task { await friends.remove(userId: friend.id) }
@@ -5295,6 +5315,16 @@ private struct SessionView: View {
                              unseenCount: liveStories.unseenNightlineCount,
                              eventInvites: eventsService.pendingCount(for: profile.id),
                              dmUnread: dm.totalUnread)
+                    // Stay pinned at the bottom behind the keyboard rather
+                    // than floating up above it (chat composer).
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
+            }
+            // Switching sections (tap or swipe) drops the keyboard — so
+            // leaving a chat mid-typing doesn't strand it open.
+            .onChange(of: tab) { _, _ in
+                UIApplication.shared.sendAction(
+                    #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
+                )
             }
 
             // Floating invite banner — pinned just below the ModeTopBar.
@@ -5619,7 +5649,7 @@ private struct SessionView: View {
         }
         .modifier(profileSheets)
         .sheet(isPresented: $friendsSheetOpen) {
-            FriendsView(friends: friends, auth: auth)
+            FriendsView(friends: friends, auth: auth, feed: feed)
                 .presentationBackground(Color.ink)
         }
         .sheet(item: $groupSheetScope) { scope in
@@ -8241,7 +8271,7 @@ private struct ProfileSheet: View {
                 .presentationBackground(Color.ink)
         }
         .sheet(isPresented: $friendsOpen) {
-            FriendsView(friends: friends, auth: auth)
+            FriendsView(friends: friends, auth: auth, feed: feed)
                 .presentationBackground(Color.ink)
         }
         // Replay a saved night — closing button is a plain DONE.
