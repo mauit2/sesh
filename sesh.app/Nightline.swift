@@ -1420,9 +1420,13 @@ struct PulseWiringModifier: ViewModifier {
     let syncMarkers: () -> Void
     /// The group's server route changed → merge it into my journey.
     let mergeRoute: () -> Void
+    /// Flipping location sharing must re-publish presence right away so
+    /// friends' maps add/drop my pin without waiting for the next event.
+    @AppStorage(ShareLocationSetting.key) private var shareLocation = true
 
     func body(content: Content) -> some View {
         content
+            .onChange(of: shareLocation) { _, _ in publish() }
             .onChange(of: live.drinks) { _, _ in publish() }
             .onChange(of: live.startedAt) { _, _ in publish() }
             .onChange(of: liveGroup.session?.id) { _, _ in

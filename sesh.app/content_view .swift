@@ -2854,6 +2854,14 @@ struct FriendsPulseStrip: View {
     @State private var libraryOpen = false
     @State private var pickerItem: PhotosPickerItem? = nil
     @State private var viewerCtx: StoryViewerContext? = nil
+    /// Snap-Map-style friends map (check-in pins), opened from the header.
+    @State private var mapOpen = false
+
+    /// Friends broadcasting a live check-in location right now — the pins on
+    /// the friends map, and the gate for showing the map button at all.
+    private var checkedInPulses: [FriendPulse] {
+        pulse.pulses.filter { $0.live && $0.venueCoordinate != nil }
+    }
 
     /// Who's on the carousel, in what order: story-posters first, newest
     /// story leftmost; then friends who are live without a story (drunkest
@@ -2900,11 +2908,32 @@ struct FriendsPulseStrip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("TONIGHT")
-                .font(.system(size: 10, weight: .black, design: .monospaced))
-                .tracking(2.4)
-                .foregroundStyle(Color.bronze)
-                .padding(.horizontal, 22)
+            HStack(alignment: .center) {
+                Text("TONIGHT")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.bronze)
+                Spacer()
+                // Map shortcut — only when friends are actually checked in,
+                // so it never teases an empty map.
+                if !checkedInPulses.isEmpty {
+                    Button { mapOpen = true } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "map.fill")
+                                .font(.system(size: 10, weight: .bold))
+                            Text("MAP")
+                                .font(.system(size: 10, weight: .black, design: .monospaced))
+                                .tracking(1.5)
+                        }
+                        .foregroundStyle(Color.cream.opacity(0.9))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Capsule().fill(Color.cream.opacity(0.08)))
+                        .overlay(Capsule().strokeBorder(Color.cream.opacity(0.14), lineWidth: 1))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+            }
+            .padding(.horizontal, 22)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
                     myBubble
@@ -2982,6 +3011,9 @@ struct FriendsPulseStrip: View {
                 onClose: { viewerCtx = nil }
             )
         }
+        .fullScreenCover(isPresented: $mapOpen) {
+            FriendsMapView(pulses: checkedInPulses)
+        }
     }
 
     /// My avatar: bronze ring when I have live stories (tap to review /
@@ -3042,6 +3074,293 @@ struct FriendsPulseStrip: View {
         } else {
             libraryOpen = true
         }
+    }
+}
+
+/// Snap-Map-style friends map: an avatar pin at every friend who's checked
+/// in tonight. Friends only appear here while they're LIVE *and* have
+/// location-sharing switched on (they stop broadcasting a venue otherwise),
+/// so the map only ever shows people who opted in. Tap a pin to open their
+/// live-sesh sheet. Reached from the TONIGHT strip.
+struct FriendsMapView: View {
+    /// Friends broadcasting a venue coordinate right now.
+    let pulses: [FriendPulse]
+    @Environment(\.dismiss) private var dismiss
+    @State private var camera: MapCameraPosition
+    @State private var selected: FriendPulse?
+    /// The friend the camera is parked on (chip row highlight). nil when the
+    /// view is framing everyone at once.
+    @State private var focused: UUID?
+
+    /// City-level zoom used both for a lone friend and when flying to one.
+    private static let citySpan = MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)
+    /// If the crew is spread wider than this (≈ a metro area) we DON'T fit
+    /// them all — the midpoint would land in the middle of nowhere (an ocean,
+    /// for two friends in different countries) and both pins would shrink to
+    /// specks. Instead we open on one friend at city zoom; the chip row flies
+    /// you to the rest.
+    private static let fitThreshold: CLLocationDegrees = 1.2
+
+    init(pulses: [FriendPulse]) {
+        self.pulses = pulses
+        let plan = Self.initialPlan(for: pulses)
+        _camera = State(initialValue: plan.camera)
+        _focused = State(initialValue: plan.focus)
+    }
+
+    private struct CameraPlan { let camera: MapCameraPosition; let focus: UUID? }
+
+    /// Decide the opening shot: fit the whole crew when they're close, else
+    /// open tight on the first friend and rely on the chip row for the others.
+    private static func initialPlan(for pulses: [FriendPulse]) -> CameraPlan {
+        let located = pulses.filter { $0.venueCoordinate != nil }
+        guard let first = located.first, let firstCoord = first.venueCoordinate else {
+            return CameraPlan(camera: .automatic, focus: nil)
+        }
+        if located.count == 1 {
+            return CameraPlan(camera: cityCamera(firstCoord), focus: first.id)
+        }
+        let coords = located.compactMap(\.venueCoordinate)
+        var minLat = firstCoord.latitude, maxLat = firstCoord.latitude
+        var minLon = firstCoord.longitude, maxLon = firstCoord.longitude
+        for c in coords {
+            minLat = min(minLat, c.latitude); maxLat = max(maxLat, c.latitude)
+            minLon = min(minLon, c.longitude); maxLon = max(maxLon, c.longitude)
+        }
+        let latΔ = maxLat - minLat, lonΔ = maxLon - minLon
+        if latΔ > fitThreshold || lonΔ > fitThreshold {
+            // Too far apart to fit — open on the first friend.
+            return CameraPlan(camera: cityCamera(firstCoord), focus: first.id)
+        }
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2
+        )
+        let span = MKCoordinateSpan(
+            latitudeDelta: max(latΔ * 1.6, 0.01), longitudeDelta: max(lonΔ * 1.6, 0.01)
+        )
+        return CameraPlan(camera: .region(MKCoordinateRegion(center: center, span: span)), focus: nil)
+    }
+
+    private static func cityCamera(_ c: CLLocationCoordinate2D) -> MapCameraPosition {
+        .region(MKCoordinateRegion(center: c, span: citySpan))
+    }
+
+    /// Fly the camera to a friend and mark their chip as focused.
+    private func fly(to p: FriendPulse) {
+        guard let c = p.venueCoordinate else { return }
+        withAnimation(.easeInOut(duration: 0.55)) {
+            focused = p.id
+            camera = .region(MKCoordinateRegion(center: c, span: Self.citySpan))
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.ink.ignoresSafeArea()
+            Map(position: $camera) {
+                ForEach(pulses) { p in
+                    if let coord = p.venueCoordinate {
+                        Annotation("", coordinate: coord, anchor: .bottom) {
+                            MapAvatarPin(pulse: p, focused: focused == p.id)
+                                .onTapGesture { selected = p }
+                        }
+                    }
+                }
+            }
+            .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll))
+            // Bleed under the notch + sides, but respect the BOTTOM safe area
+            // so Apple's "Maps / Legal" attribution isn't clipped by the home
+            // indicator / rounded corner.
+            .ignoresSafeArea(edges: [.top, .horizontal])
+            // The chip row lives in the bottom safe-area inset, which also
+            // lifts the map's attribution above it.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if pulses.count > 1 { friendChips }
+            }
+
+            if pulses.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "map")
+                        .font(.system(size: 34, weight: .light))
+                        .foregroundStyle(Color.cream.opacity(0.4))
+                    Text("No friends checked in tonight.")
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.6))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.ink)
+                .ignoresSafeArea()
+            }
+
+            header
+        }
+        .preferredColorScheme(.dark)
+        .sheet(item: $selected) { p in
+            FriendPulseSheet(pulse: p)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+    }
+
+    /// Floating header: title + count, with a close button. Sits over a soft
+    /// top fade so it stays legible against bright map tiles.
+    private var header: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("ON THE MAP")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.bronze)
+                Text(pulses.count == 1 ? "1 friend checked in"
+                                       : "\(pulses.count) friends checked in")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+            }
+            Spacer()
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .black))
+                    .foregroundStyle(Color.cream)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(Color.ink.opacity(0.85)))
+                    .overlay(Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 30)
+        .frame(maxWidth: .infinity)
+        .background(
+            LinearGradient(
+                colors: [Color.ink.opacity(0.9), Color.ink.opacity(0.0)],
+                startPoint: .top, endPoint: .bottom
+            )
+            .ignoresSafeArea(edges: .top)
+        )
+    }
+
+    /// Tap-to-fly avatar row — the answer to friends spread across the world:
+    /// jump straight to anyone instead of hunting for a speck on a zoomed-out
+    /// map. The parked-on friend's chip glows.
+    private var friendChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(pulses) { p in
+                    let isFocused = focused == p.id
+                    Button { fly(to: p) } label: {
+                        HStack(spacing: 8) {
+                            AvatarView(urlString: p.avatarUrl,
+                                       initial: String(p.name.prefix(1)).uppercased(),
+                                       size: 32)
+                                .overlay(
+                                    Circle().strokeBorder(
+                                        isFocused ? Color.whiskey : Color.clear, lineWidth: 2
+                                    ).padding(-2)
+                                )
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(p.name.split(separator: " ").first.map(String.init) ?? p.name)
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.cream)
+                                    .lineLimit(1)
+                                if let v = p.venue, !v.isEmpty {
+                                    Text(v)
+                                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.55))
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                        .padding(.leading, 6).padding(.trailing, 12).padding(.vertical, 6)
+                        .background(
+                            Capsule().fill(Color.ink.opacity(isFocused ? 0.95 : 0.8))
+                        )
+                        .overlay(
+                            Capsule().strokeBorder(
+                                isFocused ? Color.whiskey.opacity(0.7) : Color.cream.opacity(0.12),
+                                lineWidth: 1
+                            )
+                        )
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 24)
+            .padding(.bottom, 10)
+        }
+        .background(
+            LinearGradient(
+                colors: [Color.ink.opacity(0.0), Color.ink.opacity(0.92)],
+                startPoint: .top, endPoint: .bottom
+            )
+        )
+    }
+}
+
+/// A single friend's pin on the friends map: their avatar in a status-tinted
+/// ring, a BAC badge, and a little pointer so it plants on the venue. Mirrors
+/// the TONIGHT strip's look so the two read as the same person.
+private struct MapAvatarPin: View {
+    let pulse: FriendPulse
+    /// The camera is currently parked on this friend (chip tapped) — the pin
+    /// grows and gains a warm glow so you can tell who you flew to.
+    var focused: Bool = false
+    @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
+    private var unit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
+
+    private var status: Status {
+        switch pulse.bac ?? 0 {
+        case ..<0.02: return .sober
+        case 0.02..<0.05: return .buzzed
+        case 0.05..<0.08: return .impaired
+        case 0.08..<0.15: return .drunk
+        default: return .danger
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack(alignment: .bottom) {
+                AvatarView(urlString: pulse.avatarUrl,
+                           initial: String(pulse.name.prefix(1)).uppercased(),
+                           size: 48)
+                    .overlay(Circle().strokeBorder(status.color, lineWidth: 3).padding(-1))
+                    .background(Circle().fill(Color.ink).padding(-3))
+                    .shadow(color: Color.black.opacity(0.4), radius: 4, y: 2)
+                    .shadow(color: focused ? Color.whiskey.opacity(0.8) : .clear, radius: 10)
+                Text(unit.formatted(pulse.bac ?? 0))
+                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                    .foregroundStyle(Color.ink)
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(Capsule().fill(status.color))
+                    .overlay(Capsule().strokeBorder(Color.ink, lineWidth: 1.5))
+                    .offset(y: 8)
+            }
+            // Pointer stem so the avatar sits ABOVE the exact venue point.
+            Triangle()
+                .fill(status.color)
+                .frame(width: 12, height: 8)
+                .offset(y: 6)
+                .shadow(color: Color.black.opacity(0.3), radius: 2, y: 1)
+        }
+        .scaleEffect(focused ? 1.12 : 1)
+        .zIndex(focused ? 1 : 0)
+        .animation(.spring(response: 0.35, dampingFraction: 0.7), value: focused)
+        .padding(.bottom, 6)
+    }
+}
+
+/// Small downward-pointing triangle used as the map-pin stem.
+private struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        p.closeSubpath()
+        return p
     }
 }
 
@@ -4503,6 +4822,9 @@ private struct SessionView: View {
     /// The tonight planner starts collapsed — PLAN reads as events-first,
     /// and the toggle remembers the user's preference.
     @AppStorage("sesh.plan.tonightExpanded") private var tonightExpanded = false
+    /// Share my live check-in location with friends (map). On by default;
+    /// toggled in the profile sheet. Gates publishPresence's venue fields.
+    @AppStorage(ShareLocationSetting.key) private var shareLocation = true
     /// PAST EVENTS shelf, collapsed by default (it's an archive).
     @AppStorage("sesh.plan.pastExpanded") private var pastExpanded = false
     /// Location + venue services. Owned here (the topmost user-facing
@@ -5958,7 +6280,10 @@ private struct SessionView: View {
         let started: Date? = sessionId != nil
             ? (liveGroup.session?.createdAt ?? Date())
             : live.startedAt
-        let venue = venues.currentVenue ?? liveGroup.liveVenue
+        // Location sharing (on by default, toggled off in the profile
+        // sheet) gates the venue that friends see on the map — with it
+        // off, they still see you're live + your BAC, just not where.
+        let venue = shareLocation ? (venues.currentVenue ?? liveGroup.liveVenue) : nil
         let soloDrinks = sessionId != nil ? [] : live.drinks
         Task {
             await presence.publish(
@@ -7779,6 +8104,10 @@ private struct ProfileSheet: View {
     /// "promille". Persisted in the App Group so the widget agrees.
     @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
 
+    /// Share my live check-in on the friends map. ON by default; when off,
+    /// friends still see I'm live (BAC/stories) but not where I am.
+    @AppStorage(ShareLocationSetting.key) private var shareLocation = true
+
     /// Saved night recaps (loaded from disk on open) + which one is
     /// being replayed full-screen.
     @StateObject private var nightHistory = RecapHistoryStore()
@@ -7903,6 +8232,23 @@ private struct ProfileSheet: View {
                                 Text(bacUnitCaption)
                                     .font(.system(size: 11, weight: .medium, design: .rounded))
                                     .foregroundStyle(Color.cream.opacity(0.55))
+                                    .padding(.horizontal, 4)
+                            }
+                        }
+                        LoungePickerField(label: "SHARE LOCATION") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Toggle(isOn: $shareLocation) {
+                                    Text("Show my check-in on the friends map")
+                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(Color.cream)
+                                }
+                                .toggleStyle(SwitchToggleStyle(tint: .whiskey))
+                                Text(shareLocation
+                                     ? "Friends can see where you're checked in while you're live."
+                                     : "Friends still see you're out — just not where.")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.55))
+                                    .fixedSize(horizontal: false, vertical: true)
                                     .padding(.horizontal, 4)
                             }
                         }

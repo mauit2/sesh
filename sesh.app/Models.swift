@@ -6,6 +6,14 @@ import SwiftUI
 import Foundation
 import CoreLocation
 
+// MARK: - Settings keys
+
+/// Whether to share my live check-in location with friends (friends map).
+/// On by default; users can switch it off in the profile sheet.
+enum ShareLocationSetting {
+    static let key = "sesh.shareLocation.v1"
+}
+
 // MARK: - Sex
 
 enum Sex: String, CaseIterable, Identifiable, Codable {
