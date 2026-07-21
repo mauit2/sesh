@@ -1705,6 +1705,7 @@ struct PhotoLightbox: View {
     let onClose: () -> Void
 
     @State private var current: Int
+    @State private var dragOffset: CGFloat = 0
 
     init(context: LightboxContext, onClose: @escaping () -> Void) {
         self.context = context
@@ -1751,6 +1752,22 @@ struct PhotoLightbox: View {
             }
             .padding(18)
         }
+        // Drag down to close, IG/Snap style — follows the finger, lets
+        // go past the threshold, springs back otherwise.
+        .offset(y: dragOffset)
+        .gesture(
+            DragGesture(minimumDistance: 25)
+                .onChanged { v in dragOffset = max(0, v.translation.height) }
+                .onEnded { v in
+                    if v.translation.height > 130 {
+                        onClose()
+                    } else {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            dragOffset = 0
+                        }
+                    }
+                }
+        )
         .preferredColorScheme(.dark)
     }
 }

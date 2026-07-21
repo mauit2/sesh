@@ -7899,6 +7899,7 @@ final class FriendsPulseService: ObservableObject {
 private struct FriendsPulseStrip: View {
     @ObservedObject var pulse: FriendsPulseService
     @ObservedObject var stories: StoriesService
+    @ObservedObject var dm: DMService
     let profile: Profile
     /// My BAC / location / drink tally at the moment of posting (nil =
     /// nothing to stamp).
@@ -7923,17 +7924,39 @@ private struct FriendsPulseStrip: View {
         func newestStory(_ id: UUID) -> Date? {
             stories.stories(for: id).map(\.createdAt).max()
         }
+        // People with UNSEEN stories come first, then the ones you've
+        // already watched — each half ordered by story recency.
         let posters = pulse.pulses
-            .compactMap { p -> (FriendPulse, Date)? in
+            .compactMap { p -> (FriendPulse, Date, Bool)? in
                 guard let d = newestStory(p.id) else { return nil }
-                return (p, d)
+                return (p, d, stories.hasUnseenStories(p.id))
             }
-            .sorted { $0.1 > $1.1 }
+            .sorted { a, b in
+                if a.2 != b.2 { return a.2 }
+                return a.1 > b.1
+            }
             .map(\.0)
         let liveOnly = pulse.pulses
             .filter { $0.live && newestStory($0.id) == nil }
             .sorted { ($0.bac ?? 0) > ($1.bac ?? 0) }
         return posters + liveOnly
+    }
+
+    /// Everyone in the carousel who has stories, chunked per person in
+    /// display order, opened at the tapped person — so the viewer can
+    /// walk story→story and person→person like Instagram.
+    private func storyContext(startingAt id: UUID) -> StoryViewerContext? {
+        let withStories = displayPulses.filter { !stories.stories(for: $0.id).isEmpty }
+        guard let start = withStories.firstIndex(where: { $0.id == id }) else { return nil }
+        let people = withStories.map { p in
+            StoryViewerContext.Person(
+                stories: stories.stories(for: p.id),
+                name: p.name,
+                avatarUrl: p.avatarUrl,
+                canDelete: false
+            )
+        }
+        return StoryViewerContext(people: people, startPerson: start)
     }
 
     var body: some View {
@@ -7948,13 +7971,14 @@ private struct FriendsPulseStrip: View {
                     myBubble
                     ForEach(displayPulses) { p in
                         let theirStories = stories.stories(for: p.id)
-                        PulseAvatar(pulse: p, hasStory: !theirStories.isEmpty)
+                        PulseAvatar(
+                            pulse: p,
+                            hasStory: !theirStories.isEmpty,
+                            seen: !theirStories.isEmpty && !stories.hasUnseenStories(p.id)
+                        )
                             .onTapGesture {
                                 if !theirStories.isEmpty {
-                                    viewerCtx = StoryViewerContext(
-                                        stories: theirStories, name: p.name,
-                                        avatarUrl: p.avatarUrl, canDelete: false
-                                    )
+                                    viewerCtx = storyContext(startingAt: p.id)
                                 } else if p.live {
                                     onOpen(p)
                                 }
@@ -8013,6 +8037,7 @@ private struct FriendsPulseStrip: View {
             StoryViewer(
                 ctx: ctx,
                 svc: stories,
+                dm: dm,
                 onDelete: { story in Task { await stories.delete(story) } },
                 onClose: { viewerCtx = nil }
             )
@@ -8040,8 +8065,11 @@ private struct FriendsPulseStrip: View {
                             openCapture()
                         } else {
                             viewerCtx = StoryViewerContext(
-                                stories: mine, name: profile.name,
-                                avatarUrl: profile.avatarURL, canDelete: true
+                                people: [.init(
+                                    stories: mine, name: profile.name,
+                                    avatarUrl: profile.avatarURL, canDelete: true
+                                )],
+                                startPerson: 0
                             )
                         }
                     }
@@ -8084,6 +8112,9 @@ private struct PulseAvatar: View {
     /// They have fresh stories → glowing rotating story ring, full
     /// opacity, tappable even when not live.
     var hasStory: Bool = false
+    /// All their stories already watched → the ring goes quiet (thin
+    /// static bronze, no glow), IG-style, so unseen ones pop.
+    var seen: Bool = false
     @State private var ringSpin = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// BAC arrives on the raw %-scale; display follows the VIEWER's unit
@@ -8108,7 +8139,14 @@ private struct PulseAvatar: View {
                            initial: String(pulse.name.prefix(1)).uppercased(),
                            size: 54)
                     .overlay {
-                        if hasStory {
+                        if hasStory && seen {
+                            // Already watched: a quiet static bronze ring —
+                            // still marks "has stories", but lets the
+                            // unseen rings own the spotlight.
+                            Circle()
+                                .strokeBorder(Color.bronze.opacity(0.55), lineWidth: 2.5)
+                                .padding(-7)
+                        } else if hasStory {
                             // Unmissable story ring: a bright whiskey/cream
                             // gradient slowly ROTATING around the avatar,
                             // separated by a dark gap and doubled up with a
@@ -8715,6 +8753,7 @@ final class StoriesService: ObservableObject {
         } catch {
             // Keep the previous list on a transient failure.
         }
+        await refreshMyViews()
         await refreshUnseen()
     }
 
@@ -8840,8 +8879,37 @@ final class StoriesService: ObservableObject {
 
     /// Record that I watched a friend's story. Deduped server-side by the
     /// (story, viewer) primary key; my own stories are never counted.
+    /// Story ids I have watched — drives the seen/unseen ring dimming and
+    /// the carousel sort (unseen people first). Server-backed via my own
+    /// story_views rows (select self is allowed by migration 040), so it
+    /// survives reinstalls and syncs across devices; recordView patches
+    /// it optimistically so a watched ring dims the moment you close it.
+    @Published private(set) var viewedByMe: Set<UUID> = []
+
+    /// Does this person have at least one story I haven't watched yet?
+    func hasUnseenStories(_ personId: UUID) -> Bool {
+        stories(for: personId).contains { !viewedByMe.contains($0.id) }
+    }
+
+    /// Pull my own view receipts (called alongside the story refresh).
+    func refreshMyViews() async {
+        guard let uid = myId else { return }
+        struct Row: Decodable {
+            let storyId: UUID
+            enum CodingKeys: String, CodingKey { case storyId = "story_id" }
+        }
+        if let rows: [Row] = try? await supabase.from("story_views")
+            .select("story_id")
+            .eq("viewer_id", value: uid.uuidString.lowercased())
+            .execute()
+            .value {
+            viewedByMe = Set(rows.map(\.storyId))
+        }
+    }
+
     func recordView(of story: LiveStory) {
         guard let uid = myId, story.profileId != uid else { return }
+        viewedByMe.insert(story.id)
         struct Row: Encodable { let story_id: String; let viewer_id: String }
         Task {
             _ = try? await supabase.from("story_views")
@@ -8890,10 +8958,644 @@ final class StoriesService: ObservableObject {
 /// Everything the full-screen story viewer needs.
 private struct StoryViewerContext: Identifiable {
     let id = UUID()
-    let stories: [LiveStory]
-    let name: String
-    let avatarUrl: String?
-    let canDelete: Bool
+    /// Everyone with stories, in carousel order — the viewer walks
+    /// through ALL of them (IG-style), not just the tapped person.
+    let people: [Person]
+    let startPerson: Int
+
+    struct Person {
+        let stories: [LiveStory]
+        let name: String
+        let avatarUrl: String?
+        let canDelete: Bool
+    }
+}
+
+// MARK: - Direct messages (migration 051)
+
+struct DMMessage: Codable, Identifiable, Equatable {
+    let id: UUID
+    let senderId: UUID
+    let recipientId: UUID
+    let kind: String            // "text" | "story_reply" | "story_like"
+    let body: String?
+    let storyId: UUID?
+    let storyPath: String?
+    let createdAt: Date
+    var readAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id, kind, body
+        case senderId = "sender_id"
+        case recipientId = "recipient_id"
+        case storyId = "story_id"
+        case storyPath = "story_path"
+        case createdAt = "created_at"
+        case readAt = "read_at"
+    }
+
+    /// Thumbnail of the story this message reacted to — renders while the
+    /// story is still alive (24h), placeholder afterwards.
+    var storyURL: URL? {
+        guard let storyPath else { return nil }
+        return try? supabase.storage.from("stories").getPublicURL(path: storyPath)
+    }
+}
+
+/// Friend-to-friend chat + story reactions. One flat pull of my recent
+/// messages; threads and unread counts derive from it. Sends are
+/// optimistic (bubble appears instantly, poll reconciles).
+@MainActor
+final class DMService: ObservableObject {
+    struct ChatThread: Identifiable, Equatable {
+        let id: UUID          // the other person's profile id
+        let last: DMMessage
+        let unread: Int
+    }
+
+    @Published private(set) var messages: [DMMessage] = []
+    @Published private(set) var profilesById: [UUID: Profile] = [:]
+    private var myId: UUID? { supabase.auth.currentUser?.id }
+    private var pollTask: Task<Void, Never>?
+
+    var threads: [ChatThread] {
+        guard let me = myId else { return [] }
+        var byOther: [UUID: [DMMessage]] = [:]
+        for m in messages {
+            let other = m.senderId == me ? m.recipientId : m.senderId
+            byOther[other, default: []].append(m)
+        }
+        return byOther.compactMap { other, msgs in
+            guard let last = msgs.max(by: { $0.createdAt < $1.createdAt }) else { return nil }
+            let unread = msgs.filter { $0.recipientId == me && $0.readAt == nil }.count
+            return ChatThread(id: other, last: last, unread: unread)
+        }
+        .sorted { $0.last.createdAt > $1.last.createdAt }
+    }
+
+    var totalUnread: Int {
+        guard let me = myId else { return 0 }
+        return messages.filter { $0.recipientId == me && $0.readAt == nil }.count
+    }
+
+    func messages(with other: UUID) -> [DMMessage] {
+        guard let me = myId else { return [] }
+        return messages
+            .filter {
+                ($0.senderId == other && $0.recipientId == me)
+                    || ($0.senderId == me && $0.recipientId == other)
+            }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    func start() {
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refresh()
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+            }
+        }
+    }
+
+    func stop() {
+        pollTask?.cancel()
+        pollTask = nil
+        messages = []
+    }
+
+    func refresh() async {
+        guard let me = myId else { return }
+        let mine = me.uuidString.lowercased()
+        do {
+            let rows: [DMMessage] = try await supabase.from("dm_messages")
+                .select()
+                .or("sender_id.eq.\(mine),recipient_id.eq.\(mine)")
+                .order("created_at", ascending: false)
+                .limit(500)
+                .execute()
+                .value
+            messages = rows.reversed()
+
+            let partners = Set(rows.map { $0.senderId == me ? $0.recipientId : $0.senderId })
+                .subtracting(profilesById.keys)
+            if !partners.isEmpty {
+                let ps: [Profile] = try await supabase
+                    .from("profiles")
+                    .select()
+                    .in("id", values: partners.map { $0.uuidString.lowercased() })
+                    .execute()
+                    .value
+                for p in ps { profilesById[p.id] = p }
+            }
+        } catch {
+            // Transient — next poll recovers.
+        }
+    }
+
+    private struct InsertRow: Encodable {
+        let sender_id: String
+        let recipient_id: String
+        let kind: String
+        let body: String?
+        let story_id: String?
+        let story_path: String?
+    }
+
+    private func insert(_ row: InsertRow, optimistic: DMMessage) async {
+        messages.append(optimistic)
+        _ = try? await supabase.from("dm_messages").insert(row).execute()
+        await refresh()
+    }
+
+    func send(text: String, to other: UUID) async {
+        guard let me = myId else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        await insert(
+            InsertRow(sender_id: me.uuidString.lowercased(),
+                      recipient_id: other.uuidString.lowercased(),
+                      kind: "text", body: trimmed, story_id: nil, story_path: nil),
+            optimistic: DMMessage(id: UUID(), senderId: me, recipientId: other,
+                                  kind: "text", body: trimmed, storyId: nil,
+                                  storyPath: nil, createdAt: Date(), readAt: nil)
+        )
+    }
+
+    func sendStoryReply(_ text: String, story: LiveStory) async {
+        guard let me = myId, story.profileId != me else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        await insert(
+            InsertRow(sender_id: me.uuidString.lowercased(),
+                      recipient_id: story.profileId.uuidString.lowercased(),
+                      kind: "story_reply", body: trimmed,
+                      story_id: story.id.uuidString.lowercased(),
+                      story_path: story.storagePath),
+            optimistic: DMMessage(id: UUID(), senderId: me, recipientId: story.profileId,
+                                  kind: "story_reply", body: trimmed, storyId: story.id,
+                                  storyPath: story.storagePath, createdAt: Date(), readAt: nil)
+        )
+    }
+
+    func sendStoryLike(story: LiveStory) async {
+        guard let me = myId, story.profileId != me else { return }
+        await insert(
+            InsertRow(sender_id: me.uuidString.lowercased(),
+                      recipient_id: story.profileId.uuidString.lowercased(),
+                      kind: "story_like", body: nil,
+                      story_id: story.id.uuidString.lowercased(),
+                      story_path: story.storagePath),
+            optimistic: DMMessage(id: UUID(), senderId: me, recipientId: story.profileId,
+                                  kind: "story_like", body: nil, storyId: story.id,
+                                  storyPath: story.storagePath, createdAt: Date(), readAt: nil)
+        )
+    }
+
+    /// Opening a thread clears its unread state (both locally and up).
+    func markRead(with other: UUID) async {
+        guard let me = myId else { return }
+        for i in messages.indices
+        where messages[i].senderId == other && messages[i].recipientId == me && messages[i].readAt == nil {
+            messages[i].readAt = Date()
+        }
+        struct Patch: Encodable { let read_at: String }
+        _ = try? await supabase.from("dm_messages")
+            .update(Patch(read_at: ISO8601DateFormatter().string(from: Date())))
+            .eq("sender_id", value: other.uuidString.lowercased())
+            .eq("recipient_id", value: me.uuidString.lowercased())
+            .is("read_at", value: nil)
+            .execute()
+    }
+}
+
+/// Threads list — one row per friend you've chatted with, plus a compose
+/// button to start a fresh conversation with any friend.
+private struct ChatsView: View {
+    @ObservedObject var dm: DMService
+    @ObservedObject var friends: FriendsService
+    let profile: Profile
+
+    @State private var openThread: UUID?
+    @State private var composeOpen = false
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                // NavigationStack paints its own opaque backdrop, which
+                // cut the shared atmosphere off with a hard edge — give
+                // this page its own copy so the glow continues like on
+                // every other tab.
+                AtmosphereBackground(accent: .whiskey)
+                chatsContent
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(item: $openThread) { other in
+                ChatThreadView(dm: dm, profile: profile, other: other,
+                               fallbackName: friends.friends.first(where: { $0.id == other })?.name)
+            }
+            .sheet(isPresented: $composeOpen) {
+                NewChatPicker(friends: friends) { friendId in
+                    composeOpen = false
+                    openThread = friendId
+                }
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(Color.ink)
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var chatsContent: some View {
+            VStack(alignment: .leading, spacing: 12) {
+                // No big "Chats" title — the tab bar already says where
+                // you are. Just a quiet label + the compose button.
+                HStack {
+                    SectionLabel("Conversations")
+                    Spacer()
+                    Button {
+                        composeOpen = true
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .fill(Color.whiskey.opacity(0.12))
+                                .frame(width: 34, height: 34)
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(Color.whiskey)
+                        }
+                        .overlay(Circle().strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                    .accessibilityLabel("New chat")
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 8)
+
+                if dm.threads.isEmpty {
+                    VStack(spacing: 8) {
+                        Spacer()
+                        Image(systemName: "bubble.left.and.bubble.right.fill")
+                            .font(.system(size: 28))
+                            .foregroundStyle(Color.bronze)
+                        Text("No chats yet")
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        Text("Reply to a friend's story, or start one fresh with the pen.")
+                            .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.bronze)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 40)
+                        Spacer()
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity)
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 8) {
+                            ForEach(dm.threads) { thread in
+                                Button {
+                                    openThread = thread.id
+                                } label: {
+                                    threadRow(thread)
+                                }
+                                .buttonStyle(PressScaleStyle())
+                            }
+                        }
+                        .padding(.horizontal, 22)
+                        .padding(.top, 2)
+                        .padding(.bottom, 80)
+                    }
+                }
+            }
+    }
+
+    private func threadRow(_ thread: DMService.ChatThread) -> some View {
+        let p = dm.profilesById[thread.id]
+        return HStack(spacing: 12) {
+            AvatarView(
+                urlString: p?.avatarURL,
+                initial: String((p?.name ?? "?").prefix(1)).uppercased(),
+                size: 44
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(p?.name ?? "Friend")
+                    .font(.system(size: 15, weight: thread.unread > 0 ? .heavy : .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                Text(previewLine(thread.last))
+                    .font(.system(size: 12, weight: thread.unread > 0 ? .semibold : .regular, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(thread.unread > 0 ? 0.85 : 0.5))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(timeAgoShort(thread.last.createdAt))
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.bronze)
+                if thread.unread > 0 {
+                    Text("\(thread.unread)")
+                        .font(.system(size: 10, weight: .black, design: .monospaced))
+                        .foregroundStyle(Color.ink)
+                        .frame(minWidth: 18, minHeight: 18)
+                        .background(Circle().fill(Color.whiskey))
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.inkElev)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(
+                            thread.unread > 0 ? Color.whiskey.opacity(0.3) : Color.cream.opacity(0.06),
+                            lineWidth: 1
+                        )
+                )
+        )
+        .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
+    }
+
+    private func previewLine(_ m: DMMessage) -> String {
+        let mine = m.senderId == profile.id
+        switch m.kind {
+        case "story_like":  return mine ? "You liked their story ❤️" : "Liked your story ❤️"
+        case "story_reply": return (mine ? "You: " : "") + "↩︎ " + (m.body ?? "")
+        default:            return (mine ? "You: " : "") + (m.body ?? "")
+        }
+    }
+}
+
+/// Pick a friend to start a brand-new conversation with — searchable by
+/// name or @username.
+private struct NewChatPicker: View {
+    @ObservedObject var friends: FriendsService
+    var onPick: (UUID) -> Void
+
+    @State private var query = ""
+
+    private var filtered: [Friend] {
+        var q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        while q.hasPrefix("@") { q.removeFirst() }
+        guard !q.isEmpty else { return friends.friends }
+        return friends.friends.filter { f in
+            f.name.lowercased().contains(q)
+                || (f.username?.lowercased().contains(q) ?? false)
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    SectionLabel("New chat")
+                    Text("Message a friend")
+                        .font(.system(size: 24, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                }
+                .padding(.top, 22)
+
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.bronze)
+                    TextField(
+                        "", text: $query,
+                        prompt: Text("Search name or @username")
+                            .foregroundColor(Color.cream.opacity(0.35))
+                    )
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .tint(Color.whiskey)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.inkElev)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
+                )
+
+                if friends.friends.isEmpty {
+                    Text("Add friends first — they'll show up here.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.bronze)
+                } else if filtered.isEmpty {
+                    Text("No friend matches \"\(query)\".")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.bronze)
+                }
+
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 6) {
+                        ForEach(filtered) { f in
+                            Button {
+                                onPick(f.id)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    AvatarView(
+                                        urlString: f.avatarURL,
+                                        initial: String(f.name.prefix(1)).uppercased(),
+                                        size: 40
+                                    )
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(f.name)
+                                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(Color.cream)
+                                        if let u = f.username {
+                                            Text("@\(u)")
+                                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                                .foregroundStyle(Color.bronze)
+                                        }
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(Color.bronze)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color.cream.opacity(0.03))
+                                )
+                            }
+                            .buttonStyle(PressScaleStyle())
+                        }
+                    }
+                    .padding(.bottom, 24)
+                }
+            }
+            .padding(.horizontal, 22)
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+/// One conversation — bubbles + composer, IG-style story context chips.
+private struct ChatThreadView: View {
+    @ObservedObject var dm: DMService
+    let profile: Profile
+    let other: UUID
+    /// Name shown before the profile hydrates (fresh conversations).
+    var fallbackName: String? = nil
+
+    @State private var draft = ""
+    @FocusState private var composerFocused: Bool
+
+    private var otherProfile: Profile? { dm.profilesById[other] }
+
+    var body: some View {
+        ZStack {
+            AtmosphereBackground(accent: .whiskey)
+            VStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 6) {
+                            if dm.messages(with: other).isEmpty {
+                                Text("No messages yet — say hej 🍻")
+                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.bronze)
+                                    .padding(.top, 40)
+                            }
+                            ForEach(dm.messages(with: other)) { m in
+                                bubble(m)
+                                    .id(m.id)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                    }
+                    .onChange(of: dm.messages(with: other).count) { _, _ in
+                        if let last = dm.messages(with: other).last {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
+                        }
+                    }
+                    .onAppear {
+                        if let last = dm.messages(with: other).last {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    TextField(
+                        "", text: $draft,
+                        prompt: Text("Message…").foregroundColor(Color.cream.opacity(0.35)),
+                        axis: .vertical
+                    )
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .lineLimit(1...4)
+                        .focused($composerFocused)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Capsule().fill(Color.cream.opacity(0.06)))
+                    Button {
+                        let text = draft
+                        draft = ""
+                        let t: Task<Void, Never> = Task {
+                            await dm.send(text: text, to: other)
+                        }
+                        _ = t
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 15, weight: .black))
+                            .foregroundStyle(Color.ink)
+                            .frame(width: 36, height: 36)
+                            .background(Circle().fill(Color.whiskey))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .opacity(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.inkElev)
+            }
+        }
+        .navigationTitle(otherProfile?.name ?? fallbackName ?? "Chat")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(Color.ink, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .onAppear {
+            let t: Task<Void, Never> = Task { await dm.markRead(with: other) }
+            _ = t
+        }
+        .onChange(of: dm.totalUnread) { _, _ in
+            let t: Task<Void, Never> = Task { await dm.markRead(with: other) }
+            _ = t
+        }
+    }
+
+    @ViewBuilder
+    private func bubble(_ m: DMMessage) -> some View {
+        let mine = m.senderId == profile.id
+        HStack {
+            if mine { Spacer(minLength: 48) }
+            VStack(alignment: mine ? .trailing : .leading, spacing: 4) {
+                // Story context chip for reactions/replies.
+                if m.kind != "text" {
+                    HStack(spacing: 6) {
+                        if let url = m.storyURL {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    Rectangle().fill(Color.smoke)
+                                }
+                            }
+                            .frame(width: 30, height: 44)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        }
+                        Text(m.kind == "story_like"
+                             ? (mine ? "You liked their story" : "Liked your story")
+                             : (mine ? "You replied to their story" : "Replied to your story"))
+                            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.bronze)
+                    }
+                }
+                if m.kind == "story_like" {
+                    Text("❤️")
+                        .font(.system(size: 30))
+                } else if let body = m.body {
+                    Text(body)
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(mine ? Color.ink : Color.cream)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(mine ? Color.whiskey : Color.cream.opacity(0.08))
+                        )
+                }
+                Text(timeAgoShort(m.createdAt))
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.cream.opacity(0.35))
+            }
+            if !mine { Spacer(minLength: 48) }
+        }
+    }
+}
+
+/// "2m" / "3h" / "2d" — compact chat timestamps.
+private func timeAgoShort(_ date: Date) -> String {
+    let s = Int(Date().timeIntervalSince(date))
+    if s < 60 { return "now" }
+    if s < 3600 { return "\(s / 60)m" }
+    if s < 86_400 { return "\(s / 3600)h" }
+    return "\(s / 86_400)d"
 }
 
 /// Report + block plumbing (App Review 1.2 — user-generated content).
@@ -9530,42 +10232,155 @@ private struct StoryComposer: View {
 private struct StoryViewer: View {
     let ctx: StoryViewerContext
     @ObservedObject var svc: StoriesService
+    @ObservedObject var dm: DMService
     let onDelete: (LiveStory) -> Void
     let onClose: () -> Void
 
+    @State private var personIndex: Int
     @State private var index = 0
+    @State private var dragOffset: CGFloat = 0
+    /// Which way the last person-switch went — drives the slide direction.
+    @State private var personSwitchForward = true
+    /// Reply bar (friends' stories): text draft + a brief "sent" flash.
+    @State private var replyDraft = ""
+    @State private var sentFlash: String?
+    @FocusState private var replyFocused: Bool
     @State private var audience: [StoriesService.StoryViewerEntry]? = nil
     @State private var reportOpen = false
     @StateObject private var moderation = ModerationService()
     @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
     private var unit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
 
+    init(ctx: StoryViewerContext, svc: StoriesService, dm: DMService,
+         onDelete: @escaping (LiveStory) -> Void, onClose: @escaping () -> Void) {
+        self.ctx = ctx
+        self.svc = svc
+        self.dm = dm
+        self.onDelete = onDelete
+        self.onClose = onClose
+        _personIndex = State(initialValue: min(ctx.startPerson, max(ctx.people.count - 1, 0)))
+    }
+
+    /// The person whose stories are on screen right now.
+    private var person: StoryViewerContext.Person {
+        ctx.people[min(personIndex, ctx.people.count - 1)]
+    }
+
+    /// Brief "Sent" confirmation over the reply bar.
+    private func flashSent(_ text: String) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            sentFlash = text
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: 1_300_000_000)
+            withAnimation(.easeOut(duration: 0.25)) {
+                sentFlash = nil
+            }
+        }
+    }
+
+    /// Tap right → next story, rolling into the next person's stories;
+    /// past the very last one the viewer closes (IG behaviour).
+    private func advance() {
+        if index + 1 < person.stories.count {
+            index += 1
+        } else if personIndex + 1 < ctx.people.count {
+            // Person switch gets a real slide so it doesn't read as just
+            // another photo of the same person.
+            personSwitchForward = true
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.85)) {
+                personIndex += 1
+                index = 0
+            }
+        } else {
+            onClose()
+        }
+    }
+
+    /// Tap left → previous story, rolling back to the previous person's
+    /// LAST story (stepping backwards chronologically through the strip).
+    private func goBack() {
+        if index > 0 {
+            index -= 1
+        } else if personIndex > 0 {
+            personSwitchForward = false
+            let target = personIndex - 1
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.85)) {
+                personIndex = target
+                index = max(ctx.people[target].stories.count - 1, 0)
+            }
+        }
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
             Color.black.ignoresSafeArea()
             TabView(selection: $index) {
-                ForEach(Array(ctx.stories.enumerated()), id: \.element.id) { i, story in
+                ForEach(Array(person.stories.enumerated()), id: \.element.id) { i, story in
                     storyPage(story).tag(i)
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: ctx.stories.count > 1 ? .automatic : .never))
-            .onAppear {
-                if ctx.stories.indices.contains(index) {
-                    svc.recordView(of: ctx.stories[index])
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            // Re-mount the pager when the person flips so the selection
+            // resets cleanly to the new person's story set — and slide
+            // the whole page sideways so it's obvious you've moved on to
+            // a DIFFERENT person, not just their next photo.
+            .id(personIndex)
+            .transition(.asymmetric(
+                insertion: .move(edge: personSwitchForward ? .trailing : .leading)
+                    .combined(with: .opacity),
+                removal: .move(edge: personSwitchForward ? .leading : .trailing)
+                    .combined(with: .opacity)
+            ))
+            // IG-style tap zones: left quarter = back, the rest = forward.
+            // They sit UNDER the header row (added later in the ZStack),
+            // so the avatar / trash / flag / ✕ buttons stay tappable.
+            .overlay(
+                HStack(spacing: 0) {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { goBack() }
+                        .frame(maxWidth: .infinity)
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { advance() }
+                        .frame(maxWidth: .infinity)
                 }
-                if ctx.canDelete {
+            )
+            .onAppear {
+                if person.stories.indices.contains(index) {
+                    svc.recordView(of: person.stories[index])
+                }
+                if person.canDelete {
                     Task { await svc.refreshViewCounts() }
                 }
             }
             .onChange(of: index) { _, i in
-                if ctx.stories.indices.contains(i) {
-                    svc.recordView(of: ctx.stories[i])
+                if person.stories.indices.contains(i) {
+                    svc.recordView(of: person.stories[i])
+                }
+            }
+            .onChange(of: personIndex) { _, _ in
+                if person.stories.indices.contains(index) {
+                    svc.recordView(of: person.stories[index])
                 }
             }
 
+            // Segmented progress: one notch per story of the current
+            // person, filled through the one on screen.
+            HStack(spacing: 4) {
+                ForEach(person.stories.indices, id: \.self) { i in
+                    Capsule()
+                        .fill(i <= index ? Color.cream : Color.cream.opacity(0.25))
+                        .frame(height: 3)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+
             // MY story → views pill (count + tap for the audience list).
-            if ctx.canDelete, ctx.stories.indices.contains(index) {
-                let story = ctx.stories[index]
+            if person.canDelete, person.stories.indices.contains(index) {
+                let story = person.stories[index]
                 VStack {
                     Spacer()
                     HStack {
@@ -9590,24 +10405,99 @@ private struct StoryViewer: View {
                 }
             }
 
+            // FRIEND's story → reply bar + like, IG-style. Both land in
+            // their DMs (and push them), so the conversation continues in
+            // the chat.
+            if !person.canDelete, person.stories.indices.contains(index) {
+                let story = person.stories[index]
+                VStack {
+                    Spacer()
+                    HStack(spacing: 10) {
+                        TextField(
+                            "", text: $replyDraft,
+                            prompt: Text("Reply to \(person.name)…")
+                                .foregroundColor(.white.opacity(0.55))
+                        )
+                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white)
+                            .tint(Color.whiskey)
+                            .focused($replyFocused)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Capsule().fill(Color.black.opacity(0.35)))
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
+                        if replyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Button {
+                                let t: Task<Void, Never> = Task {
+                                    await dm.sendStoryLike(story: story)
+                                }
+                                _ = t
+                                flashSent("❤️ Sent")
+                            } label: {
+                                Image(systemName: "heart.fill")
+                                    .font(.system(size: 20, weight: .bold))
+                                    .foregroundStyle(Color(red: 0.92, green: 0.32, blue: 0.35))
+                                    .frame(width: 42, height: 42)
+                                    .background(Circle().fill(Color.black.opacity(0.35)))
+                            }
+                            .buttonStyle(PressScaleStyle())
+                        } else {
+                            Button {
+                                let text = replyDraft
+                                replyDraft = ""
+                                replyFocused = false
+                                let t: Task<Void, Never> = Task {
+                                    await dm.sendStoryReply(text, story: story)
+                                }
+                                _ = t
+                                flashSent("Sent")
+                            } label: {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 16, weight: .black))
+                                    .foregroundStyle(Color.ink)
+                                    .frame(width: 42, height: 42)
+                                    .background(Circle().fill(Color.whiskey))
+                            }
+                            .buttonStyle(PressScaleStyle())
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 14)
+                }
+            }
+
+            if let sentFlash {
+                VStack {
+                    Spacer()
+                    Text(sentFlash)
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                        .background(Capsule().fill(Color.black.opacity(0.6)))
+                        .padding(.bottom, 76)
+                }
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
             HStack(spacing: 10) {
-                AvatarView(urlString: ctx.avatarUrl,
-                           initial: String(ctx.name.prefix(1)).uppercased(),
+                AvatarView(urlString: person.avatarUrl,
+                           initial: String(person.name.prefix(1)).uppercased(),
                            size: 34)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(ctx.name)
+                    Text(person.name)
                         .font(.system(size: 14, weight: .heavy, design: .rounded))
                         .foregroundStyle(Color.cream)
-                    if ctx.stories.indices.contains(index) {
-                        Text(timeAgo(ctx.stories[index].createdAt))
+                    if person.stories.indices.contains(index) {
+                        Text(timeAgo(person.stories[index].createdAt))
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             .foregroundStyle(Color.cream.opacity(0.55))
                     }
                 }
                 Spacer()
-                if ctx.canDelete, ctx.stories.indices.contains(index) {
+                if person.canDelete, person.stories.indices.contains(index) {
                     Button {
-                        let victim = ctx.stories[index]
+                        let victim = person.stories[index]
                         onDelete(victim)
                         onClose()
                     } label: {
@@ -9619,7 +10509,7 @@ private struct StoryViewer: View {
                     }
                     .buttonStyle(PressScaleStyle())
                 }
-                if !ctx.canDelete, ctx.stories.indices.contains(index) {
+                if !person.canDelete, person.stories.indices.contains(index) {
                     Button {
                         reportOpen = true
                     } label: {
@@ -9641,14 +10531,32 @@ private struct StoryViewer: View {
                 .buttonStyle(PressScaleStyle())
             }
             .padding(.horizontal, 16)
-            .padding(.top, 8)
+            .padding(.top, 16)
         }
+        // Drag down anywhere to close — the card follows the finger and
+        // lets go past the threshold, IG/Snap style.
+        .offset(y: dragOffset)
+        .gesture(
+            DragGesture(minimumDistance: 25)
+                .onChanged { v in
+                    dragOffset = max(0, v.translation.height)
+                }
+                .onEnded { v in
+                    if v.translation.height > 130 {
+                        onClose()
+                    } else {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            dragOffset = 0
+                        }
+                    }
+                }
+        )
         // Report this story / block its author (friends' stories only).
         .confirmationDialog("Report this story?", isPresented: $reportOpen, titleVisibility: .visible) {
             ForEach(ModerationService.reasons, id: \.self) { reason in
                 Button(reason) {
-                    guard ctx.stories.indices.contains(index) else { return }
-                    let story = ctx.stories[index]
+                    guard person.stories.indices.contains(index) else { return }
+                    let story = person.stories[index]
                     Task {
                         await moderation.report(
                             kind: "story", targetId: story.id,
@@ -9657,9 +10565,9 @@ private struct StoryViewer: View {
                     }
                 }
             }
-            Button("Block \(ctx.name)", role: .destructive) {
-                guard ctx.stories.indices.contains(index) else { return }
-                let story = ctx.stories[index]
+            Button("Block \(person.name)", role: .destructive) {
+                guard person.stories.indices.contains(index) else { return }
+                let story = person.stories[index]
                 Task {
                     await moderation.block(story.profileId)
                     await svc.refresh()
@@ -9833,6 +10741,7 @@ private struct TimelineFeedView: View {
     @ObservedObject var feed: FeedService
     @ObservedObject var pulse: FriendsPulseService
     @ObservedObject var stories: StoriesService
+    @ObservedObject var dm: DMService
     let profile: Profile
     let storyBAC: () -> Double?
     let storyStamp: () -> String?
@@ -9853,6 +10762,7 @@ private struct TimelineFeedView: View {
                 FriendsPulseStrip(
                     pulse: pulse,
                     stories: stories,
+                    dm: dm,
                     profile: profile,
                     storyBAC: storyBAC,
                     storyStamp: storyStamp,
@@ -10614,6 +11524,7 @@ private struct GalleryLightbox: View {
     let onClose: () -> Void
 
     @State private var index = 0
+    @State private var dragOffset: CGFloat = 0
 
     var body: some View {
         ZStack {
@@ -10641,6 +11552,22 @@ private struct GalleryLightbox: View {
             }
             .padding(.top, 16).padding(.trailing, 20)
         }
+        // Drag down to close, IG/Snap style — follows the finger, lets
+        // go past the threshold, springs back otherwise.
+        .offset(y: dragOffset)
+        .gesture(
+            DragGesture(minimumDistance: 25)
+                .onChanged { v in dragOffset = max(0, v.translation.height) }
+                .onEnded { v in
+                    if v.translation.height > 130 {
+                        onClose()
+                    } else {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            dragOffset = 0
+                        }
+                    }
+                }
+        )
         .onAppear { index = start }
     }
 }
@@ -10877,7 +11804,7 @@ enum SeshMode: String, Hashable, Identifiable {
 /// `SeshMode` (which is sesh/group scope) so feed selection doesn't leak into
 /// drink/group logic.
 enum TopTab: Hashable {
-    case plan, live, timeline, offers
+    case plan, live, timeline, chats, offers
 
     /// Section name shown in the top bar (the switcher now lives at the bottom).
     var title: String {
@@ -10885,6 +11812,7 @@ enum TopTab: Hashable {
         case .plan:     return "Plan"
         case .live:     return "Live"
         case .timeline: return "Nightline"
+        case .chats:    return "Chats"
         case .offers:   return "Deals"
         }
     }
@@ -11677,6 +12605,12 @@ private struct EventDetailSheet: View {
     @State private var nightSnaps: [SessionSnap] = []
     @State private var nightRoute: [NightRouteStop] = []
     @State private var nightLoaded = false
+    /// Tapped schnap → full-screen gallery, opened at this index.
+    struct SnapLightboxContext: Identifiable {
+        let id = UUID()
+        let start: Int
+    }
+    @State private var snapLightbox: SnapLightboxContext?
 
     struct NightRouteStop: Identifiable, Equatable {
         let id = UUID()
@@ -11839,6 +12773,13 @@ private struct EventDetailSheet: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
+        }
+        .fullScreenCover(item: $snapLightbox) { ctx in
+            GalleryLightbox(
+                urls: nightSnaps.compactMap(\.url),
+                start: ctx.start,
+                onClose: { snapLightbox = nil }
+            )
         }
         .sheet(isPresented: $locationSheetOpen) {
             EventLocationSheet(
@@ -13116,35 +14057,6 @@ private struct EventDetailSheet: View {
                     }
                 }
 
-                if !nightSnaps.isEmpty {
-                    CalmDivider()
-                    SectionLabel("Squad schnaps · \(nightSnaps.count)")
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-                        ForEach(nightSnaps) { snap in
-                            // Square base first, image as an overlay: a
-                            // bare scaledToFill AsyncImage feeds its own
-                            // size into the grid and the tiles go wonky.
-                            Rectangle()
-                                .fill(Color.smoke)
-                                .aspectRatio(1, contentMode: .fit)
-                                .overlay(
-                                    AsyncImage(url: snap.url) { phase in
-                                        switch phase {
-                                        case .success(let image):
-                                            image.resizable().scaledToFill()
-                                        default:
-                                            Color.clear
-                                        }
-                                    }
-                                )
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
-                                )
-                        }
-                    }
-                }
             }
             .padding(16)
             .background(
@@ -13157,7 +14069,73 @@ private struct EventDetailSheet: View {
             )
             .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
 
+            if !nightSnaps.isEmpty {
+                nightSnapsSection
+            }
+
             Disclaimer()
+        }
+    }
+
+    /// The night's squad schnaps — a section of its own with big
+    /// two-column tiles (they were buried as thumbnails inside the stats
+    /// card), each tappable into the full-screen swipeable gallery.
+    private var nightSnapsSection: some View {
+        let urls = nightSnaps.compactMap(\.url)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Squad schnaps")
+                    .font(.system(size: 20, weight: .heavy, design: .rounded))
+                    .tracking(-0.5)
+                    .foregroundStyle(Color.cream)
+                Text("\(urls.count)")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.bronze)
+                Spacer()
+            }
+            Text("Tap a photo to see it full screen — swipe to flick through the night.")
+                .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.bronze)
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8) {
+                ForEach(Array(urls.enumerated()), id: \.offset) { i, url in
+                    Button {
+                        snapLightbox = SnapLightboxContext(start: i)
+                    } label: {
+                        // Square base first, image as an overlay: a bare
+                        // scaledToFill AsyncImage feeds its own size into
+                        // the grid and the tiles go wonky.
+                        Rectangle()
+                            .fill(Color.smoke)
+                            .aspectRatio(1, contentMode: .fit)
+                            .overlay(
+                                AsyncImage(url: url) { phase in
+                                    switch phase {
+                                    case .success(let image):
+                                        image.resizable().scaledToFill()
+                                    default:
+                                        Color.clear
+                                    }
+                                }
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+                            )
+                            .overlay(alignment: .bottomTrailing) {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(7)
+                                    .background(Circle().fill(Color.ink.opacity(0.55)))
+                                    .padding(7)
+                            }
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+            }
         }
     }
 
@@ -13987,6 +14965,8 @@ private struct SessionView: View {
     @StateObject private var savedGroups = SavedGroupsStore()
     /// Plan-ahead events (parties/trips) — the PLAN tab's main content.
     @StateObject private var eventsService = EventsService()
+    /// Direct messages: friend chat + story reactions.
+    @StateObject private var dm = DMService()
     @State private var eventComposerOpen = false
     @State private var openEventRef: EventRef?
     /// The tonight planner starts collapsed — PLAN reads as events-first,
@@ -14770,43 +15750,28 @@ private struct SessionView: View {
             // the whole screen reads "this is the live experience" even
             // before any content swipes in.
             AtmosphereBackground(
-                accent: tab == .live ? Color.whiskey : status.color,
+                // Whiskey on LIVE (the live experience) and on CHATS —
+                // the chats page carries its own whiskey atmosphere copy
+                // (NavigationStack paints over the shared one), so the
+                // sliver above it must match or the top reads green while
+                // the page reads amber.
+                accent: (tab == .live || tab == .chats) ? Color.whiskey : status.color,
                 // Carbonation while the night is actually on.
                 bubbles: tab == .live && liveStartTime != nil
             )
             .animation(.easeInOut(duration: 0.45), value: tab)
 
             VStack(spacing: 0) {
-                ModeTopBar(
-                    tab: $tab,
-                    profile: profile,
-                    liveActive: liveActive,
-                    inboxCount: invites.pending.count + friends.incoming.count + friends.unseenActivityCount,
-                    onTapInbox: { invitesSheetOpen = true; friends.markActivitySeen() },
-                    onTapProfile: { profileOpen = true },
-                    onTapFriends: { friendsSheetOpen = true },
-                    liveStarted: liveStartTime,
-                    liveInGroup: liveGroup.isActive,
-                    liveMemberCount: liveGroup.members.count,
-                    liveCanEnd: !liveGroup.isActive && live.isActive,
-                    onEndLive: { liveConfirmEnd = true },
-                    liveIsHost: liveGroup.isHost,
-                    onEndGroup: {
-                        Task { await liveGroup.end(cousinSessionId: planGroup.session?.id) }
-                    },
-                    onLeaveGroup: { leaveGroupKeepingNight() },
-                    onEndMyGroupNight: {
-                        Task { await liveGroup.leave(cousinSessionId: planGroup.session?.id, captureRecap: true) }
-                    }
-                )
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
-                .padding(.bottom, 8)
+                topBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
 
                 TabView(selection: $tab) {
                     planPage.tag(TopTab.plan)
                     livePage.tag(TopTab.live)
                     timelinePage.tag(TopTab.timeline)
+                    chatsPage.tag(TopTab.chats)
                     offersPage.tag(TopTab.offers)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
@@ -14819,7 +15784,8 @@ private struct SessionView: View {
                              friendsLive: friendsPulse.pulses.contains { $0.live },
                              newOnNightline: liveStories.hasUnseenNightline,
                              unseenCount: liveStories.unseenNightlineCount,
-                             eventInvites: eventsService.pendingCount(for: profile.id))
+                             eventInvites: eventsService.pendingCount(for: profile.id),
+                             dmUnread: dm.totalUnread)
             }
 
             // Floating invite banner — pinned just below the ModeTopBar.
@@ -15112,84 +16078,18 @@ private struct SessionView: View {
         //   • Leave / end → stop mirroring and wipe the night's guests
         //     (covers every group-end path, not just the solo END button
         //     — that was the original "stale ghosts" bug).
+        // Session lifecycle wiring (ghost bridge + drink carry + boot +
+        // profile patch) — one chain entry; the inline closures were the
+        // type-checker's breaking point.
         .onChange(of: liveGroup.session?.id) { old, new in
-            if new != nil {
-                ghosts.hydrate(liveGroup.ghosts)
-                ghosts.syncSink = { [weak liveGroup] members in
-                    Task { @MainActor in await liveGroup?.syncGhosts(members) }
-                }
-                // Carry drinks ONLY when the user actively joined/created —
-                // resumeIfAny restoring the session on launch must not shove
-                // solo leftovers into the group on every app open.
-                let userInitiated = liveGroup.entryWasUserInitiated
-                liveGroup.entryWasUserInitiated = false
-                if userInitiated {
-                    // CREATOR only: my running night becomes the group's
-                    // opening chapter (the host's pre-game spot usually
-                    // predates the group row by a minute). Joiners keep
-                    // their earlier stops personal.
-                    if liveGroup.isHost, let newId = new {
-                        journey.adoptNightIntoSession(newId)
-                    }
-                    if old == nil {
-                        // Solo → group: carry my running solo night in.
-                        carrySoloNightIntoGroup()
-                    } else if let oldId = old, oldId != new {
-                        // Group → group switch. enter() hasn't yet swapped
-                        // `drinks`/roster to the new group, so the timeline
-                        // (and headcount for the shared-round split) still
-                        // reflect the PREVIOUS group — capture mine now and
-                        // re-add them to the new group.
-                        let previous = liveGroup.liveTimeline(for: profile.id)
-                            .filter { $0.sessionId == oldId }
-                        let heads = max(liveGroup.members.count + liveGroup.ghosts.count, 1)
-                        carryDrinksIntoCurrentGroup(previous, headCount: heads, from: oldId)
-                    }
-                } else if live.isActive {
-                    // Defensive normalize: an active GROUP alongside an
-                    // active SOLO is never a valid state. A solo that's
-                    // still alive next to a fresh group is tonight's night
-                    // (truly stale solos are auto-ended by endIfStale
-                    // before resume gets here) — carry it in and close it,
-                    // exactly as a user-initiated join would.
-                    carrySoloNightIntoGroup()
-                }
-            } else if old != nil && new == nil {
-                ghosts.syncSink = nil
-                ghosts.clearAll()
-            }
+            handleLiveSessionChange(old: old, new: new)
         }
-        // Reflect other devices' guest edits (pulled by the 3s session
-        // poll) into the local store, but only while we're in a group —
-        // in solo mode liveGroup.ghosts is empty and must not clobber
-        // device-local guests.
         .onChange(of: liveGroup.ghosts) { _, newGhosts in
             if liveGroup.session != nil {
                 ghosts.hydrate(newGhosts)
             }
         }
-        // First-frame seed: if either store resumed into an existing
-        // session before the .onChange observers were wired, record it
-        // now so the saved-groups list reflects "where I am right now"
-        // even if the user never refreshes the roster.
-        .onAppear {
-            recordSavedGroup(from: planGroup)
-            recordSavedGroup(from: liveGroup)
-            friends.start()
-            eventsService.start()
-            sweepStaleJourney()
-            // Every journey entry created while in a live group carries the
-            // group's id — the group recap selects by IDENTITY, so a
-            // member's parallel personal stops can never leak into it.
-            journey.currentSessionProvider = { [weak liveGroup] in
-                liveGroup?.session?.id
-            }
-        }
-        // Profile edits (weight/age/sex) need to flow into the live
-        // Widmark formula immediately. Otherwise the per-drink BAC
-        // stays anchored to the cached profile until the next 3-second
-        // poll fetches the new row from the DB. Patch both stores'
-        // memberProfiles so PLAN and LIVE reflect the change in lockstep.
+        .onAppear { bootSession() }
         .onChange(of: profile) { _, new in
             planGroup.applyMyProfile(new)
             liveGroup.applyMyProfile(new)
@@ -15247,6 +16147,103 @@ private struct SessionView: View {
     /// Per-account, so a second account on the same phone still gets the
     /// tour — same keying pattern as the nightline last-seen marker.
     private var tourSeenKey: String { "sesh.tour.seen.v1.\(profile.id)" }
+
+    /// Bridge the device-local guest store to the shared session roster
+    /// as the user enters / leaves a LIVE group, and carry drinks across
+    /// solo↔group and group→group transitions. Extracted from an inline
+    /// onChange closure for the type-checker's sake — behaviour identical.
+    private func handleLiveSessionChange(old: UUID?, new: UUID?) {
+        if new != nil {
+            ghosts.hydrate(liveGroup.ghosts)
+            ghosts.syncSink = { [weak liveGroup] members in
+                Task { @MainActor in await liveGroup?.syncGhosts(members) }
+            }
+            // Carry drinks ONLY when the user actively joined/created —
+            // resumeIfAny restoring the session on launch must not shove
+            // solo leftovers into the group on every app open.
+            let userInitiated = liveGroup.entryWasUserInitiated
+            liveGroup.entryWasUserInitiated = false
+            if userInitiated {
+                // CREATOR only: my running night becomes the group's
+                // opening chapter (the host's pre-game spot usually
+                // predates the group row by a minute). Joiners keep
+                // their earlier stops personal.
+                if liveGroup.isHost, let newId = new {
+                    journey.adoptNightIntoSession(newId)
+                }
+                if old == nil {
+                    // Solo → group: carry my running solo night in.
+                    carrySoloNightIntoGroup()
+                } else if let oldId = old, oldId != new {
+                    // Group → group switch. enter() hasn't yet swapped
+                    // `drinks`/roster to the new group, so the timeline
+                    // (and headcount for the shared-round split) still
+                    // reflect the PREVIOUS group — capture mine now and
+                    // re-add them to the new group.
+                    let previous = liveGroup.liveTimeline(for: profile.id)
+                        .filter { $0.sessionId == oldId }
+                    let heads = max(liveGroup.members.count + liveGroup.ghosts.count, 1)
+                    carryDrinksIntoCurrentGroup(previous, headCount: heads, from: oldId)
+                }
+            } else if live.isActive {
+                // Defensive normalize: an active GROUP alongside an
+                // active SOLO is never a valid state. A solo that's
+                // still alive next to a fresh group is tonight's night
+                // (truly stale solos are auto-ended by endIfStale
+                // before resume gets here) — carry it in and close it,
+                // exactly as a user-initiated join would.
+                carrySoloNightIntoGroup()
+            }
+        } else if old != nil && new == nil {
+            ghosts.syncSink = nil
+            ghosts.clearAll()
+        }
+    }
+
+    /// First-frame boot: seed saved groups, start the polling services,
+    /// sweep stale journey leftovers, and wire the journey's session-id
+    /// stamp. Extracted from the body's onAppear (type-checker budget).
+    private func bootSession() {
+        recordSavedGroup(from: planGroup)
+        recordSavedGroup(from: liveGroup)
+        friends.start()
+        eventsService.start()
+        dm.start()
+        sweepStaleJourney()
+        // Every journey entry created while in a live group carries the
+        // group's id — the group recap selects by IDENTITY, so a
+        // member's parallel personal stops can never leak into it.
+        journey.currentSessionProvider = { [weak liveGroup] in
+            liveGroup?.session?.id
+        }
+    }
+
+    /// Extracted from body — the 16-argument ModeTopBar call inside the
+    /// main chain was the straw that broke the type-checker's back.
+    private var topBar: some View {
+        ModeTopBar(
+            tab: $tab,
+            profile: profile,
+            liveActive: liveActive,
+            inboxCount: invites.pending.count + friends.incoming.count + friends.unseenActivityCount,
+            onTapInbox: { invitesSheetOpen = true; friends.markActivitySeen() },
+            onTapProfile: { profileOpen = true },
+            onTapFriends: { friendsSheetOpen = true },
+            liveStarted: liveStartTime,
+            liveInGroup: liveGroup.isActive,
+            liveMemberCount: liveGroup.members.count,
+            liveCanEnd: !liveGroup.isActive && live.isActive,
+            onEndLive: { liveConfirmEnd = true },
+            liveIsHost: liveGroup.isHost,
+            onEndGroup: {
+                Task { await liveGroup.end(cousinSessionId: planGroup.session?.id) }
+            },
+            onLeaveGroup: { leaveGroupKeepingNight() },
+            onEndMyGroupNight: {
+                Task { await liveGroup.leave(cousinSessionId: planGroup.session?.id, captureRecap: true) }
+            }
+        )
+    }
 
     /// A group venue that doesn't exist in the venues table (an event's
     /// auto check-in place, or any payload written before the source fix)
@@ -15345,11 +16342,17 @@ private struct SessionView: View {
         }
     }
 
+    /// CHATS — DM threads (story likes/replies land here too).
+    private var chatsPage: some View {
+        ChatsView(dm: dm, friends: friends, profile: profile)
+    }
+
     private var timelineFeed: some View {
         TimelineFeedView(
             feed: feed,
             pulse: friendsPulse,
             stories: liveStories,
+            dm: dm,
             profile: profile,
             storyBAC: { currentStoryBAC() },
             storyStamp: { currentStoryStamp() },
@@ -19331,6 +20334,8 @@ private struct BottomTabBar: View {
     var unseenCount: Int = 0
     /// Event invites awaiting the user's RSVP — numbered ring on PLAN.
     var eventInvites: Int = 0
+    /// Unread DMs — numbered ring on CHATS.
+    var dmUnread: Int = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -19343,6 +20348,8 @@ private struct BottomTabBar: View {
                  pulseColor: Color(red: 0.51, green: 0.72, blue: 0.48),
                  buzzing: newOnNightline && !reduceMotion,
                  badgeCount: unseenCount)
+            item(.chats,    icon: "bubble.left.and.bubble.right.fill", label: "CHATS",
+                 badgeCount: dmUnread)
             item(.offers,   icon: "map.fill",                      label: "DEALS")
         }
         .padding(.top, 10)
