@@ -134,3 +134,21 @@ struct CalmDivider: View {
     }
 }
 
+
+// MARK: - Palette
+
+// Internal (not fileprivate) so sibling files in the app target — e.g.
+// BarcodeScanner.swift — can use the same palette without duplicating the
+// hex values. The widget extension is a separate module and keeps its own
+// local copy.
+extension Color {
+    static let ink     = Color(red: 0.043, green: 0.039, blue: 0.031)
+    static let inkElev = Color(red: 0.075, green: 0.067, blue: 0.055)
+    static let whiskey = Color(red: 0.910, green: 0.659, blue: 0.290)
+    static let cream   = Color(red: 0.961, green: 0.929, blue: 0.878)
+    static let bronze  = Color(red: 0.541, green: 0.498, blue: 0.431)
+    static let smoke   = Color(red: 0.192, green: 0.176, blue: 0.149)
+    static let stout   = Color(red: 0.035, green: 0.020, blue: 0.010)
+    static let foam    = Color(red: 0.975, green: 0.915, blue: 0.810)
+}
+

@@ -1,0 +1,782 @@
+// Core value models — Sex, Profile, Status tiers, the drinks catalog, and
+// the group/invite/venue value types. Extracted from content_view.swift;
+// pure relocation.
+
+import SwiftUI
+import Foundation
+import CoreLocation
+
+// MARK: - Sex
+
+enum Sex: String, CaseIterable, Identifiable, Codable {
+    case male, female
+    var id: String { rawValue }
+    var short: String { self == .male ? "M" : "F" }
+    var label: String { self == .male ? "Male" : "Female" }
+    var r: Double { self == .male ? 0.68 : 0.55 }
+}
+
+// MARK: - Profile
+
+struct Profile: Codable, Equatable, Hashable {
+    let id: UUID
+    var name: String
+    var age: Int
+    var sex: Sex
+    var weightKg: Double
+    var avatarURL: String?
+    /// Unique @handle (lowercased) used to find + friend this user. Nil until
+    /// the user picks one. Added in migration 018.
+    var username: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, age, sex, username
+        case weightKg = "weight_kg"
+        case avatarURL = "avatar_url"
+    }
+
+    /// Tolerate rows that predate the username column.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        age = try c.decode(Int.self, forKey: .age)
+        sex = try c.decode(Sex.self, forKey: .sex)
+        weightKg = try c.decode(Double.self, forKey: .weightKg)
+        avatarURL = try c.decodeIfPresent(String.self, forKey: .avatarURL)
+        username = try c.decodeIfPresent(String.self, forKey: .username)
+    }
+
+    /// Explicit memberwise init (the custom decoder init suppresses the
+    /// synthesized one). username defaults to nil for existing call sites.
+    init(id: UUID, name: String, age: Int, sex: Sex, weightKg: Double,
+         avatarURL: String? = nil, username: String? = nil) {
+        self.id = id
+        self.name = name
+        self.age = age
+        self.sex = sex
+        self.weightKg = weightKg
+        self.avatarURL = avatarURL
+        self.username = username
+    }
+}
+
+// MARK: - Status + messages
+
+struct VibeMessage: Hashable {
+    let headline: String
+    let advice: String
+}
+
+enum Status: String {
+    case sober, buzzed, impaired, drunk, danger
+
+    var label: String {
+        switch self {
+        case .sober:    return "Clear"
+        case .buzzed:   return "Warming"
+        case .impaired: return "Impaired"
+        case .drunk:    return "Lit"
+        case .danger:   return "Danger"
+        }
+    }
+
+    var heroLabel: String {
+        switch self {
+        case .sober:    return "You're good"
+        case .buzzed:   return "Warming up"
+        case .impaired: return "Feeling it"
+        case .drunk:    return "You're lit"
+        case .danger:   return "Slow down"
+        }
+    }
+
+    var heroSubtitle: String {
+        switch self {
+        case .sober:    return "Barely a trace. Still sharp."
+        case .buzzed:   return "A little glow. Hydrate."
+        case .impaired: return "Reflexes are slowing down."
+        case .drunk:    return "You're in the zone — don't drive."
+        case .danger:   return "This is too much. Water + food."
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .sober:    return Color(red: 0.51, green: 0.72, blue: 0.48)
+        case .buzzed:   return Color(red: 0.91, green: 0.69, blue: 0.29)
+        case .impaired: return Color(red: 0.91, green: 0.58, blue: 0.29)
+        case .drunk:    return Color(red: 0.85, green: 0.32, blue: 0.23)
+        case .danger:   return Color(red: 0.72, green: 0.18, blue: 0.12)
+        }
+    }
+
+    var messages: [VibeMessage] {
+        switch self {
+        case .sober:
+            return [
+                VibeMessage(headline: "Weak. You're practically sipping sparkling water.",
+                            advice: "Pace the night. Keep water nearby."),
+                VibeMessage(headline: "Warm-up round. The night hasn't started yet.",
+                            advice: "Eat before round two. Water on the side."),
+                VibeMessage(headline: "Honestly? You should probably have a cig — this round doesn't count.",
+                            advice: "Set the pace. Hydration is a personality trait."),
+                VibeMessage(headline: "Dead sober behaviour. Your liver is filing for unemployment.",
+                            advice: "Eat now or pace later. Water saves the night."),
+                VibeMessage(headline: "Reading the menu like a sommelier. Adorable.",
+                            advice: "Take it easy. The night is long."),
+            ]
+        case .buzzed:
+            return [
+                VibeMessage(headline: "Warmed up. Smooth-talker mode unlocked.",
+                            advice: "Eat something solid. Water between rounds."),
+                VibeMessage(headline: "Confidence rising. Keep your phone in your pocket.",
+                            advice: "Nibble on food. Alternate with water."),
+                VibeMessage(headline: "You're funnier now. Statistically, only to yourself.",
+                            advice: "Snack break. One water before the next drink."),
+                VibeMessage(headline: "Tipsy. Your texts are about to get unhinged.",
+                            advice: "Eat carbs. Stay with the group."),
+                VibeMessage(headline: "Officially flirty. Sober-you would cringe.",
+                            advice: "Slow it down. Hydrate."),
+            ]
+        case .impaired:
+            return [
+                VibeMessage(headline: "Your moves are sick. Dance like nobody's filming.",
+                            advice: "Hand over your car keys now. No driving — not even a block."),
+                VibeMessage(headline: "Main-character energy. You're over the EU limit.",
+                            advice: "Slow the pace. Double up on water."),
+                VibeMessage(headline: "You're explaining your dissertation to strangers. Please stop.",
+                            advice: "Water round. Eat. No driving — period."),
+                VibeMessage(headline: "Convinced you can sing. You cannot.",
+                            advice: "Hand the keys to a friend. Water now."),
+                VibeMessage(headline: "Buying shots for the bar. Your bank account just sighed.",
+                            advice: "Pace the next hour. Eat something."),
+            ]
+        case .drunk:
+            return [
+                VibeMessage(headline: "Lit. Great time to confess your love for someone.",
+                            advice: "Never drive. Eat carbs. Text your safety buddy."),
+                VibeMessage(headline: "Peak charisma, worst judgment. Enjoy the ride.",
+                            advice: "Rideshare only. Zero steering. Phone in pocket."),
+                VibeMessage(headline: "Your body wants to call your ex. DON'T.",
+                            advice: "Water. Bread. Friends. In that order."),
+                VibeMessage(headline: "You think you're whispering. You are not.",
+                            advice: "Cab home. Big glass of water. Sleep on your side."),
+                VibeMessage(headline: "Future-you is already cringing at present-you.",
+                            advice: "Stop drinking. Get food. Stay with friends."),
+                VibeMessage(headline: "Forming opinions on geopolitics. Nobody asked.",
+                            advice: "Water now. Cab — never the wheel."),
+            ]
+        case .danger:
+            return [
+                VibeMessage(headline: "Blackout zone. Step AWAY from the phone.",
+                            advice: "Water, not drinks. Stay with a sober friend."),
+                VibeMessage(headline: "You're cooked. Do NOT text your ex.",
+                            advice: "Above 0.30 consider medical help. Never alone."),
+                VibeMessage(headline: "Beyond lit. Time to become a water champion.",
+                            advice: "Stop drinking. Eat. Tell someone trustworthy where you are."),
+                VibeMessage(headline: "This is a tomorrow problem becoming a tonight problem.",
+                            advice: "Stop. Water. Stay upright. Tell a friend."),
+                VibeMessage(headline: "Officially in 'whose bed is this' territory.",
+                            advice: "No more drinks. Sober adult on standby."),
+            ]
+        }
+    }
+}
+
+
+// MARK: - Drinks catalog
+
+enum DrinkCategory: String, CaseIterable, Identifiable, Codable {
+    case beer, wine, sparkling, whisky, vodka, gin, cocktail, cider
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .beer:      return "Beer"
+        case .wine:      return "Wine"
+        case .sparkling: return "Sparkling"
+        case .whisky:    return "Whisky"
+        case .vodka:     return "Vodka"
+        case .gin:       return "Gin"
+        case .cocktail:  return "Cocktail"
+        case .cider:     return "Cider"
+        }
+    }
+
+    var emoji: String {
+        switch self {
+        case .beer:      return "🍺"
+        case .wine:      return "🍷"
+        case .sparkling: return "🥂"
+        case .whisky:    return "🥃"
+        case .vodka:     return "👙"
+        case .gin:       return "🍹"
+        case .cocktail:  return "🍸"
+        case .cider:     return "🐱"
+        }
+    }
+}
+
+enum GlyphOverride: Hashable {
+    case guinness
+}
+
+struct DrinkOption: Hashable {
+    let category: DrinkCategory
+    let name: String
+    let detail: String
+    let volumeML: Double
+    let abv: Double
+    var customGlyph: GlyphOverride? = nil
+    var grams: Double { volumeML * abv * 0.789 }
+}
+
+struct OrderItem: Identifiable {
+    let id: UUID
+    let option: DrinkOption
+    var shared: Bool
+    init(id: UUID = UUID(), option: DrinkOption, shared: Bool = false) {
+        self.id = id
+        self.option = option
+        self.shared = shared
+    }
+}
+
+struct OrderKey: Hashable {
+    let option: DrinkOption
+    let shared: Bool
+}
+
+struct OrderGroup: Identifiable {
+    let option: DrinkOption
+    let shared: Bool
+    let itemIDs: [OrderItem.ID]
+    var count: Int { itemIDs.count }
+    var id: OrderKey { OrderKey(option: option, shared: shared) }
+}
+
+func aggregateOrder(_ order: [OrderItem]) -> [OrderGroup] {
+    var keyOrder: [OrderKey] = []
+    var groups: [OrderKey: [OrderItem.ID]] = [:]
+    for item in order {
+        let k = OrderKey(option: item.option, shared: item.shared)
+        if groups[k] == nil { keyOrder.append(k) }
+        groups[k, default: []].append(item.id)
+    }
+    return keyOrder.map { key in
+        OrderGroup(option: key.option, shared: key.shared, itemIDs: groups[key] ?? [])
+    }
+}
+
+enum DrinkCatalog {
+    static var allOptions: [DrinkOption] {
+        DrinkCategory.allCases.flatMap { options(for: $0) }
+    }
+
+    static func options(for category: DrinkCategory) -> [DrinkOption] {
+        switch category {
+        case .beer:
+            return [
+                .init(category: .beer, name: "Small beer",  detail: "33 cl · 5%",  volumeML: 330, abv: 0.05),
+                .init(category: .beer, name: "Medium beer", detail: "40 cl · 5%",  volumeML: 400, abv: 0.05),
+                .init(category: .beer, name: "Large beer",  detail: "50 cl · 5%",  volumeML: 500, abv: 0.05),
+                .init(category: .beer, name: "Pint",        detail: "57 cl · 5%",  volumeML: 568, abv: 0.05),
+                .init(category: .beer, name: "Guinness",   detail: "Pint · 4.2%", volumeML: 568, abv: 0.042, customGlyph: .guinness),
+            ]
+        case .wine:
+            return [
+                .init(category: .wine, name: "Glass of wine",  detail: "15 cl · 12%", volumeML: 150, abv: 0.12),
+                .init(category: .wine, name: "Large glass",    detail: "25 cl · 12%", volumeML: 250, abv: 0.12),
+                .init(category: .wine, name: "Bottle of wine", detail: "75 cl · 12%", volumeML: 750, abv: 0.12),
+            ]
+        case .sparkling:
+            return [
+                .init(category: .sparkling, name: "Champagne flute",     detail: "12 cl · 12%", volumeML: 120, abv: 0.12),
+                .init(category: .sparkling, name: "Bottle of champagne", detail: "75 cl · 12%", volumeML: 750, abv: 0.12),
+            ]
+        case .whisky:
+            return [
+                .init(category: .whisky, name: "Single whisky", detail: "2.5 cl · 40%", volumeML: 25, abv: 0.40),
+                .init(category: .whisky, name: "Double whisky", detail: "5 cl · 40%",   volumeML: 50, abv: 0.40),
+            ]
+        case .vodka:
+            return [
+                .init(category: .vodka, name: "Shot of vodka",   detail: "4 cl · 40%",  volumeML: 40,  abv: 0.40),
+                .init(category: .vodka, name: "Double shot",     detail: "8 cl · 40%",  volumeML: 80,  abv: 0.40),
+                .init(category: .vodka, name: "Bottle of vodka", detail: "70 cl · 40%", volumeML: 700, abv: 0.40),
+            ]
+        case .gin:
+            return [
+                .init(category: .gin, name: "Single gin",  detail: "2.5 cl · 40%", volumeML: 25, abv: 0.40),
+                .init(category: .gin, name: "Double gin",  detail: "5 cl · 40%",   volumeML: 50, abv: 0.40),
+                .init(category: .gin, name: "Gin & tonic", detail: "4 cl · 40%",   volumeML: 40, abv: 0.40),
+            ]
+        case .cocktail:
+            return [
+                .init(category: .cocktail, name: "Cocktail",        detail: "1.5 shots equiv", volumeML: 60,  abv: 0.40),
+                .init(category: .cocktail, name: "Strong cocktail", detail: "2.5 shots equiv", volumeML: 100, abv: 0.40),
+            ]
+        case .cider:
+            return [
+                .init(category: .cider, name: "Bottle of cider", detail: "33 cl · 4.5%", volumeML: 330, abv: 0.045),
+                .init(category: .cider, name: "Pint of cider",   detail: "50 cl · 4.5%", volumeML: 500, abv: 0.045),
+            ]
+        }
+    }
+}
+
+// MARK: - Group sesh models
+
+struct SeshSession: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let hostId: UUID
+    let joinCode: String
+    let createdAt: Date
+    /// Legacy "is this session alive at all?" flag. Per-mode end now
+    /// drives the actual lifecycle (see `activePlan`/`activeLive`); we
+    /// leave `active` permanently TRUE on every row from migration 007
+    /// onward. Reads still tolerate it being either value so this
+    /// struct keeps decoding regardless of when the host's row was
+    /// last touched.
+    var active: Bool
+    /// Per-mode liveness flags introduced in migration 007. Default to
+    /// TRUE for back-compat decoding so a fetch against an environment
+    /// that hasn't run the migration yet still produces a sensible
+    /// session struct (it'll behave as if both modes are alive, which
+    /// matches the legacy single-`active` semantics).
+    var activePlan: Bool
+    var activeLive: Bool
+    /// Manually-added guests for this session, synced via the JSONB
+    /// `ghosts` column (migration 011). Lets every device in a group see
+    /// the same guest roster + their drinks. Defaults to [] for legacy
+    /// rows / environments that haven't run the migration.
+    var ghosts: [GhostMember]
+    /// The group's shared current venue (migration 016). Set when a member
+    /// checks the whole group in; nil = the group is checked out. Members
+    /// who are "following the group" adopt it. Default nil for legacy rows.
+    var liveVenue: Venue? = nil
+    /// The group's shared pre-game / between-bars location (migration 017),
+    /// adopted by following members. nil = none.
+    var liveLooseSpot: LooseSpot? = nil
+    enum CodingKeys: String, CodingKey {
+        case id
+        case hostId = "host_id"
+        case joinCode = "join_code"
+        case createdAt = "created_at"
+        case active
+        case activePlan = "active_plan"
+        case activeLive = "active_live"
+        case ghosts
+        case liveVenue = "live_venue"
+        case liveLooseSpot = "live_loose_spot"
+    }
+    init(
+        id: UUID,
+        hostId: UUID,
+        joinCode: String,
+        createdAt: Date,
+        active: Bool,
+        activePlan: Bool = true,
+        activeLive: Bool = true,
+        ghosts: [GhostMember] = []
+    ) {
+        self.id = id
+        self.hostId = hostId
+        self.joinCode = joinCode
+        self.createdAt = createdAt
+        self.active = active
+        self.activePlan = activePlan
+        self.activeLive = activeLive
+        self.ghosts = ghosts
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.hostId = try c.decode(UUID.self, forKey: .hostId)
+        self.joinCode = try c.decode(String.self, forKey: .joinCode)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.active = (try c.decodeIfPresent(Bool.self, forKey: .active)) ?? true
+        self.activePlan = (try c.decodeIfPresent(Bool.self, forKey: .activePlan)) ?? true
+        self.activeLive = (try c.decodeIfPresent(Bool.self, forKey: .activeLive)) ?? true
+        self.ghosts = (try c.decodeIfPresent([GhostMember].self, forKey: .ghosts)) ?? []
+        self.liveVenue = try c.decodeIfPresent(Venue.self, forKey: .liveVenue)
+        self.liveLooseSpot = try c.decodeIfPresent(LooseSpot.self, forKey: .liveLooseSpot)
+    }
+}
+
+struct SessionMember: Codable, Equatable, Hashable {
+    let sessionId: UUID
+    let profileId: UUID
+    let joinedAt: Date
+    /// Per-member duration slider value (hours), synced across phones.
+    /// `nil` means the member hasn't set one yet — callers should fall back
+    /// to a derived value (e.g. time since their first drink).
+    var durationHours: Double?
+    /// Per-mode "is this user still in the session in <mode>?" flags.
+    /// Introduced in migration 007 so plan and live can be left/joined
+    /// independently when both modes happen to track the same session.
+    /// Default to TRUE on decode for back-compat with environments that
+    /// haven't run the migration yet — the fallback matches legacy
+    /// behaviour ("if you're a member at all, you're a member in both
+    /// modes").
+    var inPlan: Bool
+    var inLive: Bool
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case profileId = "profile_id"
+        case joinedAt = "joined_at"
+        case durationHours = "duration_hours"
+        case inPlan = "in_plan"
+        case inLive = "in_live"
+    }
+    init(
+        sessionId: UUID,
+        profileId: UUID,
+        joinedAt: Date,
+        durationHours: Double? = nil,
+        inPlan: Bool = true,
+        inLive: Bool = true
+    ) {
+        self.sessionId = sessionId
+        self.profileId = profileId
+        self.joinedAt = joinedAt
+        self.durationHours = durationHours
+        self.inPlan = inPlan
+        self.inLive = inLive
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.sessionId = try c.decode(UUID.self, forKey: .sessionId)
+        self.profileId = try c.decode(UUID.self, forKey: .profileId)
+        self.joinedAt = try c.decode(Date.self, forKey: .joinedAt)
+        self.durationHours = try c.decodeIfPresent(Double.self, forKey: .durationHours)
+        self.inPlan = (try c.decodeIfPresent(Bool.self, forKey: .inPlan)) ?? true
+        self.inLive = (try c.decodeIfPresent(Bool.self, forKey: .inLive)) ?? true
+    }
+}
+
+// MARK: - Invites
+//
+// In-app invite row, mirrors the `invites` table from migration 008. Status
+// is a string instead of an enum so that future server-side additions to the
+// state machine (e.g. `expired`) don't break decoding on older clients —
+// the UI only branches on `pending` and otherwise treats the row as inert.
+struct Invite: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let sessionId: UUID
+    let senderId: UUID
+    let recipientId: UUID
+    let joinCode: String
+    let createdAt: Date
+    var status: String
+    var respondedAt: Date?
+    /// Which mode the sender was in when they fired this invite. The
+    /// recipient's "Accept" handler reads this to decide whether to call
+    /// planGroup.join or liveGroup.join — without it, a live host's
+    /// invite would drop the recipient into the plan half of the session
+    /// and they'd never see the live activity. String-typed (not an
+    /// enum) for the same forward-compat reason as `status`. Defaults to
+    /// "plan" via the DB-side default, so legacy rows decode cleanly.
+    var mode: String = "plan"
+    enum CodingKeys: String, CodingKey {
+        case id
+        case sessionId = "session_id"
+        case senderId = "sender_id"
+        case recipientId = "recipient_id"
+        case joinCode = "join_code"
+        case createdAt = "created_at"
+        case status
+        case respondedAt = "responded_at"
+        case mode
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.sessionId = try c.decode(UUID.self, forKey: .sessionId)
+        self.senderId = try c.decode(UUID.self, forKey: .senderId)
+        self.recipientId = try c.decode(UUID.self, forKey: .recipientId)
+        self.joinCode = try c.decode(String.self, forKey: .joinCode)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.status = try c.decode(String.self, forKey: .status)
+        self.respondedAt = try c.decodeIfPresent(Date.self, forKey: .respondedAt)
+        self.mode = (try c.decodeIfPresent(String.self, forKey: .mode)) ?? "plan"
+    }
+}
+
+struct SessionDrink: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let sessionId: UUID
+    let profileId: UUID
+    let drinkName: String
+    let volumeMl: Double
+    let abv: Double
+    let createdAt: Date
+    var shared: Bool = false
+    /// Whether this drink belongs to the Live Sesh ledger or the regular
+    /// (manual-duration) ledger. The two are intentionally separate so
+    /// numbers in one mode don't bleed into the other. Defaults to false
+    /// for backwards-compat with rows inserted before this column existed.
+    var live: Bool = false
+    enum CodingKeys: String, CodingKey {
+        case id
+        case sessionId = "session_id"
+        case profileId = "profile_id"
+        case drinkName = "drink_name"
+        case volumeMl = "volume_ml"
+        case abv
+        case createdAt = "created_at"
+        case shared
+        case live
+    }
+    var grams: Double { volumeMl * abv * 0.789 }
+}
+
+// MARK: - Venues
+//
+// Phase 1 of the location feature: a `Venue` is a real-world bar/place
+// with coordinates and (optionally) a list of "specials" — drinks that
+// only show up in the picker while the user is checked in there.
+// Phase 2 (later) will layer in featured curation, photos, and richer
+// proximity-based UI; for now the app only needs name + coordinates +
+// specials.
+
+/// Trust tier for a venue. Mirrors `venues.source` in the DB.
+/// - curated: vetted by us. Only tier allowed to carry specials.
+/// - mapkit:  created on-the-fly from MKLocalSearch when a user checks in.
+/// - user:    reserved for a future "add a place we missed" flow.
+enum VenueSource: String, Codable, Equatable, Hashable {
+    case curated
+    case mapkit
+    case user
+}
+
+struct Venue: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let name: String
+    let address: String?
+    let city: String?
+    let lat: Double
+    let lon: Double
+    var isFeatured: Bool = false
+    var source: VenueSource = .curated
+    var externalId: String? = nil
+    let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, address, city, lat, lon
+        case isFeatured = "is_featured"
+        case source
+        case externalId = "external_id"
+        case createdAt  = "created_at"
+    }
+
+    init(
+        id: UUID,
+        name: String,
+        address: String?,
+        city: String?,
+        lat: Double,
+        lon: Double,
+        isFeatured: Bool = false,
+        source: VenueSource = .curated,
+        externalId: String? = nil,
+        createdAt: Date
+    ) {
+        self.id = id
+        self.name = name
+        self.address = address
+        self.city = city
+        self.lat = lat
+        self.lon = lon
+        self.isFeatured = isFeatured
+        self.source = source
+        self.externalId = externalId
+        self.createdAt = createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id         = try c.decode(UUID.self,   forKey: .id)
+        name       = try c.decode(String.self, forKey: .name)
+        address    = try c.decodeIfPresent(String.self, forKey: .address)
+        city       = try c.decodeIfPresent(String.self, forKey: .city)
+        lat        = try c.decode(Double.self, forKey: .lat)
+        lon        = try c.decode(Double.self, forKey: .lon)
+        isFeatured = (try c.decodeIfPresent(Bool.self, forKey: .isFeatured)) ?? false
+        source     = (try c.decodeIfPresent(VenueSource.self, forKey: .source)) ?? .curated
+        externalId = try c.decodeIfPresent(String.self, forKey: .externalId)
+        createdAt  = try c.decode(Date.self,   forKey: .createdAt)
+    }
+
+    /// Human-readable single-line location: "Vasagatan 1, Göteborg".
+    var displayLocation: String {
+        [address, city].compactMap { $0 }.joined(separator: ", ")
+    }
+}
+
+/// A drink that only exists at a specific venue. Plugs into the existing
+/// BAC math by exposing the same `volumeML` / `abv` shape as DrinkOption,
+/// so the rest of the picker / order / Widmark code doesn't need to know
+/// venue specials are a different table.
+struct VenueSpecial: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let venueId: UUID
+    let name: String
+    let detail: String?
+    let volumeMl: Double
+    let abv: Double
+    let category: String
+    let emoji: String?
+    let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case venueId   = "venue_id"
+        case name, detail
+        case volumeMl  = "volume_ml"
+        case abv, category, emoji
+        case createdAt = "created_at"
+    }
+
+    /// Convert to a DrinkOption so the rest of the UI / BAC math can
+    /// treat specials identically to catalog drinks. Unknown category
+    /// strings fall back to .cocktail (the closest catch-all).
+    func asDrinkOption() -> DrinkOption {
+        let cat = DrinkCategory(rawValue: category) ?? .cocktail
+        let derivedDetail = detail
+            ?? "\(Int(volumeMl)) ml · \(Int((abv * 100).rounded()))%"
+        return DrinkOption(
+            category: cat,
+            name: name,
+            detail: derivedDetail,
+            volumeML: volumeMl,
+            abv: abv
+        )
+    }
+}
+
+/// A promotional OFFER at a venue — surfaced on the "deals near you" map
+/// (Phase A) and, later, at check-in. Marketing, not a menu item: unlike
+/// VenueSpecial it never feeds the BAC math. See migration 029_venue_offers.
+/// Only the display columns are decoded; RLS already filters the table to
+/// live (active + approved + unexpired) offers, so the client trusts what it
+/// gets.
+struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    let venueId: UUID
+    let kind: String            // price | free_entry | bundle | happy_hour | event
+    let title: String
+    let description: String?
+    let finePrint: String?
+    let redeem: String          // show | code | scan
+    let code: String?
+    let startMinute: Int?       // local minutes from midnight; nil = all day
+    let endMinute: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case venueId     = "venue_id"
+        case kind, title, description
+        case finePrint   = "fine_print"
+        case redeem, code
+        case startMinute = "start_minute"
+        case endMinute   = "end_minute"
+    }
+
+    /// SF Symbol for the offer kind — drives the pin/row glyph.
+    var glyph: String {
+        switch kind {
+        case "free_entry": return "ticket.fill"
+        case "happy_hour": return "clock.fill"
+        case "bundle":     return "gift.fill"
+        case "event":      return "music.note"
+        default:           return "tag.fill"      // price
+        }
+    }
+
+    /// "16:00–19:00" window, or nil when the offer runs all day.
+    var windowLabel: String? {
+        guard let s = startMinute, let e = endMinute,
+              !(s == 0 && e >= 24 * 60 - 1) else { return nil }
+        func hhmm(_ m: Int) -> String { String(format: "%02d:%02d", m / 60, m % 60) }
+        return "\(hhmm(s))–\(hhmm(e))"
+    }
+}
+
+/// Name-matched local "secret menu" — when a user checks in to a venue
+/// whose name matches one of the patterns below, these specials are
+/// attached to that venue in memory and surface in the drink picker.
+///
+/// Why this isn't a curated featured-venue list anymore:
+///   • The app no longer ships a seeded venue catalog. Users find their
+///     bar via Apple Maps search (MKLocalSearch) like they would any
+///     other place — search "Handelspuben", tap it, you're checked in.
+///   • The specials still attach automatically because we recognise the
+///     venue by name after check-in. The user gets the same result
+///     without us pretending to curate a venue we don't run.
+///
+/// Each pattern is a case-insensitive substring match against
+/// `Venue.name`. The matcher returns `VenueSpecial` rows bound to the
+/// caller's venue id (we don't persist them to Supabase — they're
+/// recognised locally on every checkout/check-in, so the venue id is
+/// whatever the MapKit insert produced).
+private struct LocalSpecialTemplate {
+    let name: String
+    let detail: String
+    let volumeMl: Double
+    let abv: Double
+    let category: String
+    let emoji: String
+}
+
+enum LocalSpecialsCatalog {
+    /// Pattern → templates. Add a new bar here and any MapKit pick of
+    /// that bar instantly gets its menu, no migration required.
+    private static let byNamePattern: [(pattern: String, templates: [LocalSpecialTemplate])] = [
+        ("handelspuben", [
+            LocalSpecialTemplate(
+                name: "Fittkittlaren",
+                detail: "50 cl jug · 18 cl @ 40%",
+                volumeMl: 500,
+                abv: 0.144,
+                category: "cocktail",
+                emoji: "🍹"
+            ),
+            LocalSpecialTemplate(
+                name: "Döda mig",
+                detail: "50 cl jug · 18 cl @ 40%",
+                volumeMl: 500,
+                abv: 0.144,
+                category: "cocktail",
+                emoji: "☠️"
+            ),
+        ]),
+    ]
+
+    /// Specials for any venue whose name contains a known pattern,
+    /// bound to the caller's `venueId`. Empty when no pattern matches.
+    /// Synthesised UUIDs (each call is local-only, never persisted) —
+    /// the picker only reads `name` / `detail` / `emoji` / volume / abv,
+    /// so id stability doesn't matter for rendering.
+    static func specials(forVenueNamed name: String, venueId: UUID) -> [VenueSpecial] {
+        let lower = name.lowercased()
+        for entry in byNamePattern where lower.contains(entry.pattern) {
+            return entry.templates.map { tpl in
+                VenueSpecial(
+                    id: UUID(),
+                    venueId: venueId,
+                    name: tpl.name,
+                    detail: tpl.detail,
+                    volumeMl: tpl.volumeMl,
+                    abv: tpl.abv,
+                    category: tpl.category,
+                    emoji: tpl.emoji,
+                    createdAt: Date(timeIntervalSince1970: 0)
+                )
+            }
+        }
+        return []
+    }
+}
+
