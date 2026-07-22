@@ -1442,13 +1442,13 @@ struct PulseWiringModifier: ViewModifier {
                 publish()
                 // Slow app-wide polls so the NIGHTLINE tab can buzz when a
                 // friend goes live or posts, wherever the user is.
-                friendsPulse.startPolling(every: 120)
-                stories.startPolling(every: 120)
+                friendsPulse.startPolling(every: 180)
+                stories.startPolling(every: 180)
             }
             .onChange(of: tab) { _, newTab in
                 // Fast while the TONIGHT strip is on screen, slow otherwise.
-                friendsPulse.startPolling(every: newTab == .timeline ? 30 : 120)
-                stories.startPolling(every: newTab == .timeline ? 30 : 120)
+                friendsPulse.startPolling(every: newTab == .timeline ? 45 : 180)
+                stories.startPolling(every: newTab == .timeline ? 45 : 180)
                 if newTab == .timeline {
                     // They came to look — quiet the buzz.
                     stories.markNightlineSeen()

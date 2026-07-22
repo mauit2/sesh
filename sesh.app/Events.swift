@@ -360,7 +360,8 @@ final class EventsService: ObservableObject {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
-                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                // 45s — event invites also push; no need to poll every 15s.
+                try? await Task.sleep(nanoseconds: 45_000_000_000)
             }
         }
     }
@@ -766,7 +767,8 @@ final class InvitesService: ObservableObject {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
-                try? await Task.sleep(nanoseconds: 7_000_000_000)
+                // 30s — sesh invites also push; 7s was needlessly aggressive.
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
             }
         }
     }

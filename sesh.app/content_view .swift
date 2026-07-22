@@ -203,7 +203,10 @@ final class FriendsService: ObservableObject {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
-                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                // 45s: this fires THREE RPCs a tick (friends, requests,
+                // activity) — all of which also arrive via push, so the
+                // in-app refresh only needs to keep an open screen current.
+                try? await Task.sleep(nanoseconds: 45_000_000_000)
             }
         }
     }
@@ -3813,7 +3816,8 @@ struct GroupSnapsStrip: View {
         .task(id: sessionId) {
             while !Task.isCancelled {
                 await snaps.refresh(sessionId: sessionId)
-                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                // 30s — only polls while the group's snaps are on screen.
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
             }
         }
         .fullScreenCover(item: $viewer) { snap in

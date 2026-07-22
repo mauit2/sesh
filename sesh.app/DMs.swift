@@ -89,7 +89,9 @@ final class DMService: ObservableObject {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
-                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                // 20s — new DMs also push, so this just keeps an open thread
+                // reasonably fresh without hammering the API all day.
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
             }
         }
     }

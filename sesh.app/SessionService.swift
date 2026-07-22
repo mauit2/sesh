@@ -1434,7 +1434,9 @@ final class SessionService: ObservableObject {
         stopPolling()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                // 6s — only runs during a live group night; still keeps the
+                // squad's BACs/route fresh without a call every 3s.
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
                 await self?.refresh()
             }
         }
