@@ -480,7 +480,7 @@ private struct NewChatPicker: View {
 }
 
 /// One conversation — bubbles + composer, IG-style story context chips.
-private struct ChatThreadView: View {
+struct ChatThreadView: View {
     @ObservedObject var dm: DMService
     @ObservedObject var feed: FeedService
     let profile: Profile

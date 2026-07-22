@@ -38,6 +38,9 @@ Carthage/Build/
 node_modules/
 scripts/package-lock.json
 
+# Graphify knowledge-graph output — generated locally, not source
+graphify-out/
+
 # Backups & scratch files
 *.bak
 *~

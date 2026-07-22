@@ -55,12 +55,16 @@ Deno.serve(async (req: Request) => {
 
   let user_id = "", title = "", body = "";
   let data: Record<string, unknown> = {};
+  let badge: number | null = null;
   try {
     const j = await req.json();
     user_id = String(j.user_id ?? "");
     title = String(j.title ?? "sesh");
     body = String(j.body ?? "");
     data = (j.data ?? {}) as Record<string, unknown>;
+    // Optional app-icon badge count. Set the total unseen so a locked/closed
+    // phone shows the number without the app having to run.
+    if (typeof j.badge === "number" && Number.isFinite(j.badge)) badge = Math.max(0, Math.trunc(j.badge));
   } catch {
     return new Response("bad_request", { status: 400 });
   }
@@ -72,7 +76,9 @@ Deno.serve(async (req: Request) => {
 
   const bundle = Deno.env.get("APNS_BUNDLE_ID") ?? "Mau.sesh-app";
   const jwt = await apnsJWT();
-  const payload = JSON.stringify({ aps: { alert: { title, body }, sound: "default" }, ...data });
+  const aps: Record<string, unknown> = { alert: { title, body }, sound: "default" };
+  if (badge !== null) aps.badge = badge;
+  const payload = JSON.stringify({ aps, ...data });
 
   let sent = 0;
   for (const row of tokens) {

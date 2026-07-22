@@ -16,6 +16,7 @@ import UIKit
 import CoreLocation
 import MapKit
 import Supabase
+import UserNotifications
 
 // MARK: - Secrets (replace with your values)
 
@@ -2911,35 +2912,18 @@ struct FriendsPulseStrip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center) {
-                Text("TONIGHT")
-                    .font(.system(size: 10, weight: .black, design: .monospaced))
-                    .tracking(2.4)
-                    .foregroundStyle(Color.bronze)
-                Spacer()
-                // Map shortcut — only when friends are actually checked in,
-                // so it never teases an empty map.
-                if !checkedInPulses.isEmpty {
-                    Button { mapOpen = true } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "map.fill")
-                                .font(.system(size: 10, weight: .bold))
-                            Text("MAP")
-                                .font(.system(size: 10, weight: .black, design: .monospaced))
-                                .tracking(1.5)
-                        }
-                        .foregroundStyle(Color.cream.opacity(0.9))
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(Capsule().fill(Color.cream.opacity(0.08)))
-                        .overlay(Capsule().strokeBorder(Color.cream.opacity(0.14), lineWidth: 1))
-                    }
-                    .buttonStyle(PressScaleStyle())
-                }
-            }
-            .padding(.horizontal, 22)
+            Text("TONIGHT")
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .tracking(2.4)
+                .foregroundStyle(Color.bronze)
+                .padding(.horizontal, 22)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
                     myBubble
+                    // Snap-Map-style bubble — a live map thumbnail right in the
+                    // strip, like Instagram's "Map". Always present so the map
+                    // is one tap away (it shows its own empty state).
+                    MapPulseBubble(pulses: checkedInPulses) { mapOpen = true }
                     ForEach(displayPulses) { p in
                         let theirStories = stories.stories(for: p.id)
                         PulseAvatar(
@@ -3015,7 +2999,7 @@ struct FriendsPulseStrip: View {
             )
         }
         .fullScreenCover(isPresented: $mapOpen) {
-            FriendsMapView(pulses: checkedInPulses)
+            FriendsMapView(pulses: checkedInPulses, feed: feed, dm: dm, me: profile)
         }
     }
 
@@ -3050,14 +3034,18 @@ struct FriendsPulseStrip: View {
                     }
                 Button(action: openCapture) {
                     Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .black))
+                        .font(.system(size: 13, weight: .black))
                         .foregroundStyle(Color.ink)
-                        .frame(width: 19, height: 19)
+                        .frame(width: 25, height: 25)
                         .background(Circle().fill(Color.whiskey))
-                        .overlay(Circle().strokeBorder(Color.ink, lineWidth: 2))
+                        .overlay(Circle().strokeBorder(Color.ink, lineWidth: 2.5))
+                        // Invisible padding enlarges the tap target well beyond
+                        // the visible badge so it's easy to hit.
+                        .padding(8)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(PressScaleStyle())
-                .offset(x: 4, y: 4)
+                .offset(x: 12, y: 12)
             }
             .padding(.top, 4)
             .padding(.horizontal, 8)
@@ -3088,6 +3076,10 @@ struct FriendsPulseStrip: View {
 struct FriendsMapView: View {
     /// Friends broadcasting a venue coordinate right now.
     let pulses: [FriendPulse]
+    /// Services so a tapped pin's sheet can open their profile / a chat.
+    @ObservedObject var feed: FeedService
+    @ObservedObject var dm: DMService
+    let me: Profile
     @Environment(\.dismiss) private var dismiss
     @State private var camera: MapCameraPosition
     @State private var selected: FriendPulse?
@@ -3104,8 +3096,11 @@ struct FriendsMapView: View {
     /// you to the rest.
     private static let fitThreshold: CLLocationDegrees = 1.2
 
-    init(pulses: [FriendPulse]) {
+    init(pulses: [FriendPulse], feed: FeedService, dm: DMService, me: Profile) {
         self.pulses = pulses
+        self.feed = feed
+        self.dm = dm
+        self.me = me
         let plan = Self.initialPlan(for: pulses)
         _camera = State(initialValue: plan.camera)
         _focused = State(initialValue: plan.focus)
@@ -3118,7 +3113,9 @@ struct FriendsMapView: View {
     private static func initialPlan(for pulses: [FriendPulse]) -> CameraPlan {
         let located = pulses.filter { $0.venueCoordinate != nil }
         guard let first = located.first, let firstCoord = first.venueCoordinate else {
-            return CameraPlan(camera: .automatic, focus: nil)
+            // No one located → open a real, working map centered on the user
+            // (Instagram-style), falling back to an auto region if location's off.
+            return CameraPlan(camera: .userLocation(fallback: .automatic), focus: nil)
         }
         if located.count == 1 {
             return CameraPlan(camera: cityCamera(firstCoord), focus: first.id)
@@ -3161,6 +3158,7 @@ struct FriendsMapView: View {
         ZStack(alignment: .top) {
             Color.ink.ignoresSafeArea()
             Map(position: $camera) {
+                UserAnnotation()
                 ForEach(pulses) { p in
                     if let coord = p.venueCoordinate {
                         Annotation("", coordinate: coord, anchor: .bottom) {
@@ -3181,25 +3179,28 @@ struct FriendsMapView: View {
                 if pulses.count > 1 { friendChips }
             }
 
+            // No blocking overlay — the map stays interactive. A floating,
+            // non-interactive pill just explains the empty state.
             if pulses.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "map")
-                        .font(.system(size: 34, weight: .light))
-                        .foregroundStyle(Color.cream.opacity(0.4))
-                    Text("No friends checked in tonight.")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.6))
+                VStack {
+                    Spacer()
+                    Text("No friends checked in yet — pan around the map 🌍")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.9))
+                        .padding(.horizontal, 14).padding(.vertical, 9)
+                        .background(Capsule().fill(Color.ink.opacity(0.85)))
+                        .overlay(Capsule().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+                        .padding(.bottom, 44)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.ink)
-                .ignoresSafeArea()
+                .allowsHitTesting(false)
             }
 
             header
         }
         .preferredColorScheme(.dark)
         .sheet(item: $selected) { p in
-            FriendPulseSheet(pulse: p)
+            FriendPulseSheet(pulse: p, feed: feed, dm: dm, me: me)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
@@ -3367,6 +3368,146 @@ private struct Triangle: Shape {
     }
 }
 
+/// Sets the app-icon badge to the total unseen count.
+enum AppBadge {
+    static func set(_ count: Int) {
+        UNUserNotificationCenter.current().setBadgeCount(max(0, count))
+    }
+}
+
+/// Keeps the app-icon badge in sync with everything unseen — unread DMs,
+/// pending sesh + event invites, friend requests, and new Nightline posts.
+/// Client-side: accurate whenever the app is running or backgrounding. One
+/// modifier entry so SessionView.body stays inside the type-checker's budget.
+private struct AppBadgeModifier: ViewModifier {
+    @ObservedObject var dm: DMService
+    @ObservedObject var invites: InvitesService
+    @ObservedObject var events: EventsService
+    @ObservedObject var friends: FriendsService
+    @ObservedObject var stories: StoriesService
+    let myId: UUID?
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var total: Int {
+        dm.totalUnread
+            + invites.pending.count
+            + (myId.map { events.pendingCount(for: $0) } ?? 0)
+            + friends.incoming.count
+            + stories.unseenNightlineCount
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: total) { _, n in AppBadge.set(n) }
+            .onChange(of: scenePhase) { _, phase in
+                // Stamp the freshest count as the app backgrounds.
+                if phase != .active { AppBadge.set(total) }
+            }
+            .task { AppBadge.set(total) }
+    }
+}
+
+/// Instagram-"Map"-style bubble in the TONIGHT strip: a circular live map
+/// thumbnail that opens the friends map. Snapshots the checked-in friends'
+/// area as a dark Apple-Maps thumbnail; falls back to a globe motif when no
+/// one is located yet. A bronze ring + count badge signals friends are on it.
+private struct MapPulseBubble: View {
+    let pulses: [FriendPulse]
+    let onTap: () -> Void
+    @State private var snapshot: UIImage?
+    private let size: CGFloat = 54
+
+    /// The wide world view shown when no friend is located yet — Instagram
+    /// shows a real map here, never an icon, so we do too (just dark).
+    private static let defaultRegion = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 30, longitude: 0),
+        span: MKCoordinateSpan(latitudeDelta: 130, longitudeDelta: 130))
+
+    /// A padded box around the checked-in friends, else the default world view.
+    private var region: MKCoordinateRegion {
+        let coords = pulses.compactMap(\.venueCoordinate)
+        guard let first = coords.first else { return Self.defaultRegion }
+        var minLat = first.latitude, maxLat = first.latitude
+        var minLon = first.longitude, maxLon = first.longitude
+        for c in coords {
+            minLat = min(minLat, c.latitude); maxLat = max(maxLat, c.latitude)
+            minLon = min(minLon, c.longitude); maxLon = max(maxLon, c.longitude)
+        }
+        return MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2,
+                                           longitude: (minLon + maxLon) / 2),
+            span: MKCoordinateSpan(latitudeDelta: max((maxLat - minLat) * 1.8, 0.03),
+                                   longitudeDelta: max((maxLon - minLon) * 1.8, 0.03)))
+    }
+
+    /// Only re-snapshot when the framed area actually moves.
+    private var regionKey: String {
+        let r = region
+        return String(format: "%.3f_%.3f_%.3f", r.center.latitude, r.center.longitude, r.span.latitudeDelta)
+    }
+
+    private var hasFriends: Bool { !pulses.isEmpty }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack {
+                if let snapshot {
+                    Image(uiImage: snapshot).resizable().scaledToFill()
+                } else {
+                    // Dark map-toned fill while the thumbnail renders (no icon).
+                    Color(red: 0.07, green: 0.10, blue: 0.14)
+                }
+            }
+            .frame(width: size, height: size)
+            .clipShape(Circle())
+            .overlay(
+                Circle().strokeBorder(hasFriends ? Color.bronze : Color.cream.opacity(0.35),
+                                      lineWidth: 2.5)
+                    .padding(-3)
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if hasFriends {
+                    Text("\(pulses.count)")
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 18, height: 18)
+                        .background(Circle().fill(Color.bronze))
+                        .overlay(Circle().strokeBorder(Color.ink, lineWidth: 2))
+                        .offset(x: 4, y: 4)
+                }
+            }
+            .padding(.top, 9)
+            .padding(.horizontal, 11)
+            .padding(.bottom, 11)
+            .contentShape(Circle())
+            .onTapGesture(perform: onTap)
+            Text("Map")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.6))
+                .lineLimit(1)
+        }
+        .frame(width: 72)
+        .task(id: regionKey) { await makeSnapshot() }
+    }
+
+    @MainActor
+    private func makeSnapshot() async {
+        let opts = MKMapSnapshotter.Options()
+        opts.region = region
+        opts.size = CGSize(width: size, height: size)   // scale defaults to the screen's
+        opts.mapType = .standard
+        opts.pointOfInterestFilter = .excludingAll
+        opts.traitCollection = UITraitCollection(userInterfaceStyle: .dark)
+        let shotter = MKMapSnapshotter(options: opts)
+        let image: UIImage? = await withCheckedContinuation { cont in
+            shotter.start(with: .global(qos: .userInitiated)) { snap, _ in
+                cont.resume(returning: snap?.image)
+            }
+        }
+        snapshot = image
+    }
+}
+
 /// One avatar in the strip: live friends get a status-coloured ring +
 /// BAC pill; offline friends are dimmed with no badge.
 private struct PulseAvatar: View {
@@ -3467,12 +3608,24 @@ private struct PulseAvatar: View {
 /// time — and, for a group sesh, everyone they're with + those BACs.
 struct FriendPulseSheet: View {
     let pulse: FriendPulse
+    /// Services so the sheet can open this person's profile + a DM thread.
+    @ObservedObject var feed: FeedService
+    @ObservedObject var dm: DMService
+    /// The signed-in user (needed to open a chat thread).
+    let me: Profile
     /// Display in the VIEWER's unit (percent vs promille) — the RPC always
     /// sends the raw %-scale value.
     @AppStorage(BACUnitSetting.key, store: BACUnitSetting.store) private var bacUnitMode = "auto"
     private var unit: BACUnit { BACUnitSetting.resolved(mode: bacUnitMode) }
     /// Expanded mini-map for the check-in venue.
     @State private var venueMapOpen = false
+    /// Tapping the person's profile / message actions.
+    @State private var openProfile: ProfileRef? = nil
+    @State private var openChat = false
+
+    private var profileRef: ProfileRef {
+        ProfileRef(id: pulse.id, name: pulse.name, username: pulse.username, avatar: pulse.avatarUrl)
+    }
 
     private func statusFor(_ bac: Double) -> Status {
         switch bac {
@@ -3505,6 +3658,12 @@ struct FriendPulseSheet: View {
                         }
                     }
                     Spacer()
+                }
+
+                // Jump to their profile (past nights) or open a chat with them.
+                HStack(spacing: 10) {
+                    actionButton(icon: "person.fill", title: "Profile") { openProfile = profileRef }
+                    actionButton(icon: "bubble.left.fill", title: "Message") { openChat = true }
                 }
 
                 // The number you opened this for.
@@ -3599,6 +3758,33 @@ struct FriendPulseSheet: View {
             .padding(.top, 6)
         }
         .background(Color.ink)
+        .sheet(item: $openProfile) { ref in
+            ProfileFeedView(user: ref, feed: feed)
+                .presentationBackground(Color.ink)
+        }
+        .sheet(isPresented: $openChat) {
+            NavigationStack {
+                ChatThreadView(dm: dm, feed: feed, profile: me,
+                               other: pulse.id, fallbackName: pulse.name)
+            }
+            .presentationBackground(Color.ink)
+        }
+    }
+
+    /// Pill action button (Profile / Message) under the header.
+    private func actionButton(icon: String, title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: icon).font(.system(size: 13, weight: .bold))
+                Text(title).font(.system(size: 14, weight: .bold, design: .rounded))
+            }
+            .foregroundStyle(Color.cream)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.07)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
     }
 
     private var liveLine: String {
@@ -5930,6 +6116,9 @@ private struct SessionView: View {
             venues: venues,
             friendsPulse: friendsPulse,
             stories: liveStories,
+            feed: feed,
+            dm: dm,
+            profile: profile,
             openPulse: $openPulse,
             tab: tab,
             publish: publishPresence,
@@ -5937,6 +6126,12 @@ private struct SessionView: View {
             journey: journey,
             syncMarkers: { syncJourneyMarkersToGroup() },
             mergeRoute: { mergeGroupRouteIntoJourney() }
+        ))
+        // App-icon badge = everything unseen (DMs, invites, friend requests,
+        // new posts). One modifier entry to stay within the type-checker budget.
+        .modifier(AppBadgeModifier(
+            dm: dm, invites: invites, events: eventsService,
+            friends: friends, stories: liveStories, myId: profile.id
         ))
         // Bridge the device-local guest store to the shared session roster
         // as the user enters / leaves a LIVE group:

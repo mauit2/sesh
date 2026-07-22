@@ -1409,6 +1409,11 @@ struct PulseWiringModifier: ViewModifier {
     @ObservedObject var venues: VenueService
     @ObservedObject var friendsPulse: FriendsPulseService
     @ObservedObject var stories: StoriesService
+    /// Feed + DM services so a tapped friend's sheet can open their profile /
+    /// a chat, plus the signed-in user for the chat thread.
+    @ObservedObject var feed: FeedService
+    @ObservedObject var dm: DMService
+    let profile: Profile
     @Binding var openPulse: FriendPulse?
     let tab: TopTab
     let publish: () -> Void
@@ -1455,7 +1460,7 @@ struct PulseWiringModifier: ViewModifier {
                 }
             }
             .sheet(item: $openPulse) { p in
-                FriendPulseSheet(pulse: p)
+                FriendPulseSheet(pulse: p, feed: feed, dm: dm, me: profile)
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
                     .presentationBackground(Color.ink)
