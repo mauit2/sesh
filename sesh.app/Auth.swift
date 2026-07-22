@@ -643,7 +643,7 @@ struct AuthView: View {
                 ForEach(passwordRules) { rule in
                     HStack(spacing: 8) {
                         Image(systemName: rule.satisfied ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
                             .foregroundStyle(rule.satisfied ? Color.whiskey : Color.bronze.opacity(0.55))
                         Text(rule.label)
                             .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -668,7 +668,7 @@ struct AuthView: View {
             HStack(spacing: 8) {
                 if !usernameFormatValid {
                     Image(systemName: "info.circle")
-                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.bronze)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundStyle(Color.bronze)
                     Text("3–20 chars: lowercase letters, numbers, underscore")
                         .foregroundStyle(Color.cream.opacity(0.6))
                 } else if checkingUsername {
@@ -676,11 +676,11 @@ struct AuthView: View {
                     Text("Checking…").foregroundStyle(Color.cream.opacity(0.6))
                 } else if usernameAvailable == true {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.whiskey)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundStyle(Color.whiskey)
                     Text("@\(cleanUsername) is available").foregroundStyle(Color.cream.opacity(0.85))
                 } else if usernameAvailable == false {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Status.drunk.color)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundStyle(Status.drunk.color)
                     Text("That username is taken").foregroundStyle(Color.cream.opacity(0.85))
                 }
                 Spacer(minLength: 0)
@@ -710,11 +710,11 @@ struct AuthView: View {
     private func errorBanner(_ message: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11))
+                .font(.system(size: 11, design: .rounded))
                 .foregroundStyle(Status.drunk.color)
                 .padding(.top, 1)
             Text(message)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(0.9))
                 .lineSpacing(2)
             Spacer()
@@ -740,7 +740,7 @@ struct AuthView: View {
                         .tracking(3)
                     Spacer()
                     Image(systemName: "arrow.right")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                 }
             }
             .foregroundStyle(Color.ink)
@@ -758,7 +758,7 @@ struct AuthView: View {
 
     private var footnote: some View {
         Text("By continuing you accept that sesh is a fun BAC estimate, not a legal or medical reference. Never use it to decide whether to drive.")
-            .font(.system(size: 10))
+            .font(.system(size: 10, design: .rounded))
             .lineSpacing(3)
             .foregroundStyle(Color.bronze)
             .padding(.top, 4)
@@ -869,7 +869,7 @@ private struct PasswordResetView: View {
 
             Button { dismiss() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.8))
                     .padding(12)
                     .background(Circle().fill(Color.cream.opacity(0.08)))
@@ -913,7 +913,7 @@ private struct PasswordResetView: View {
             ForEach(items, id: \.0) { label, ok in
                 HStack(spacing: 8) {
                     Image(systemName: ok ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .foregroundStyle(ok ? Color.whiskey : Color.bronze.opacity(0.55))
                     Text(label)
                         .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -932,9 +932,9 @@ private struct PasswordResetView: View {
         let tint = bad ? Status.drunk.color : Color.whiskey
         return HStack(alignment: .top, spacing: 10) {
             Image(systemName: bad ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .font(.system(size: 11)).foregroundStyle(tint).padding(.top, 1)
+                .font(.system(size: 11, design: .rounded)).foregroundStyle(tint).padding(.top, 1)
             Text(message)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(0.9)).lineSpacing(2)
             Spacer()
         }
@@ -951,7 +951,7 @@ private struct PasswordResetView: View {
                     Text(phase == .request ? "SEND CODE" : "SET NEW PASSWORD")
                         .font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(3)
                     Spacer()
-                    Image(systemName: "arrow.right").font(.system(size: 12, weight: .bold))
+                    Image(systemName: "arrow.right").font(.system(size: 12, weight: .bold, design: .rounded))
                 }
             }
             .foregroundStyle(Color.ink)
@@ -1038,7 +1038,7 @@ private struct SignUpConfirmView: View {
 
             Button { dismiss() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.8))
                     .padding(12)
                     .background(Circle().fill(Color.cream.opacity(0.08)))
@@ -1071,9 +1071,9 @@ private struct SignUpConfirmView: View {
         let tint = bad ? Status.drunk.color : Color.whiskey
         return HStack(alignment: .top, spacing: 10) {
             Image(systemName: bad ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .font(.system(size: 11)).foregroundStyle(tint).padding(.top, 1)
+                .font(.system(size: 11, design: .rounded)).foregroundStyle(tint).padding(.top, 1)
             Text(message)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(0.9)).lineSpacing(2)
             Spacer()
         }
@@ -1090,7 +1090,7 @@ private struct SignUpConfirmView: View {
                     Text("CONFIRM & ENTER")
                         .font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(3)
                     Spacer()
-                    Image(systemName: "arrow.right").font(.system(size: 12, weight: .bold))
+                    Image(systemName: "arrow.right").font(.system(size: 12, weight: .bold, design: .rounded))
                 }
             }
             .foregroundStyle(Color.ink)

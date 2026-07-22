@@ -562,7 +562,7 @@ private struct StoryComposer: View {
                 HStack {
                     Button(action: onCancel) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 15, weight: .bold))
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.cream)
                             .frame(width: 40, height: 40)
                             .background(Circle().fill(Color.ink.opacity(0.6)))
@@ -680,7 +680,7 @@ private struct StoryComposer: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.whiskey)
                 Text(label)
                     .font(.system(size: 12, weight: .black, design: .rounded))
@@ -780,7 +780,7 @@ private struct StoryComposer: View {
                 textFocused = false
             } label: {
                 Image(systemName: "trash")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.8))
                     .frame(width: 44, height: 38)
             }
@@ -910,7 +910,7 @@ private struct StoryComposer: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: on ? "checkmark.circle.fill" : icon)
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(on ? Color.ink : Color.whiskey)
                 Text(label)
                     .font(.system(size: 12, weight: .bold, design: .rounded))
@@ -1098,7 +1098,7 @@ struct StoryViewer: View {
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "eye.fill")
-                                    .font(.system(size: 12, weight: .bold))
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
                                 Text("\(svc.viewCounts[story.id] ?? 0)")
                                     .font(.system(size: 13, weight: .black, design: .monospaced))
                             }
@@ -1144,7 +1144,7 @@ struct StoryViewer: View {
                                 flashSent("❤️ Sent")
                             } label: {
                                 Image(systemName: "heart.fill")
-                                    .font(.system(size: 20, weight: .bold))
+                                    .font(.system(size: 20, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color(red: 0.92, green: 0.32, blue: 0.35))
                                     .frame(width: 42, height: 42)
                                     .background(Circle().fill(Color.black.opacity(0.35)))
@@ -1162,7 +1162,7 @@ struct StoryViewer: View {
                                 flashSent("Sent")
                             } label: {
                                 Image(systemName: "arrow.up")
-                                    .font(.system(size: 16, weight: .black))
+                                    .font(.system(size: 16, weight: .black, design: .rounded))
                                     .foregroundStyle(Color.ink)
                                     .frame(width: 42, height: 42)
                                     .background(Circle().fill(Color.whiskey))
@@ -1221,7 +1221,7 @@ struct StoryViewer: View {
                         onClose()
                     } label: {
                         Image(systemName: "trash")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.cream)
                             .frame(width: 38, height: 38)
                             .background(Circle().fill(Color.ink.opacity(0.7)))
@@ -1233,7 +1233,7 @@ struct StoryViewer: View {
                         reportOpen = true
                     } label: {
                         Image(systemName: "flag")
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.cream.opacity(0.85))
                             .frame(width: 38, height: 38)
                             .background(Circle().fill(Color.ink.opacity(0.7)))
@@ -1242,7 +1242,7 @@ struct StoryViewer: View {
                 }
                 Button(action: onClose) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream)
                         .frame(width: 38, height: 38)
                         .background(Circle().fill(Color.ink.opacity(0.7)))
@@ -1307,7 +1307,7 @@ struct StoryViewer: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 6) {
                     Image(systemName: "eye.fill")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                     Text("VIEWED BY \(audience?.count ?? 0)")
                         .font(.system(size: 10, weight: .black, design: .monospaced))
@@ -1382,7 +1382,7 @@ struct StoryViewer: View {
     private func storyBadge(icon: String, text: String) -> some View {
         HStack(spacing: 5) {
             Image(systemName: icon)
-                .font(.system(size: 11, weight: .bold))
+                .font(.system(size: 11, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.whiskey)
             Text(text)
                 .font(.system(size: 12, weight: .black, design: .monospaced))
@@ -1486,11 +1486,8 @@ struct TimelineFeedView: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
-                Text("NIGHTLINE")
-                    .font(.system(size: 11, weight: .black, design: .monospaced))
-                    .tracking(2.4).foregroundStyle(Color.bronze)
-                    .padding(.horizontal, 22).padding(.top, 6)
-
+                // (No in-feed "NIGHTLINE" label — the top bar already titles
+                // the page; doubling it read as a mistake.)
                 FriendsPulseStrip(
                     pulse: pulse,
                     stories: stories,
@@ -1553,7 +1550,7 @@ struct TimelineFeedView: View {
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "sparkles")
-                .font(.system(size: 34, weight: .light))
+                .font(.system(size: 34, weight: .light, design: .rounded))
                 .foregroundStyle(Color.whiskey.opacity(0.7))
             Text("No posts yet")
                 .font(.system(size: 17, weight: .bold, design: .rounded))
@@ -1735,7 +1732,7 @@ private struct PostCard: View {
                                                     startPoint: .center, endPoint: .bottom))
 
                             HStack(spacing: 5) {
-                                Image(systemName: "mappin.circle.fill").font(.system(size: 11))
+                                Image(systemName: "mappin.circle.fill").font(.system(size: 11, design: .rounded))
                                 Text(photo.stop)
                                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                                     .lineLimit(1)
@@ -1759,7 +1756,7 @@ private struct PostCard: View {
                 Button(action: onLike) {
                     HStack(spacing: 6) {
                         Image(systemName: post.likedByMe ? "heart.fill" : "heart")
-                            .font(.system(size: 23, weight: .semibold))
+                            .font(.system(size: 23, weight: .semibold, design: .rounded))
                             .foregroundStyle(post.likedByMe ? Status.drunk.color : Color.cream.opacity(0.85))
                         if post.likeCount > 0 {
                             Text("\(post.likeCount)").foregroundStyle(Color.cream.opacity(0.85))
@@ -1803,7 +1800,7 @@ private struct PostCard: View {
                             Label("\(unit.formatted(post.recap.peakBAC))\(unit.symbol)", systemImage: "flame.fill")
                         }
                         Spacer()
-                        Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold))
+                        Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.bronze)
                     }
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -1840,7 +1837,7 @@ struct PostThumb: View {
                     DownsampledAsyncImage(url: url, targetPoints: 160)
                 } else {
                     VStack(spacing: 4) {
-                        Text("🍻").font(.system(size: 22))
+                        Text("🍻").font(.system(size: 22, design: .rounded))
                         Text("\(post.recap.totalDrinks)")
                             .font(.system(size: 12, weight: .black, design: .rounded))
                             .foregroundStyle(Color.cream.opacity(0.8))
@@ -1894,7 +1891,7 @@ struct ProfileFeedView: View {
                     } else if posts.isEmpty {
                         VStack(spacing: 8) {
                             Image(systemName: "moon.stars")
-                                .font(.system(size: 26))
+                                .font(.system(size: 26, design: .rounded))
                                 .foregroundStyle(Color.bronze)
                             Text("No posted seshs yet.")
                                 .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -1918,7 +1915,7 @@ struct ProfileFeedView: View {
 
             Button { dismiss() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.85))
                     .padding(12).background(Circle().fill(Color.cream.opacity(0.08)))
             }
@@ -2010,7 +2007,7 @@ struct PostDetailView: View {
                                 }
                             } label: {
                                 Image(systemName: "ellipsis")
-                                    .font(.system(size: 16, weight: .bold))
+                                    .font(.system(size: 16, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.cream.opacity(0.8))
                                     .frame(width: 34, height: 34)
                                     .background(Circle().fill(Color.cream.opacity(0.08)))
@@ -2083,7 +2080,7 @@ struct PostDetailView: View {
 
             Button { onClose() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.85))
                     .padding(12).background(Circle().fill(Color.cream.opacity(0.08)))
             }
@@ -2113,7 +2110,7 @@ struct PostDetailView: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: liked ? "heart.fill" : "heart")
-                            .font(.system(size: 24, weight: .semibold))
+                            .font(.system(size: 24, weight: .semibold, design: .rounded))
                             .foregroundStyle(liked ? Status.drunk.color : Color.cream.opacity(0.85))
                         if likeCount > 0 { Text("\(likeCount)").foregroundStyle(Color.cream.opacity(0.85)) }
                     }
@@ -2143,7 +2140,7 @@ struct PostDetailView: View {
                     .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
                 Button { sendComment() } label: {
                     Image(systemName: "paperplane.fill")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
                         .foregroundStyle(commentText.trimmingCharacters(in: .whitespaces).isEmpty ? Color.cream.opacity(0.3) : Color.whiskey)
                 }
                 .disabled(commentText.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -2214,7 +2211,7 @@ struct PostDetailView: View {
     private func stopCard(_ stop: RecapStop) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text(recapStopEmoji(stop.kind)).font(.system(size: 16))
+                Text(recapStopEmoji(stop.kind)).font(.system(size: 16, design: .rounded))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(stop.name).font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream)
@@ -2262,7 +2259,7 @@ struct PostDetailView: View {
             if let note = stop.note, !note.isEmpty {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "text.bubble.fill")
-                        .font(.system(size: 11)).foregroundStyle(Color.bronze).padding(.top, 1)
+                        .font(.system(size: 11, design: .rounded)).foregroundStyle(Color.bronze).padding(.top, 1)
                     Text(note)
                         .font(.system(size: 13, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.9))

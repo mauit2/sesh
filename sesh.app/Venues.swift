@@ -863,7 +863,7 @@ private struct OffersMapView: View {
             if let onClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream)
                         .frame(width: 40, height: 40)
                         .background(Circle().fill(Color.ink.opacity(0.7)))
@@ -899,7 +899,7 @@ private struct OffersMapView: View {
                         }
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 22))
+                            .font(.system(size: 22, design: .rounded))
                             .foregroundStyle(Color.cream.opacity(0.4))
                     }
                     .buttonStyle(.plain)
@@ -944,7 +944,7 @@ private struct OfferPin: View {
                 .frame(width: selected ? 42 : 34, height: selected ? 42 : 34)
                 .shadow(color: Color.whiskey.opacity(0.6), radius: selected ? 10 : 5)
             Image(systemName: "wineglass.fill")
-                .font(.system(size: selected ? 18 : 14, weight: .bold))
+                .font(.system(size: selected ? 18 : 14, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.ink)
         }
         .overlay(alignment: .topTrailing) {
@@ -971,7 +971,7 @@ private struct OfferRow: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: offer.glyph)
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.whiskey)
                     .frame(width: 22)
                 VStack(alignment: .leading, spacing: 4) {
@@ -1032,7 +1032,7 @@ private struct OfferRow: View {
                 }
                 Spacer()
                 Image(systemName: "checkmark.seal.fill")
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.ink)
             }
             .padding(12)
@@ -1043,7 +1043,7 @@ private struct OfferRow: View {
 
     private func tag(_ text: String, system: String) -> some View {
         HStack(spacing: 3) {
-            Image(systemName: system).font(.system(size: 9, weight: .bold))
+            Image(systemName: system).font(.system(size: 9, weight: .bold, design: .rounded))
             Text(text).font(.system(size: 10, weight: .black, design: .monospaced))
         }
         .foregroundStyle(Color.whiskey)
@@ -1091,7 +1091,7 @@ struct VenueChip: View {
                     Image(systemName: venues.currentVenue == nil
                           ? "mappin.and.ellipse"
                           : "mappin.circle.fill")
-                        .font(.system(size: compact ? 12 : 13, weight: .bold))
+                        .font(.system(size: compact ? 12 : 13, weight: .bold, design: .rounded))
                         .foregroundStyle(venues.currentVenue == nil ? Color.bronze : Color.whiskey)
                 }
 
@@ -1119,7 +1119,7 @@ struct VenueChip: View {
                                     .foregroundStyle(Color.whiskey)
                                 if v.isFeatured {
                                     Text("★")
-                                        .font(.system(size: 10, weight: .black))
+                                        .font(.system(size: 10, weight: .black, design: .rounded))
                                         .foregroundStyle(Color.whiskey)
                                 }
                             }
@@ -1166,7 +1166,7 @@ struct VenueChip: View {
 
                 if !compact {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                 }
             }
@@ -1307,7 +1307,7 @@ struct VenueSheet: View {
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 13, weight: .bold))
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
                                 Text(inLiveGroup && applyToGroup ? "CHECK GROUP OUT" : "CHECK OUT")
                                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                                     .tracking(2.0)
@@ -1478,7 +1478,7 @@ struct VenueSheet: View {
         let current = isCurrent(sel)
         return HStack(spacing: 12) {
             Image(systemName: "mappin.circle.fill")
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: 22, weight: .semibold, design: .rounded))
                 .foregroundStyle(current ? Color.green : Color.whiskey)
             VStack(alignment: .leading, spacing: 2) {
                 Text(sel.name)
@@ -1511,7 +1511,7 @@ struct VenueSheet: View {
                 withAnimation(.easeInOut(duration: 0.2)) { clearSelection() }
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.5))
                     .frame(width: 30, height: 30)
                     .background(Circle().fill(Color.cream.opacity(0.06)))
@@ -1628,7 +1628,7 @@ struct VenueSheet: View {
     private var searchField: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: 13, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.bronze)
             TextField("", text: $query, prompt:
                 Text("Search any bar nearby…")
@@ -1646,7 +1646,7 @@ struct VenueSheet: View {
                     search.clear()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.4))
                 }
                 .buttonStyle(.plain)
@@ -1766,7 +1766,7 @@ struct VenueSheet: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Image(systemName: "person.2.fill")
-                        .font(.system(size: 9, weight: .black))
+                        .font(.system(size: 9, weight: .black, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                     Text("CHECK IN APPLIES TO")
                         .font(.system(size: 9.5, weight: .bold, design: .monospaced))
@@ -1794,7 +1794,7 @@ struct VenueSheet: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "arrow.triangle.merge")
-                                .font(.system(size: 15, weight: .black))
+                                .font(.system(size: 15, weight: .black, design: .rounded))
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("REJOIN THE GROUP")
                                     .font(.system(size: 13, weight: .black, design: .monospaced))
@@ -1812,7 +1812,7 @@ struct VenueSheet: View {
                             }
                             Spacer(minLength: 0)
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                         }
                         .foregroundStyle(Color.ink)
                         .padding(.horizontal, 14)
@@ -1828,7 +1828,7 @@ struct VenueSheet: View {
                 } else if let lv = group.liveVenue {
                     HStack(spacing: 6) {
                         Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.whiskey)
                         Text("Following the group · \(lv.name)")
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
@@ -1856,7 +1856,7 @@ struct VenueSheet: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: icon)
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
                 Text(title)
                     .font(.system(size: 10, weight: .black, design: .monospaced))
                     .tracking(1.2)
@@ -1950,7 +1950,7 @@ struct VenueSheet: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 28))
+                .font(.system(size: 28, design: .rounded))
                 .foregroundStyle(Color.bronze)
             Text("Find your bar")
                 .font(.system(size: 14, weight: .bold, design: .rounded))
@@ -1980,7 +1980,7 @@ private struct VenueRow: View {
                         .fill(isCurrent ? Color.whiskey.opacity(0.35) : Color.cream.opacity(0.06))
                         .frame(width: 44, height: 44)
                     Image(systemName: venue.isFeatured ? "star.fill" : "mappin.circle.fill")
-                        .font(.system(size: 18, weight: .bold))
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
                         .foregroundStyle(venue.isFeatured ? Color.whiskey : Color.cream.opacity(0.7))
                 }
                 VStack(alignment: .leading, spacing: 4) {
@@ -2025,7 +2025,7 @@ private struct VenueRow: View {
                 Spacer(minLength: 0)
                 if isCurrent {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 18, weight: .bold))
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                 }
             }
@@ -2076,7 +2076,7 @@ private struct MapKitResultRow: View {
                         ProgressView().tint(Color.cream.opacity(0.8))
                     } else {
                         Image(systemName: hasOffer ? "wineglass.fill" : "mappin")
-                            .font(.system(size: 16, weight: .bold))
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
                             .foregroundStyle(hasOffer ? Color.ink
                                              : (isCurrent ? Color.whiskey : Color.cream.opacity(0.6)))
                     }
@@ -2090,7 +2090,7 @@ private struct MapKitResultRow: View {
                         if hasOffer {
                             HStack(spacing: 3) {
                                 Image(systemName: "tag.fill")
-                                    .font(.system(size: 8, weight: .black))
+                                    .font(.system(size: 8, weight: .black, design: .rounded))
                                 Text(offerCount == 1 ? "SPECIAL" : "\(offerCount) SPECIALS")
                                     .font(.system(size: 9, weight: .black, design: .monospaced))
                                     .tracking(1.0)
@@ -2128,11 +2128,11 @@ private struct MapKitResultRow: View {
                 Spacer(minLength: 0)
                 if isCurrent {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 17, weight: .bold))
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                 } else {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.bronze.opacity(0.55))
                 }
             }

@@ -1031,7 +1031,7 @@ struct EventCard: View {
                                 .fill(Color.whiskey.opacity(0.12))
                                 .frame(width: 38, height: 38)
                             Image(systemName: event.kindValue.icon)
-                                .font(.system(size: 15, weight: .bold))
+                                .font(.system(size: 15, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color.whiskey)
                         }
                     }
@@ -1380,7 +1380,7 @@ struct EventDetailSheet: View {
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: ev.locationKind == "venue" ? "mappin.circle.fill" : "house.fill")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                         .frame(width: 20)
                     VStack(alignment: .leading, spacing: 1) {
@@ -1397,7 +1397,7 @@ struct EventDetailSheet: View {
                     Spacer(minLength: 8)
                     if editable {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.bronze)
                     }
                 }
@@ -1423,7 +1423,7 @@ struct EventDetailSheet: View {
                             .fill(Color.whiskey.opacity(0.12))
                             .frame(width: 34, height: 34)
                         Image(systemName: "mappin.and.ellipse")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.whiskey)
                     }
                     VStack(alignment: .leading, spacing: 1) {
@@ -1436,7 +1436,7 @@ struct EventDetailSheet: View {
                     }
                     Spacer(minLength: 8)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                 }
                 .padding(12)
@@ -1519,7 +1519,7 @@ struct EventDetailSheet: View {
         PhotosPicker(selection: $coverItem, matching: .images) {
             HStack(spacing: 6) {
                 Image(systemName: "photo.fill")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                 Text(compact ? "CHANGE" : "ADD A COVER PHOTO")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(1.4)
@@ -1579,7 +1579,7 @@ struct EventDetailSheet: View {
                     .fill(Color.whiskey.opacity(0.12))
                     .frame(width: 52, height: 52)
                 Image(systemName: ev.kindValue.icon)
-                    .font(.system(size: 21, weight: .bold))
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.whiskey)
             }
             VStack(alignment: .leading, spacing: 3) {
@@ -1669,7 +1669,7 @@ struct EventDetailSheet: View {
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "paperplane.fill")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
                         Text("INVITE FRIENDS")
                             .font(.system(size: 13, weight: .black, design: .monospaced))
                             .tracking(2)
@@ -1693,7 +1693,7 @@ struct EventDetailSheet: View {
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: "plus")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
                             Text("Add a guest who's not on sesh")
                                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                         }
@@ -1756,7 +1756,7 @@ struct EventDetailSheet: View {
             ZStack {
                 Circle().fill(Color.cream.opacity(0.07)).frame(width: 28, height: 28)
                 Image(systemName: "person.fill.questionmark")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.bronze)
             }
             Text(ghost.name)
@@ -1776,7 +1776,7 @@ struct EventDetailSheet: View {
                     _ = t
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                         .frame(width: 26, height: 26)
                         .contentShape(Rectangle())
@@ -1857,7 +1857,7 @@ struct EventDetailSheet: View {
             // with everyone who RSVP'd going. Locked once it has fired.
             HStack(spacing: 10) {
                 Image(systemName: "dot.radiowaves.left.and.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(ev.autoLive ? Color.whiskey : Color.bronze)
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 1) {
@@ -1951,7 +1951,7 @@ struct EventDetailSheet: View {
             HStack {
                 HStack(spacing: 10) {
                     Image(systemName: "calendar")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                         .frame(width: 20)
                     Text("Days")
@@ -1977,7 +1977,7 @@ struct EventDetailSheet: View {
                 HStack {
                     HStack(spacing: 10) {
                         Image(systemName: "hourglass")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .foregroundStyle(Color.bronze)
                             .frame(width: 20)
                         Text("Hours per day")
@@ -2018,7 +2018,7 @@ struct EventDetailSheet: View {
                 if value > range.lowerBound { onChange(value - 1) }
             } label: {
                 Image(systemName: "minus")
-                    .font(.system(size: 12, weight: .black))
+                    .font(.system(size: 12, weight: .black, design: .rounded))
                     .foregroundStyle(value > range.lowerBound ? Color.cream.opacity(0.8) : Color.cream.opacity(0.25))
                     .frame(width: 34, height: 30)
                     .contentShape(Rectangle())
@@ -2037,7 +2037,7 @@ struct EventDetailSheet: View {
                 if value < range.upperBound { onChange(value + 1) }
             } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .black))
+                    .font(.system(size: 12, weight: .black, design: .rounded))
                     .foregroundStyle(Color.ink)
                     .frame(width: 34, height: 30)
                     .background(Color.whiskey)
@@ -2128,7 +2128,7 @@ struct EventDetailSheet: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "arrow.counterclockwise")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
                         Text("RECALCULATE THE LIST")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .tracking(1.4)
@@ -2151,7 +2151,7 @@ struct EventDetailSheet: View {
     private func staleNotice(_ ev: SeshEvent, needed: Double, current: Double) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "arrow.triangle.2.circlepath")
-                .font(.system(size: 11, weight: .bold))
+                .font(.system(size: 11, weight: .bold, design: .rounded))
                 .foregroundStyle(Color(red: 0.91, green: 0.58, blue: 0.29))
             Text("The crew changed — this list is being recalculated. It currently covers \(Int((current / max(needed, 1) * 100).rounded()))% of the \(tier.label) target.")
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
@@ -2670,7 +2670,7 @@ struct EventDetailSheet: View {
                             )
                             .overlay(alignment: .bottomTrailing) {
                                 Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                    .font(.system(size: 10, weight: .bold))
+                                    .font(.system(size: 10, weight: .bold, design: .rounded))
                                     .foregroundStyle(.white)
                                     .padding(7)
                                     .background(Circle().fill(Color.ink.opacity(0.55)))
@@ -2895,7 +2895,7 @@ private struct EventFriendPicker: View {
                                             .foregroundStyle(Color.bronze)
                                     } else {
                                         Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                                            .font(.system(size: 18, weight: .semibold))
+                                            .font(.system(size: 18, weight: .semibold, design: .rounded))
                                             .foregroundStyle(on ? Color.whiskey : Color.cream.opacity(0.25))
                                     }
                                 }
@@ -3080,7 +3080,7 @@ private struct EventLocationSheet: View {
                             } label: {
                                 HStack(spacing: 10) {
                                     Image(systemName: isVenue ? "mappin.circle.fill" : "mappin")
-                                        .font(.system(size: 13, weight: .bold))
+                                        .font(.system(size: 13, weight: .bold, design: .rounded))
                                         .foregroundStyle(Color.whiskey)
                                         .frame(width: 20)
                                     VStack(alignment: .leading, spacing: 1) {
@@ -3230,7 +3230,7 @@ struct EventComposerSheet: View {
                             } label: {
                                 HStack(spacing: 6) {
                                     Image(systemName: k.icon)
-                                        .font(.system(size: 11, weight: .bold))
+                                        .font(.system(size: 11, weight: .bold, design: .rounded))
                                     Text(k.label.uppercased())
                                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                                         .tracking(1.1)
@@ -3280,7 +3280,7 @@ struct EventComposerSheet: View {
                                     .fill(Color.whiskey.opacity(pickedLocationName == nil ? 0.12 : 0.2))
                                     .frame(width: 34, height: 34)
                                 Image(systemName: "mappin.and.ellipse")
-                                    .font(.system(size: 14, weight: .bold))
+                                    .font(.system(size: 14, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.whiskey)
                             }
                             VStack(alignment: .leading, spacing: 2) {
@@ -3299,7 +3299,7 @@ struct EventComposerSheet: View {
                             }
                             Spacer(minLength: 8)
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color.bronze)
                         }
                         .padding(14)
@@ -3342,7 +3342,7 @@ struct EventComposerSheet: View {
                                 if nights > 1 { nights -= 1 }
                             } label: {
                                 Image(systemName: "minus")
-                                    .font(.system(size: 12, weight: .black))
+                                    .font(.system(size: 12, weight: .black, design: .rounded))
                                     .foregroundStyle(Color.cream.opacity(nights > 1 ? 0.8 : 0.25))
                                     .frame(width: 34, height: 30)
                                     .contentShape(Rectangle())
@@ -3360,7 +3360,7 @@ struct EventComposerSheet: View {
                                 if nights < 14 { nights += 1 }
                             } label: {
                                 Image(systemName: "plus")
-                                    .font(.system(size: 12, weight: .black))
+                                    .font(.system(size: 12, weight: .black, design: .rounded))
                                     .foregroundStyle(Color.ink)
                                     .frame(width: 34, height: 30)
                                     .background(Color.whiskey)
@@ -3386,7 +3386,7 @@ struct EventComposerSheet: View {
 
                     HStack(spacing: 10) {
                         Image(systemName: "dot.radiowaves.left.and.right")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .foregroundStyle(autoLive ? Color.whiskey : Color.bronze)
                             .frame(width: 20)
                         VStack(alignment: .leading, spacing: 1) {

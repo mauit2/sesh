@@ -1653,7 +1653,7 @@ private struct InviteBanner: View {
                         .fill(Color.ink.opacity(0.18))
                         .frame(width: 30, height: 30)
                     Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .black))
+                        .font(.system(size: 12, weight: .black, design: .rounded))
                         .foregroundStyle(Color.ink)
                 }
             }
@@ -1755,7 +1755,7 @@ private struct InvitesSheet: View {
                     if isEmpty {
                         VStack(spacing: 8) {
                             Image(systemName: "tray")
-                                .font(.system(size: 32, weight: .light))
+                                .font(.system(size: 32, weight: .light, design: .rounded))
                                 .foregroundStyle(Color.cream.opacity(0.45))
                             Text("Your inbox is empty.")
                                 .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -1845,7 +1845,7 @@ private struct ActivityRow: View {
             // Delete action revealed behind the card on left-swipe.
             Button { onDelete() } label: {
                 Image(systemName: "trash")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .frame(width: revealWidth)
                     .frame(maxHeight: .infinity)
@@ -1879,7 +1879,7 @@ private struct ActivityRow: View {
                 Button { onOpen() } label: {
                     HStack(spacing: 12) {
                         Image(systemName: activity.isLike ? "heart.fill" : "bubble.right.fill")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(activity.isLike ? Status.drunk.color : Color.whiskey)
                             .frame(width: 22)
                         VStack(alignment: .leading, spacing: 2) {
@@ -1905,7 +1905,7 @@ private struct ActivityRow: View {
 
                 Button { withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() } } label: {
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 11, weight: .bold)).foregroundStyle(Color.bronze)
+                        .font(.system(size: 11, weight: .bold, design: .rounded)).foregroundStyle(Color.bronze)
                         .frame(width: 24, height: 24)
                 }
                 .buttonStyle(PressScaleStyle())
@@ -1964,7 +1964,7 @@ private struct FriendRequestRow: View {
             }
             .buttonStyle(PressScaleStyle())
             Button(action: onDecline) {
-                Image(systemName: "xmark").font(.system(size: 11, weight: .bold))
+                Image(systemName: "xmark").font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.bronze).padding(8)
                     .background(Circle().fill(Color.cream.opacity(0.06)))
             }
@@ -2024,7 +2024,7 @@ private struct InviteRow: View {
                 Button(action: onAccept) {
                     HStack(spacing: 6) {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .black))
+                            .font(.system(size: 11, weight: .black, design: .rounded))
                         Text("ACCEPT")
                             .font(.system(size: 11, weight: .black, design: .monospaced))
                             .tracking(1.6)
@@ -2170,7 +2170,7 @@ private struct FriendsView: View {
 
             Button { dismiss() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.8))
                     .padding(12)
                     .background(Circle().fill(Color.cream.opacity(0.08)))
@@ -2219,7 +2219,7 @@ private struct FriendsView: View {
         Button { showUsernameEditor = true } label: {
             HStack(spacing: 12) {
                 Image(systemName: myUsername == nil ? "exclamationmark.circle.fill" : "at")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.whiskey)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(myUsername == nil ? "Pick a username" : "@\(myUsername!)")
@@ -2230,7 +2230,7 @@ private struct FriendsView: View {
                         .foregroundStyle(Color.cream.opacity(0.6))
                 }
                 Spacer()
-                Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold))
+                Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.bronze)
             }
             .padding(14)
@@ -2334,7 +2334,7 @@ private struct FriendsView: View {
                         tag("ACCEPT", filled: true)
                     }.buttonStyle(PressScaleStyle())
                     Button { Task { await friends.respond(requestId: req.requestId, accept: false) } } label: {
-                        Image(systemName: "xmark").font(.system(size: 11, weight: .bold))
+                        Image(systemName: "xmark").font(.system(size: 11, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.bronze).padding(8)
                             .background(Circle().fill(Color.cream.opacity(0.06)))
                     }.buttonStyle(PressScaleStyle())
@@ -2375,7 +2375,7 @@ private struct FriendsView: View {
                             }
                             Spacer()
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color.bronze)
                         }
                         .padding(.vertical, 8).padding(.horizontal, 12)
@@ -2449,7 +2449,7 @@ private struct UsernameEditorView: View {
                     .foregroundStyle(Color.cream.opacity(0.5))
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(Status.drunk.color)
                 }
                 Button { save() } label: {
@@ -2458,7 +2458,7 @@ private struct UsernameEditorView: View {
                         else {
                             Text("SAVE").font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(3)
                             Spacer()
-                            Image(systemName: "checkmark").font(.system(size: 12, weight: .bold))
+                            Image(systemName: "checkmark").font(.system(size: 12, weight: .bold, design: .rounded))
                         }
                     }
                     .foregroundStyle(Color.ink).padding(.vertical, 15).padding(.horizontal, 20)
@@ -2572,7 +2572,7 @@ private struct FriendPickerSheet: View {
                         Text(selected.isEmpty ? "SELECT FRIENDS" : "SEND \(selected.count) INVITE\(selected.count == 1 ? "" : "S")")
                             .font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(2)
                         Spacer()
-                        Image(systemName: "paperplane.fill").font(.system(size: 12, weight: .bold))
+                        Image(systemName: "paperplane.fill").font(.system(size: 12, weight: .bold, design: .rounded))
                     }
                     .foregroundStyle(Color.ink)
                     .padding(.vertical, 15).padding(.horizontal, 20)
@@ -2637,7 +2637,7 @@ private struct FriendPickerSheet: View {
                         .tracking(1.2).foregroundStyle(Color.whiskey)
                 } else if trailing == .select {
                     Image(systemName: isSel ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 18))
+                        .font(.system(size: 18, design: .rounded))
                         .foregroundStyle(isSel ? Color.whiskey : Color.cream.opacity(0.4))
                 } else {
                     Text("INVITE").font(.system(size: 10, weight: .black, design: .monospaced))
@@ -3034,7 +3034,7 @@ struct FriendsPulseStrip: View {
                     }
                 Button(action: openCapture) {
                     Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .black))
+                        .font(.system(size: 13, weight: .black, design: .rounded))
                         .foregroundStyle(Color.ink)
                         .frame(width: 25, height: 25)
                         .background(Circle().fill(Color.whiskey))
@@ -3224,7 +3224,7 @@ struct FriendsMapView: View {
             Spacer()
             Button { dismiss() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .black))
+                    .font(.system(size: 14, weight: .black, design: .rounded))
                     .foregroundStyle(Color.cream)
                     .frame(width: 34, height: 34)
                     .background(Circle().fill(Color.ink.opacity(0.85)))
@@ -3775,7 +3775,7 @@ struct FriendPulseSheet: View {
     private func actionButton(icon: String, title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                Image(systemName: icon).font(.system(size: 13, weight: .bold))
+                Image(systemName: icon).font(.system(size: 13, weight: .bold, design: .rounded))
                 Text(title).font(.system(size: 14, weight: .bold, design: .rounded))
             }
             .foregroundStyle(Color.cream)
@@ -3797,7 +3797,7 @@ struct FriendPulseSheet: View {
     private func statChip(icon: String, label: String, trailing: String? = nil) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.system(size: 12, weight: .bold))
+                .font(.system(size: 12, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.whiskey)
             Text(label)
                 .font(.system(size: 13, weight: .bold, design: .rounded))
@@ -3805,7 +3805,7 @@ struct FriendPulseSheet: View {
                 .lineLimit(1)
             if let trailing {
                 Image(systemName: trailing)
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.5))
             }
         }
@@ -3945,7 +3945,7 @@ struct GroupSnapsStrip: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: "photo.stack.fill")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.whiskey)
                 Text("SQUAD SCHNAPS")
                     .font(.system(size: 10, weight: .black, design: .monospaced))
@@ -4051,7 +4051,7 @@ struct GroupSnapsStrip: View {
     private func captureButton(icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 12, weight: .bold))
+                .font(.system(size: 12, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.whiskey)
                 .frame(width: 30, height: 30)
                 .background(Circle().fill(Color.cream.opacity(0.07)))
@@ -4104,7 +4104,7 @@ private struct GroupSnapViewer: View {
                         onSave()
                     } label: {
                         Image(systemName: (saved || isSaved) ? "checkmark" : "square.and.arrow.down")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle((saved || isSaved) ? Color.ink : Color.cream)
                             .frame(width: 40, height: 40)
                             .background(Circle().fill((saved || isSaved) ? Color.whiskey : Color.ink.opacity(0.7)))
@@ -4114,7 +4114,7 @@ private struct GroupSnapViewer: View {
                 if let onDelete {
                     Button(action: onDelete) {
                         Image(systemName: "trash")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.cream)
                             .frame(width: 40, height: 40)
                             .background(Circle().fill(Color.ink.opacity(0.7)))
@@ -4123,7 +4123,7 @@ private struct GroupSnapViewer: View {
                 }
                 Button(action: onClose) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream)
                         .frame(width: 40, height: 40)
                         .background(Circle().fill(Color.ink.opacity(0.7)))
@@ -4165,7 +4165,7 @@ struct GalleryLightbox: View {
         .overlay(alignment: .topTrailing) {
             Button { onClose() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .padding(12)
                     .background(Circle().fill(.white.opacity(0.15)))
@@ -4255,11 +4255,11 @@ struct LoungeField: View {
             HStack(spacing: 2) {
                 if let prefix {
                     Text(prefix)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                 }
                 TextField("", text: sanitized, prompt: Text(placeholder).foregroundStyle(Color.cream.opacity(0.3)))
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 16, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.cream)
                     .tint(Color.whiskey)
                     .keyboardType(keyboard)
@@ -4286,7 +4286,7 @@ struct LoungeSecureField: View {
                 .tracking(2)
                 .foregroundStyle(Color.bronze)
             SecureField("", text: $text, prompt: Text(placeholder).foregroundStyle(Color.cream.opacity(0.3)))
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: 16, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.cream)
                 .tint(Color.whiskey)
                 .textInputAutocapitalization(.never)
@@ -4315,7 +4315,7 @@ struct LoungeNumberField: View {
             HStack(spacing: 14) {
                 Button { dec() } label: {
                     Image(systemName: "minus")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream)
                         .frame(width: 36, height: 36)
                         .background(Circle().fill(Color.smoke))
@@ -4339,7 +4339,7 @@ struct LoungeNumberField: View {
 
                 Button { inc() } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream)
                         .frame(width: 36, height: 36)
                         .background(Circle().fill(Color.smoke))
@@ -4502,7 +4502,7 @@ private struct ModeTopBar: View {
                         .fill(Color.cream.opacity(0.05))
                         .frame(width: 32, height: 32)
                     Image(systemName: "person.2.fill")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.8))
                 }
                 .overlay(Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
@@ -4519,7 +4519,7 @@ private struct ModeTopBar: View {
                             .fill(Color.cream.opacity(0.05))
                             .frame(width: 32, height: 32)
                         Image(systemName: inboxCount > 0 ? "bell.fill" : "bell")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
                             .foregroundStyle(inboxCount > 0 ? Color.whiskey : Color.cream.opacity(0.8))
                     }
                     .overlay(
@@ -4838,7 +4838,7 @@ private struct WelcomeTourView: View {
                     .strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1)
                     .frame(width: 110, height: 110)
                 Image(systemName: p.icon)
-                    .font(.system(size: 42, weight: .semibold))
+                    .font(.system(size: 42, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.whiskey)
             }
             VStack(spacing: 10) {
@@ -4922,7 +4922,7 @@ private struct TabHintChip: View {
         if !hidden {
             HStack(spacing: 10) {
                 Image(systemName: "lightbulb.fill")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.whiskey)
                 Text(text)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
@@ -4936,7 +4936,7 @@ private struct TabHintChip: View {
                     }
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                         .frame(width: 26, height: 26)
                         .contentShape(Rectangle())
@@ -6295,7 +6295,20 @@ private struct SessionView: View {
             liveInGroup: liveGroup.isActive,
             liveMemberCount: liveGroup.members.count,
             liveCanEnd: !liveGroup.isActive && live.isActive,
-            onEndLive: { liveConfirmEnd = true },
+            // The confirm alert (and the recap flow it kicks off) lives inside
+            // the LIVE page — from any other tab the flag flipped but nothing
+            // was mounted to present it, so END silently did nothing. Hop to
+            // LIVE first, then raise the confirm once the page is on screen.
+            onEndLive: {
+                if tab == .live {
+                    liveConfirmEnd = true
+                } else {
+                    tab = .live
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                        liveConfirmEnd = true
+                    }
+                }
+            },
             liveIsHost: liveGroup.isHost,
             onEndGroup: {
                 Task { await liveGroup.end(cousinSessionId: planGroup.session?.id) }
@@ -6614,7 +6627,7 @@ private struct SessionView: View {
                         .fill(Color.whiskey.opacity(0.12))
                         .frame(width: 34, height: 34)
                     Image(systemName: "moon.stars.fill")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -6628,7 +6641,7 @@ private struct SessionView: View {
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.bronze)
                     .rotationEffect(.degrees(tonightExpanded ? 180 : 0))
             }
@@ -6704,7 +6717,7 @@ private struct SessionView: View {
                             .foregroundStyle(Color.bronze)
                         Spacer()
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.bronze)
                             .rotationEffect(.degrees(pastExpanded ? 180 : 0))
                     }
@@ -7282,7 +7295,7 @@ private struct CollapsibleControlRow<Control: View>: View {
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: icon)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .foregroundStyle(Color.bronze)
                             .frame(width: 20)
                         Text(title)
@@ -7294,7 +7307,7 @@ private struct CollapsibleControlRow<Control: View>: View {
                             .foregroundStyle(Color.cream)
                             .contentTransition(.numericText())
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.bronze)
                             .rotationEffect(.degrees(expanded ? 180 : 0))
                     }
@@ -7720,11 +7733,11 @@ private struct VibeCard: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "drop.fill")
-                            .font(.system(size: 10))
+                            .font(.system(size: 10, design: .rounded))
                             .foregroundStyle(status.color)
                             .frame(width: 14)
                         Text(message.advice)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(Color.cream.opacity(0.82))
                             .lineSpacing(2)
                             .fixedSize(horizontal: false, vertical: true)
@@ -7732,7 +7745,7 @@ private struct VibeCard: View {
 
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "car.fill")
-                            .font(.system(size: 10))
+                            .font(.system(size: 10, design: .rounded))
                             .foregroundStyle(Color.whiskey)
                             .frame(width: 14)
                         Text("Never drink and drive. Call a cab.")
@@ -7952,7 +7965,7 @@ func categoryGlyph(_ category: DrinkCategory, size: CGFloat) -> some View {
         GinTonicIcon(size: size)
     default:
         Text(category.emoji)
-            .font(.system(size: size * 0.62))
+            .font(.system(size: size * 0.62, design: .rounded))
             .frame(width: size, height: size)
     }
 }
@@ -7993,7 +8006,7 @@ private struct OrderCard: View {
             if groupActive && sharedCount > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "person.2.fill")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                     Text("\(personalCount) yours · \(sharedCount) shared ÷\(max(memberCount, 1))")
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -8026,7 +8039,7 @@ private struct OrderCard: View {
                     Button(action: onOpen) {
                         HStack(spacing: 8) {
                             Image(systemName: "plus")
-                                .font(.system(size: 13, weight: .bold))
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
                             Text(groupActive ? "FOR ME" : "ADD A DRINK")
                                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                                 .tracking(1.8)
@@ -8046,7 +8059,7 @@ private struct OrderCard: View {
                         Button(action: onOpenShared) {
                             HStack(spacing: 8) {
                                 Image(systemName: "person.2.fill")
-                                    .font(.system(size: 12, weight: .bold))
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
                                 Text("FOR GROUP")
                                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                                     .tracking(1.8)
@@ -8107,13 +8120,13 @@ private struct DrinkChip: View {
             }
 
             Text(group.option.name)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.cream)
                 .lineLimit(1)
 
             Button(action: onRemoveOne) {
                 Image(systemName: "minus")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.bronze)
                     .frame(width: 22, height: 22)
                     .background(Circle().fill(Color.cream.opacity(0.07)))
@@ -8144,7 +8157,7 @@ private struct DrinkLine: View {
                 if group.shared {
                     HStack(spacing: 4) {
                         Image(systemName: "person.2.fill")
-                            .font(.system(size: 8, weight: .bold))
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
                         Text("SHARED ÷\(max(memberCount, 1))")
                             .font(.system(size: 9, weight: .black, design: .monospaced))
                             .tracking(1.4)
@@ -8162,7 +8175,7 @@ private struct DrinkLine: View {
             HStack(spacing: 0) {
                 Button(action: onRemoveOne) {
                     Image(systemName: "minus")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream)
                         .frame(width: 32, height: 28)
                         .contentShape(Rectangle())
@@ -8178,7 +8191,7 @@ private struct DrinkLine: View {
 
                 Button(action: onAddOne) {
                     Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.ink)
                         .frame(width: 32, height: 28)
                         .background(
@@ -8225,7 +8238,7 @@ private struct YouRow: View {
                     divider
                     stat("\(profile.age)", unit: "yo")
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                         .padding(.leading, 4)
                 }
@@ -8497,7 +8510,7 @@ private struct ProfileSheet: View {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack(spacing: 6) {
                                 Image(systemName: "person.3.fill")
-                                    .font(.system(size: 10, weight: .bold))
+                                    .font(.system(size: 10, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.bronze)
                                 Text("GROUP NIGHTS")
                                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -8528,7 +8541,7 @@ private struct ProfileSheet: View {
 
                     if let errorMessage {
                         Text(errorMessage)
-                            .font(.system(size: 12))
+                            .font(.system(size: 12, design: .rounded))
                             .foregroundStyle(Status.drunk.color)
                     }
 
@@ -8563,7 +8576,7 @@ private struct ProfileSheet: View {
                                 .tracking(3)
                             Spacer()
                             Image(systemName: "checkmark")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                         }
                         .foregroundStyle(Color.ink)
                         .padding(.vertical, 16)
@@ -8583,7 +8596,7 @@ private struct ProfileSheet: View {
                     } label: {
                         HStack(spacing: 10) {
                             Image(systemName: "person.2.fill")
-                                .font(.system(size: 13, weight: .bold))
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color.whiskey)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("FRIENDS")
@@ -8603,7 +8616,7 @@ private struct ProfileSheet: View {
                                     .background(Circle().fill(Color.whiskey))
                             }
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color.bronze)
                         }
                         .padding(.vertical, 14)
@@ -8627,7 +8640,7 @@ private struct ProfileSheet: View {
                         } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: "checkmark.seal.fill")
-                                    .font(.system(size: 13, weight: .bold))
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.whiskey)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(admin.isOwner ? "OWNER" : "ADMIN")
@@ -8642,7 +8655,7 @@ private struct ProfileSheet: View {
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 12, weight: .bold))
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.bronze)
                             }
                             .padding(.vertical, 14)
@@ -8665,7 +8678,7 @@ private struct ProfileSheet: View {
                         } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: "tag.fill")
-                                    .font(.system(size: 13, weight: .bold))
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.whiskey)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text("MANAGE SPECIALS")
@@ -8678,7 +8691,7 @@ private struct ProfileSheet: View {
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 12, weight: .bold))
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.bronze)
                             }
                             .padding(.vertical, 14)
@@ -8702,7 +8715,7 @@ private struct ProfileSheet: View {
                         Link(destination: supportURL) {
                             HStack(spacing: 10) {
                                 Image(systemName: "envelope.fill")
-                                    .font(.system(size: 13, weight: .bold))
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.whiskey)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text("CONTACT SUPPORT")
@@ -8715,7 +8728,7 @@ private struct ProfileSheet: View {
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 12, weight: .bold))
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.bronze)
                             }
                             .padding(.vertical, 14)
@@ -8741,7 +8754,7 @@ private struct ProfileSheet: View {
                         } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: "questionmark.circle.fill")
-                                    .font(.system(size: 13, weight: .bold))
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.whiskey)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text("REPLAY THE TOUR")
@@ -8754,7 +8767,7 @@ private struct ProfileSheet: View {
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 12, weight: .bold))
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
                                     .foregroundStyle(Color.bronze)
                             }
                             .padding(.vertical, 14)
@@ -8779,7 +8792,7 @@ private struct ProfileSheet: View {
                     } label: {
                         HStack {
                             Image(systemName: "rectangle.portrait.and.arrow.right")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                             Text("SIGN OUT")
                                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                                 .tracking(2.4)
@@ -8928,7 +8941,7 @@ private struct AdminPanelView: View {
                             ProgressView().tint(Color.ink)
                         } else {
                             Image(systemName: "plus")
-                                .font(.system(size: 15, weight: .black))
+                                .font(.system(size: 15, weight: .black, design: .rounded))
                         }
                     }
                     .foregroundStyle(Color.ink)
@@ -8962,7 +8975,7 @@ private struct AdminPanelView: View {
                         Spacer(minLength: 0)
                         if entry.isOwner {
                             Image(systemName: "crown.fill")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color.whiskey)
                         } else {
                             Button {
@@ -9190,7 +9203,7 @@ struct OffersAdminView: View {
                         Spacer()
                         Button(action: { dismiss() }) {
                             Image(systemName: "xmark")
-                                .font(.system(size: 14, weight: .bold))
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color.cream.opacity(0.6))
                                 .frame(width: 34, height: 34)
                                 .background(Circle().fill(Color.cream.opacity(0.06)))
@@ -9201,7 +9214,7 @@ struct OffersAdminView: View {
                     Button { addOpen = true } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "plus.circle.fill")
-                                .font(.system(size: 20, weight: .bold))
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color.ink)
                             Text("Add a special")
                                 .font(.system(size: 15, weight: .heavy, design: .rounded))
@@ -9263,7 +9276,7 @@ struct OffersAdminView: View {
                 Task { await svc.delete(o.id) }
             } label: {
                 Image(systemName: "trash")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(Color(red: 0.85, green: 0.40, blue: 0.34))
                     .frame(width: 36, height: 36)
                     .background(Circle().fill(Color.cream.opacity(0.05)))
@@ -9319,7 +9332,7 @@ private struct AddOfferSheet: View {
                         Spacer()
                         Button(action: { dismiss() }) {
                             Image(systemName: "xmark")
-                                .font(.system(size: 14, weight: .bold))
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color.cream.opacity(0.6))
                                 .frame(width: 34, height: 34)
                                 .background(Circle().fill(Color.cream.opacity(0.06)))
@@ -9394,7 +9407,7 @@ private struct AddOfferSheet: View {
                             ZStack {
                                 Circle().fill(Color.whiskey).frame(width: 30, height: 30)
                                     .shadow(color: Color.whiskey.opacity(0.6), radius: 5)
-                                Image(systemName: "mappin").font(.system(size: 13, weight: .bold)).foregroundStyle(Color.ink)
+                                Image(systemName: "mappin").font(.system(size: 13, weight: .bold, design: .rounded)).foregroundStyle(Color.ink)
                             }
                             .onTapGesture { withAnimation { selected = r } }
                         }
@@ -9407,7 +9420,7 @@ private struct AddOfferSheet: View {
                 ForEach(search.results.prefix(6)) { r in
                     Button { withAnimation { selected = r } } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: "mappin.circle.fill").font(.system(size: 16)).foregroundStyle(Color.whiskey)
+                            Image(systemName: "mappin.circle.fill").font(.system(size: 16, design: .rounded)).foregroundStyle(Color.whiskey)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(r.name).font(.system(size: 14, weight: .bold, design: .rounded)).foregroundStyle(Color.cream).lineLimit(1)
                                 if let a = r.address {
@@ -9438,7 +9451,7 @@ private struct AddOfferSheet: View {
                     HStack {
                         Text(offerKindLabel(kind)).foregroundStyle(Color.cream)
                         Spacer()
-                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.bronze)
+                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 11, weight: .bold, design: .rounded)).foregroundStyle(Color.bronze)
                     }
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .padding(.horizontal, 14).padding(.vertical, 12)
@@ -9644,7 +9657,7 @@ private struct MenuSheet: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
                             Image(systemName: "star.fill")
-                                .font(.system(size: 9, weight: .black))
+                                .font(.system(size: 9, weight: .black, design: .rounded))
                                 .foregroundStyle(Color.whiskey)
                             Text(specialsHeader.uppercased())
                                 .font(.system(size: 9.5, weight: .bold, design: .monospaced))
@@ -9832,7 +9845,7 @@ private struct OptionRow: View {
             if count == 0 {
                 Button(action: onAdd) {
                     Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.ink)
                         .frame(width: 34, height: 34)
                         .background(Circle().fill(Color.whiskey))
@@ -9843,7 +9856,7 @@ private struct OptionRow: View {
                 HStack(spacing: 0) {
                     Button(action: onRemove) {
                         Image(systemName: "minus")
-                            .font(.system(size: 12, weight: .bold))
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.cream)
                             .frame(width: 34, height: 30)
                             .contentShape(Rectangle())
@@ -9859,7 +9872,7 @@ private struct OptionRow: View {
 
                     Button(action: onAdd) {
                         Image(systemName: "plus")
-                            .font(.system(size: 12, weight: .bold))
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.ink)
                             .frame(width: 34, height: 30)
                             .background(
@@ -10119,7 +10132,7 @@ struct Disclaimer: View {
 
     var body: some View {
         Text("Widmark estimate based on drink volume, ABV, body weight and time. Legal limits vary: \(bacUnit.formattedLimit(0.02))\(bacUnit.symbol) in much of the EU, \(bacUnit.formattedLimit(0.08))\(bacUnit.symbol) in the US & UK. Not a legal or medical reference. Never use to decide whether to drive.")
-            .font(.system(size: 11, weight: .regular))
+            .font(.system(size: 11, weight: .regular, design: .rounded))
             .lineSpacing(4)
             .foregroundStyle(Color.bronze.opacity(0.85))
             .fixedSize(horizontal: false, vertical: true)
@@ -10205,7 +10218,7 @@ struct AvatarPicker: View {
                 }
 
                 Image(systemName: "camera.fill")
-                    .font(.system(size: size * 0.18, weight: .bold))
+                    .font(.system(size: size * 0.18, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.ink)
                     .frame(width: size * 0.32, height: size * 0.32)
                     .background(Circle().fill(Color.cream))
@@ -10321,7 +10334,7 @@ private struct GroupBar: View {
                         .fill(session == nil ? Color.cream.opacity(0.05) : Color.whiskey.opacity(0.18))
                         .frame(width: compact ? 28 : 32, height: compact ? 28 : 32)
                     Image(systemName: session == nil ? "person.2" : "person.2.fill")
-                        .font(.system(size: compact ? 12 : 13, weight: .bold))
+                        .font(.system(size: compact ? 12 : 13, weight: .bold, design: .rounded))
                         .foregroundStyle(session == nil ? Color.bronze : Color.whiskey)
                 }
 
@@ -10365,7 +10378,7 @@ private struct GroupBar: View {
 
                 if !compact {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                 }
             }
@@ -10703,7 +10716,7 @@ private struct GroupSheet: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: isSaved ? "star.fill" : "star")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(isSaved ? Color.whiskey : Color.cream.opacity(0.85))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(isSaved ? "SAVED CREW" : "SAVE THIS CREW")
@@ -10893,7 +10906,7 @@ private struct GroupSheet: View {
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "arrow.triangle.branch")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("CONTINUE WITH \(group.scope.other.label) GROUP")
                             .font(.system(size: 11, weight: .black, design: .monospaced))
@@ -10907,7 +10920,7 @@ private struct GroupSheet: View {
                         ProgressView().tint(Color.cream)
                     } else {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .bold))
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.bronze)
                     }
                 }
@@ -10937,7 +10950,7 @@ private struct GroupSheet: View {
         } label: {
             HStack {
                 Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
                 Text("START NEW GROUP SESH")
                     .font(.system(size: 13, weight: .black, design: .monospaced))
                     .tracking(1.8)
@@ -10946,7 +10959,7 @@ private struct GroupSheet: View {
                     ProgressView().tint(Color.ink)
                 } else {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                 }
             }
             .foregroundStyle(Color.ink)
@@ -11073,7 +11086,7 @@ private struct GroupSheet: View {
                     }
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.55))
                         .frame(width: 24, height: 24)
                         .background(Circle().fill(Color.cream.opacity(0.06)))
@@ -11144,14 +11157,14 @@ private struct GroupSheet: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: inviteSendToast == nil ? "paperplane.fill" : "checkmark")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                     Text(inviteSendToast ?? "SEND INVITE")
                         .font(.system(size: 11, weight: .black, design: .monospaced))
                         .tracking(1.6)
                     Spacer()
                     if inviteSendToast == nil {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.ink.opacity(0.55))
                     }
                 }
@@ -11173,7 +11186,7 @@ private struct GroupSheet: View {
             ShareLink(item: message) {
                 HStack(spacing: 6) {
                     Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                     Text("Or share via Messages")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                 }
@@ -11248,7 +11261,7 @@ private struct GroupSheet: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: showCopied ? "checkmark" : "doc.on.doc")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                             Text(showCopied ? "COPIED" : "COPY CODE")
                                 .font(.system(size: 11, weight: .black, design: .monospaced))
                                 .tracking(1.6)
@@ -11270,7 +11283,7 @@ private struct GroupSheet: View {
                     ShareLink(item: "Join my sesh — code \(session.joinCode)") {
                         HStack(spacing: 8) {
                             Image(systemName: "square.and.arrow.up")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                             Text("SHARE")
                                 .font(.system(size: 11, weight: .black, design: .monospaced))
                                 .tracking(1.6)
@@ -11292,13 +11305,13 @@ private struct GroupSheet: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "person.2.fill")
-                            .font(.system(size: 12, weight: .bold))
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
                         Text("INVITE FRIENDS")
                             .font(.system(size: 11, weight: .black, design: .monospaced))
                             .tracking(1.6)
                         Spacer()
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
                     }
                     .foregroundStyle(Color.cream)
                     .padding(.vertical, 14)
@@ -11532,7 +11545,7 @@ private struct SavedGroupRow: View {
                         .fill(Color.whiskey.opacity(0.14))
                         .frame(width: 30, height: 30)
                     Image(systemName: "paperplane.fill")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                 }
             }
@@ -11801,7 +11814,7 @@ private struct LiveSeshBar: View {
                         .fill(Color.whiskey.opacity(0.18))
                         .frame(width: 34, height: 34)
                     Image(systemName: "dot.radiowaves.left.and.right")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -11815,7 +11828,7 @@ private struct LiveSeshBar: View {
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.bronze)
             }
             .padding(.horizontal, 14)
@@ -11849,7 +11862,7 @@ private struct LiveSeshBar: View {
                         .frame(width: 46, height: 46)
                         .opacity(0.7)
                     Image(systemName: "waveform")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.ink)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -11879,7 +11892,7 @@ private struct LiveSeshBar: View {
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.bronze)
             }
             .padding(.horizontal, 14)
@@ -11920,7 +11933,7 @@ private struct LiveSeshBar: View {
                         .fill(Color.whiskey.opacity(0.18))
                         .frame(width: 34, height: 34)
                     Image(systemName: "person.3.fill")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -11934,7 +11947,7 @@ private struct LiveSeshBar: View {
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.bronze)
             }
             .padding(.horizontal, 14)
@@ -11970,7 +11983,7 @@ private struct LiveSeshBar: View {
                         .frame(width: 46, height: 46)
                         .opacity(0.7)
                     Image(systemName: "person.3.fill")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.ink)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -12000,7 +12013,7 @@ private struct LiveSeshBar: View {
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.bronze)
             }
             .padding(.horizontal, 14)
@@ -13277,7 +13290,7 @@ private struct LiveSeshView: View {
                                     .overlay(Circle().strokeBorder(Color.whiskey.opacity(shareModeActive ? 0.7 : 0.35), lineWidth: 1))
                                 if shareModeActive {
                                     Image(systemName: "person.2.fill")
-                                        .font(.system(size: 7.5, weight: .bold))
+                                        .font(.system(size: 7.5, weight: .bold, design: .rounded))
                                         .foregroundStyle(Color.ink)
                                         .frame(width: 14, height: 14)
                                         .background(Circle().fill(Color.whiskey))
@@ -13313,7 +13326,7 @@ private struct LiveSeshView: View {
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: shareModeActive ? "person.2.fill" : "plus")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                     Text(shareModeActive ? "MORE SHARED DRINKS" : "MORE DRINKS")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -13321,7 +13334,7 @@ private struct LiveSeshView: View {
                         .foregroundStyle(Color.cream.opacity(0.85))
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                 }
                 .padding(.horizontal, 14)
@@ -13443,7 +13456,7 @@ private struct LiveShareModePicker: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                 Text(title)
                     .font(.system(size: 10.5, weight: .black, design: .monospaced))
                     .tracking(1.6)
@@ -13567,7 +13580,7 @@ private struct LiveRosterRow: View {
                     )
                 if isLeader {
                     Image(systemName: "crown.fill")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                         .padding(3)
                         .background(Circle().fill(Color.ink))
@@ -13709,7 +13722,7 @@ private struct LiveGhostSection: View {
             Button(action: onAddPerson) {
                 HStack(spacing: 10) {
                     Image(systemName: "person.badge.plus")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                         .frame(width: 28, height: 28)
                         .background(Circle().fill(Color.whiskey.opacity(0.14)))
@@ -13724,7 +13737,7 @@ private struct LiveGhostSection: View {
                         .tracking(1.0)
                         .foregroundStyle(Color.cream.opacity(0.45))
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                 }
                 .padding(.horizontal, 14)
@@ -13872,7 +13885,7 @@ private struct LiveGhostRow: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.55))
                     .frame(width: 26, height: 26)
                     .background(Circle().fill(Color.cream.opacity(0.05)))
@@ -14060,7 +14073,7 @@ struct AddPersonSheet: View {
         Button(action: commit) {
             HStack(spacing: 10) {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.ink)
                     .frame(width: 28, height: 28)
                     .background(Circle().fill(Color.cream))
@@ -14070,7 +14083,7 @@ struct AddPersonSheet: View {
                     .foregroundStyle(Color.ink)
                 Spacer()
                 Image(systemName: "arrow.right")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.ink.opacity(0.55))
             }
             .padding(.horizontal, 16)
@@ -14156,7 +14169,7 @@ private struct LiveRoastCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "flame.fill")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.whiskey)
                 Text("THE ROAST")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -14180,7 +14193,7 @@ private struct LiveRoastCard: View {
 
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "sparkles")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.whiskey.opacity(0.85))
                     .padding(.top, 3)
                 Text(roast.advice)
@@ -14261,7 +14274,7 @@ private struct DrinkTimelineRow: View {
     private var bookmarkButton: some View {
         Button(action: onToggleSave) {
             Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: 13, weight: .bold, design: .rounded))
                 .foregroundStyle(isSaved ? Color.whiskey : Color.cream.opacity(0.4))
                 .frame(width: 32, height: 32)
                 .contentShape(Rectangle())
@@ -14276,7 +14289,7 @@ private struct DrinkTimelineRow: View {
         HStack(spacing: 0) {
             Button(action: onRemove) {
                 Image(systemName: "minus")
-                    .font(.system(size: 12, weight: .black))
+                    .font(.system(size: 12, weight: .black, design: .rounded))
                     .foregroundStyle(group.canRemove ? Color.cream.opacity(0.8) : Color.cream.opacity(0.25))
                     .frame(width: 34, height: 32)
                     .contentShape(Rectangle())
@@ -14293,7 +14306,7 @@ private struct DrinkTimelineRow: View {
 
             Button(action: onAdd) {
                 Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .black))
+                    .font(.system(size: 12, weight: .black, design: .rounded))
                     .foregroundStyle(Color.ink)
                     .frame(width: 34, height: 32)
                     .background(Color.whiskey)
@@ -14316,7 +14329,7 @@ private struct DrinkTimelineRow: View {
     private var sharedPill: some View {
         HStack(spacing: 3) {
             Image(systemName: "person.2.fill")
-                .font(.system(size: 7.5, weight: .bold))
+                .font(.system(size: 7.5, weight: .bold, design: .rounded))
             Text("SHARED")
                 .font(.system(size: 8, weight: .black, design: .monospaced))
                 .tracking(1.0)
@@ -14385,7 +14398,7 @@ private struct LiveMenuSheet: View {
                     }
                     Spacer()
                     Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.ink)
                         .frame(width: 30, height: 30)
                         .background(Circle().fill(Color.whiskey))
@@ -14400,7 +14413,7 @@ private struct LiveMenuSheet: View {
                     }
                 } label: {
                     Image(systemName: "bookmark.fill")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                         .frame(width: 30, height: 30)
                         .background(Circle().fill(Color.cream.opacity(0.05)))
@@ -14440,7 +14453,7 @@ private struct LiveMenuSheet: View {
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "barcode.viewfinder")
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.system(size: 20, weight: .semibold, design: .rounded))
                             .foregroundStyle(Color.ink)
                             .frame(width: 40, height: 40)
                             .background(Circle().fill(Color.whiskey))
@@ -14454,7 +14467,7 @@ private struct LiveMenuSheet: View {
                         }
                         Spacer()
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .bold))
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.bronze)
                     }
                     .padding(.horizontal, 14)
@@ -14474,7 +14487,7 @@ private struct LiveMenuSheet: View {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 8) {
                             Image(systemName: "star.fill")
-                                .font(.system(size: 9, weight: .black))
+                                .font(.system(size: 9, weight: .black, design: .rounded))
                                 .foregroundStyle(Color.whiskey)
                             Text(specialsHeader.uppercased())
                                 .font(.system(size: 9.5, weight: .bold, design: .monospaced))
@@ -14505,7 +14518,7 @@ private struct LiveMenuSheet: View {
                                         }
                                         Spacer()
                                         Image(systemName: "plus")
-                                            .font(.system(size: 13, weight: .bold))
+                                            .font(.system(size: 13, weight: .bold, design: .rounded))
                                             .foregroundStyle(Color.ink)
                                             .frame(width: 30, height: 30)
                                             .background(Circle().fill(Color.whiskey))
@@ -14576,7 +14589,7 @@ private struct LiveMenuSheet: View {
                     if !savedHere.isEmpty {
                         HStack(spacing: 8) {
                             Image(systemName: "bookmark.fill")
-                                .font(.system(size: 9, weight: .black))
+                                .font(.system(size: 9, weight: .black, design: .rounded))
                                 .foregroundStyle(Color.whiskey)
                             Text("SAVED DRINKS")
                                 .font(.system(size: 9.5, weight: .bold, design: .monospaced))
@@ -14648,7 +14661,7 @@ private struct ShareModePicker: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                 Text(title)
                     .font(.system(size: 11, weight: .black, design: .monospaced))
                     .tracking(1.8)
@@ -14720,7 +14733,7 @@ struct BottomTabBar: View {
             VStack(spacing: 4) {
                 ZStack {
                     Image(systemName: icon)
-                        .font(.system(size: 18, weight: on ? .bold : .semibold))
+                        .font(.system(size: 18, weight: on ? .bold : .semibold, design: .rounded))
                         .foregroundStyle(on ? Color.whiskey : Color.cream.opacity(0.55))
                         // "Something new over here" — a periodic wiggle
                         // until the user swipes over to look.

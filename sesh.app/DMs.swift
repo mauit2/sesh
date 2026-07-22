@@ -261,7 +261,7 @@ struct ChatsView: View {
                                 .fill(Color.whiskey.opacity(0.12))
                                 .frame(width: 34, height: 34)
                             Image(systemName: "square.and.pencil")
-                                .font(.system(size: 14, weight: .bold))
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color.whiskey)
                         }
                         .overlay(Circle().strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1))
@@ -276,7 +276,7 @@ struct ChatsView: View {
                     VStack(spacing: 8) {
                         Spacer()
                         Image(systemName: "bubble.left.and.bubble.right.fill")
-                            .font(.system(size: 28))
+                            .font(.system(size: 28, design: .rounded))
                             .foregroundStyle(Color.bronze)
                         Text("No chats yet")
                             .font(.system(size: 16, weight: .bold, design: .rounded))
@@ -399,7 +399,7 @@ private struct NewChatPicker: View {
 
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                     TextField(
                         "", text: $query,
@@ -457,7 +457,7 @@ private struct NewChatPicker: View {
                                     }
                                     Spacer()
                                     Image(systemName: "chevron.right")
-                                        .font(.system(size: 12, weight: .bold))
+                                        .font(.system(size: 12, weight: .bold, design: .rounded))
                                         .foregroundStyle(Color.bronze)
                                 }
                                 .padding(.horizontal, 12)
@@ -561,7 +561,7 @@ struct ChatThreadView: View {
                         _ = t
                     } label: {
                         Image(systemName: "arrow.up")
-                            .font(.system(size: 15, weight: .black))
+                            .font(.system(size: 15, weight: .black, design: .rounded))
                             .foregroundStyle(Color.ink)
                             .frame(width: 36, height: 36)
                             .background(Circle().fill(Color.whiskey))
@@ -635,7 +635,7 @@ struct ChatThreadView: View {
                 }
                 if m.kind == "story_like" {
                     Text("❤️")
-                        .font(.system(size: 30))
+                        .font(.system(size: 30, design: .rounded))
                 } else if let body = m.body {
                     Text(body)
                         .font(.system(size: 15, weight: .medium, design: .rounded))

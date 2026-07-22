@@ -79,7 +79,7 @@ struct PrimaryGlowButton: View {
             HStack(spacing: 8) {
                 if let systemImage {
                     Image(systemName: systemImage)
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
                 }
                 Text(title.uppercased())
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -108,7 +108,7 @@ struct StatRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.bronze)
                 .frame(width: 20)
             Text(title)

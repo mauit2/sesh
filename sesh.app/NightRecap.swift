@@ -1619,7 +1619,7 @@ struct SeshCameraView: View {
                     HStack {
                         PhotosPicker(selection: $rollItem, matching: .images) {
                             Image(systemName: "photo.on.rectangle")
-                                .font(.system(size: 15, weight: .bold))
+                                .font(.system(size: 15, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color.cream)
                                 .frame(width: 42, height: 42)
                                 .background(Circle().fill(Color.ink.opacity(0.55)))
@@ -1674,7 +1674,7 @@ struct SeshCameraView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: 15, weight: .bold, design: .rounded))
                 .foregroundStyle(tint)
                 .frame(width: 42, height: 42)
                 .background(Circle().fill(Color.ink.opacity(0.55)))
@@ -1732,7 +1732,7 @@ struct PhotoLightbox: View {
                         onClose()
                     } label: {
                         Image(systemName: "trash")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.white)
                             .frame(width: 38, height: 38)
                             .background(Circle().fill(Color.white.opacity(0.15)))
@@ -1743,7 +1743,7 @@ struct PhotoLightbox: View {
                     onClose()
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.white)
                         .frame(width: 38, height: 38)
                         .background(Circle().fill(Color.white.opacity(0.15)))
@@ -1880,7 +1880,7 @@ struct StopPhotoStrip: View {
         Button(action: action) {
             VStack(spacing: 3) {
                 Image(systemName: icon)
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.whiskey)
                 Text(label)
                     .font(.system(size: 7, weight: .black, design: .monospaced))
@@ -2046,7 +2046,7 @@ struct PostComposerView: View {
 
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.system(size: 12, weight: .medium)).foregroundStyle(Status.drunk.color)
+                        .font(.system(size: 12, weight: .medium, design: .rounded)).foregroundStyle(Status.drunk.color)
                 }
 
                 Button { post() } label: {
@@ -2055,7 +2055,7 @@ struct PostComposerView: View {
                         else {
                             Text("POST").font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(3)
                             Spacer()
-                            Image(systemName: "paperplane.fill").font(.system(size: 12, weight: .bold))
+                            Image(systemName: "paperplane.fill").font(.system(size: 12, weight: .bold, design: .rounded))
                         }
                     }
                     .foregroundStyle(Color.ink).padding(.vertical, 15).padding(.horizontal, 20)
@@ -2238,15 +2238,15 @@ struct NightRecapView: View {
                                 .frame(width: 26, height: 26)
                                 .shadow(color: Color.whiskey.opacity(0.6), radius: 8)
                             if stop.isPeak {
-                                Text("🔥").font(.system(size: 12))
+                                Text("🔥").font(.system(size: 12, design: .rounded))
                             } else if stop.kind == .preGame {
-                                Text("🏠").font(.system(size: 12))
+                                Text("🏠").font(.system(size: 12, design: .rounded))
                             } else if stop.kind == .food {
-                                Text("🍔").font(.system(size: 12))
+                                Text("🍔").font(.system(size: 12, design: .rounded))
                             } else if stop.kind == .puke {
-                                Text("🤮").font(.system(size: 12))
+                                Text("🤮").font(.system(size: 12, design: .rounded))
                             } else if stop.kind == .refuel || stop.kind == .afters {
-                                Text("📍").font(.system(size: 12))
+                                Text("📍").font(.system(size: 12, design: .rounded))
                             } else {
                                 Text("\(i + 1)")
                                     .font(.system(size: 12, weight: .black, design: .rounded))
@@ -2454,7 +2454,7 @@ struct NightRecapView: View {
                     go(to: .overview, manual: true)
                 } label: {
                     Image(systemName: "flag.checkered")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(stage == .overview ? Color.whiskey : Color.cream.opacity(0.35))
                 }
             }
@@ -2471,7 +2471,7 @@ struct NightRecapView: View {
     private func navChevron(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: 13, weight: .bold, design: .rounded))
                 .foregroundStyle(enabled ? Color.cream : Color.cream.opacity(0.2))
                 .frame(width: 38, height: 38)
                 .background(Circle().fill(Color.ink.opacity(0.75)))
@@ -2649,7 +2649,7 @@ struct NightRecapView: View {
             if recap.crawlMeters > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "figure.walk")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.whiskey)
                     Text("Crawled \(distanceLabel) between bars")
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -2766,7 +2766,7 @@ struct NightRecapView: View {
             // whole squad's photos and stats, which aren't the user's
             // alone to publish.
             HStack(spacing: 6) {
-                Image(systemName: "person.3.fill").font(.system(size: 12, weight: .bold))
+                Image(systemName: "person.3.fill").font(.system(size: 12, weight: .bold, design: .rounded))
                 Text("SQUAD RECAP · SAVE ONLY")
                     .font(.system(size: 12, weight: .black, design: .monospaced)).tracking(1.6)
             }
@@ -2776,7 +2776,7 @@ struct NightRecapView: View {
             .overlay(Capsule().strokeBorder(Color.bronze.opacity(0.35), lineWidth: 1))
         } else if history.isPosted(recap.id) {
             HStack(spacing: 6) {
-                Image(systemName: "checkmark.circle.fill").font(.system(size: 13, weight: .bold))
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 13, weight: .bold, design: .rounded))
                 Text("POSTED TO NIGHTLINE")
                     .font(.system(size: 12, weight: .black, design: .monospaced)).tracking(1.6)
             }
@@ -2789,7 +2789,7 @@ struct NightRecapView: View {
                 showPostComposer = true
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "paperplane.fill").font(.system(size: 12, weight: .bold))
+                    Image(systemName: "paperplane.fill").font(.system(size: 12, weight: .bold, design: .rounded))
                     Text("POST TO NIGHTLINE")
                         .font(.system(size: 13, weight: .black, design: .monospaced)).tracking(1.6)
                 }
@@ -2841,7 +2841,7 @@ struct NightRecapView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "person.3.fill")
-                    .font(.system(size: 10, weight: .black))
+                    .font(.system(size: 10, weight: .black, design: .rounded))
                     .foregroundStyle(Color.whiskey)
                 Text("THE SQUAD")
                     .font(.system(size: 10, weight: .black, design: .monospaced))
@@ -3016,7 +3016,7 @@ struct LiveJourneyPhotosSection: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: "camera.fill")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.whiskey)
                 Text("NIGHT SCHNAPS")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -3361,7 +3361,7 @@ struct LiveJourneyPhotosSection: View {
         if let spot {
             HStack(spacing: 6) {
                 Image(systemName: spot.hasLocation ? "mappin.circle.fill" : "house.fill")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.whiskey)
                 Text(spot.name ?? "Marked spot")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
@@ -3369,13 +3369,13 @@ struct LiveJourneyPhotosSection: View {
                     .lineLimit(1)
                 if spot.hasLocation {
                     Image(systemName: "location.fill")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                 }
                 Spacer(minLength: 4)
                 Button { openSpotEditor(target) } label: {
                     Image(systemName: "pencil")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.6))
                         .frame(width: 22, height: 22)
                 }
@@ -3385,7 +3385,7 @@ struct LiveJourneyPhotosSection: View {
                     else { journey.clearCurrentLooseSpot() }
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.5))
                         .frame(width: 22, height: 22)
                 }
@@ -3399,7 +3399,7 @@ struct LiveJourneyPhotosSection: View {
             Button { openSpotEditor(target) } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "mappin.and.ellipse")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
                     Text(setLabel)
                         .font(.system(size: 9.5, weight: .black, design: .monospaced))
                         .tracking(1.2)
@@ -3419,7 +3419,7 @@ struct LiveJourneyPhotosSection: View {
             withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { action() }
         } label: {
             Image(systemName: icon)
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: 9, weight: .bold, design: .rounded))
                 .foregroundStyle(enabled ? Color.cream.opacity(0.7) : Color.cream.opacity(0.2))
                 .frame(width: 22, height: 22)
                 .background(Circle().fill(Color.cream.opacity(0.06)))
@@ -3432,7 +3432,7 @@ struct LiveJourneyPhotosSection: View {
     private func markerButton(_ emoji: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(emoji)
-                .font(.system(size: 13))
+                .font(.system(size: 13, design: .rounded))
                 .frame(width: 30, height: 26)
                 .background(Capsule().fill(Color.cream.opacity(0.05)))
                 .overlay(Capsule().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
@@ -3447,7 +3447,7 @@ struct LiveJourneyPhotosSection: View {
         if stop.coordinate != nil {
             HStack(spacing: 6) {
                 Image(systemName: "mappin.circle.fill")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.whiskey)
                 Text("Location added")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
@@ -3455,7 +3455,7 @@ struct LiveJourneyPhotosSection: View {
                 Spacer(minLength: 4)
                 Button { journey.setStopLocation(stop.id, coordinate: nil) } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.5))
                         .frame(width: 22, height: 22)
                 }
@@ -3471,7 +3471,7 @@ struct LiveJourneyPhotosSection: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "mappin.and.ellipse")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
                     Text("ADD LOCATION")
                         .font(.system(size: 9.5, weight: .black, design: .monospaced))
                         .tracking(1.2)
@@ -3552,7 +3552,7 @@ struct LiveJourneyPhotosSection: View {
                     }
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.5))
                         .frame(width: 22, height: 22)
                         .background(Circle().fill(Color.cream.opacity(0.06)))
@@ -3602,7 +3602,7 @@ struct LiveJourneyPhotosSection: View {
             withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { action() }
         } label: {
             Image(systemName: icon)
-                .font(.system(size: 12, weight: .bold))
+                .font(.system(size: 12, weight: .bold, design: .rounded))
                 .foregroundStyle(enabled ? Color.cream : Color.cream.opacity(0.2))
                 .frame(width: 30, height: 30)
                 .background(Circle().fill(Color.cream.opacity(0.05)))
@@ -3628,7 +3628,7 @@ private struct StopNoteEditor: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "text.bubble")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.bronze)
             TextField("Add a comment about this stop…", text: $text, axis: .vertical)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
@@ -3671,14 +3671,14 @@ struct PastNightRow: View {
             if photoCount > 0 {
                 HStack(spacing: 4) {
                     Image(systemName: "photo.fill")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
                     Text("\(photoCount)")
                         .font(.system(size: 11, weight: .heavy, design: .rounded))
                 }
                 .foregroundStyle(Color.cream.opacity(0.6))
             }
             Image(systemName: "chevron.right")
-                .font(.system(size: 11, weight: .bold))
+                .font(.system(size: 11, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.bronze)
         }
         .padding(.horizontal, 14)

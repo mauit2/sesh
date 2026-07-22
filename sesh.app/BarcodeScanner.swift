@@ -443,7 +443,7 @@ struct BarcodeScanFlow: View {
             HStack {
                 Button(action: onCancel) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream)
                         .frame(width: 40, height: 40)
                         .background(Circle().fill(Color.ink.opacity(0.55)))
@@ -482,7 +482,7 @@ struct BarcodeScanFlow: View {
     private var unsupportedStage: some View {
         VStack(spacing: 14) {
             Image(systemName: "camera.metering.unknown")
-                .font(.system(size: 30))
+                .font(.system(size: 30, design: .rounded))
                 .foregroundStyle(Color.bronze)
             Text("Scanning isn't available here")
                 .font(.system(size: 15, weight: .bold, design: .rounded))
@@ -559,7 +559,7 @@ private struct ScannerReticle: View {
                 .scaleEffect(captured ? 1.04 : 1)
 
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 60, weight: .bold))
+                .font(.system(size: 60, weight: .bold, design: .rounded))
                 .foregroundStyle(success)
                 .shadow(color: success.opacity(0.6), radius: 14)
                 .scaleEffect(checkScale)
@@ -690,7 +690,7 @@ private struct BarcodeConfirmView: View {
                 Spacer()
                 Button(action: onCancel) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.6))
                 }
             }
@@ -730,7 +730,7 @@ private struct BarcodeConfirmView: View {
                         .foregroundStyle(Color.cream)
                     Spacer()
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.bronze)
                 }
             }
@@ -795,7 +795,7 @@ private struct BarcodeConfirmView: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "bookmark.fill")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                     Text("ADD & SAVE TO MY DRINKS")
                         .font(.system(size: 13, weight: .black, design: .monospaced))
                         .tracking(1.2)
