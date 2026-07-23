@@ -295,6 +295,10 @@ final class VenueService: ObservableObject {
     /// MapKit lookup (or its memory) on every open.
     @Published private(set) var resolvedCoords: [UUID: CLLocationCoordinate2D] = [:]
     @Published private(set) var loading = false
+    /// Set by deep entry points (the app-open interstitial) to ask the Deals
+    /// map to fly to + open a specific venue when it next appears. The map
+    /// consumes and clears it.
+    @Published var pendingFocusVenueId: UUID? = nil
     private let coordCacheKey = "sesh.venueCoords.v1"
 
     /// User-selected current venue. Persisted across launches via
@@ -380,12 +384,21 @@ final class VenueService: ObservableObject {
     /// scoped to bars near the user; a global catalog shouldn't surface a bar
     /// on another continent. Shared so every surface uses the same cutoff.
     static let dealsRadiusMeters: CLLocationDistance = 50_000
+    /// "Near the bar" radius — used for the app-open interstitial and, on the
+    /// server, for deal-push targeting (migration 059). Much tighter than the
+    /// city-scale list radius: a promo/push should only reach people right
+    /// around the venue.
+    static let dealsProximityMeters: CLLocationDistance = 5_000
+
+    private func meters(from location: CLLocation?, to venue: Venue) -> CLLocationDistance? {
+        guard let here = location else { return nil }
+        let c = coordinate(for: venue)
+        return CLLocation(latitude: c.latitude, longitude: c.longitude).distance(from: here)
+    }
 
     private func isNearby(_ venue: Venue, to location: CLLocation?) -> Bool {
-        guard let here = location else { return true }   // no fix yet → show all
-        let c = coordinate(for: venue)
-        return CLLocation(latitude: c.latitude, longitude: c.longitude)
-            .distance(from: here) <= Self.dealsRadiusMeters
+        guard let d = meters(from: location, to: venue) else { return true }   // no fix → show all
+        return d <= Self.dealsRadiusMeters
     }
 
     /// All live billboard campaigns with their venues, for the carousel —
@@ -398,6 +411,25 @@ final class VenueService: ObservableObject {
                 .first { $0.placement == "billboard" && ($0.billboardImageURL ?? $0.imageURL) != nil }
                 .map { ($0, v) }
         }
+    }
+
+    /// One eligible app-open interstitial for the user, or nil: an offer
+    /// flagged `interstitial`, carrying poster artwork, at a bar within the
+    /// tight "near the bar" radius, that the user hasn't already been shown
+    /// (`seen`). Requires a location fix — proximity is the whole point — and
+    /// the nearest bar wins. Returns the offer + its venue.
+    func interstitialCandidate(near location: CLLocation?,
+                               excluding seen: Set<UUID>) -> (offer: VenueOffer, venue: Venue)? {
+        guard location != nil else { return nil }   // no fix → can't confirm proximity
+        var best: (offer: VenueOffer, venue: Venue, dist: CLLocationDistance)? = nil
+        for v in venues {
+            guard let d = meters(from: location, to: v), d <= Self.dealsProximityMeters else { continue }
+            guard let offer = offersByVenue[v.id]?.first(where: {
+                $0.interstitial && $0.imageURL != nil && !seen.contains($0.id)
+            }) else { continue }
+            if best == nil || d < best!.dist { best = (offer, v, d) }
+        }
+        return best.map { ($0.offer, $0.venue) }
     }
 
     /// Venues with a live campaign in the user's city, nearest first — for the
@@ -851,6 +883,16 @@ private struct OffersMapView: View {
         selectedVenue = venue
     }
 
+    /// If something asked for a specific bar (interstitial "see this deal"),
+    /// fly to it and open its card, then clear the request.
+    private func consumePendingFocus() {
+        guard let id = venues.pendingFocusVenueId,
+              let venue = venues.venues.first(where: { $0.id == id }) else { return }
+        venues.pendingFocusVenueId = nil
+        // Small delay lets the tab-switch settle before the camera animates.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { focus(venue) }
+    }
+
     /// Only surface offers within this radius of the user — a global dataset
     /// shouldn't dump bars on the other side of the planet onto the map.
     /// (Server-side geo-filtering is a Phase B concern; client-side is fine
@@ -933,7 +975,11 @@ private struct OffersMapView: View {
             await venues.refreshIfStale()
             await venues.resolveOfferCoordinates()
             recenter()
+            consumePendingFocus()
         }
+        // The app-open interstitial (or any deep link) can request a bar; fly
+        // to it once the Deals tab is showing.
+        .onChange(of: venues.pendingFocusVenueId) { _, _ in consumePendingFocus() }
         .sheet(isPresented: $listOpen) {
             DealsListSheet(venues: venues, location: location) { venue in
                 listOpen = false
@@ -1231,6 +1277,193 @@ enum CampaignStats {
     }
 }
 
+/// Remembers which app-open interstitials a device has already seen
+/// (persisted) and enforces at most one per launch (in-memory). A given
+/// campaign shows once, ever, per device — the promo never nags. Local-only,
+/// so it costs no server writes / egress.
+enum DealsInterstitial {
+    private static let key = "sesh.deals.interstitialSeen.v1"
+    /// One promo per app launch; also set the moment we decide to show one.
+    static var shownThisLaunch = false
+
+    static func seenIDs() -> Set<UUID> {
+        Set((UserDefaults.standard.stringArray(forKey: key) ?? []).compactMap(UUID.init(uuidString:)))
+    }
+
+    static func markSeen(_ id: UUID) {
+        var arr = UserDefaults.standard.stringArray(forKey: key) ?? []
+        guard !arr.contains(id.uuidString) else { return }
+        arr.append(id.uuidString)
+        if arr.count > 200 { arr.removeFirst(arr.count - 200) }   // bound the history
+        UserDefaults.standard.set(arr, forKey: key)
+    }
+}
+
+/// Client side of the opt-in nearby-bar deal-push preference (migration 058).
+/// Stored locally for instant UI and mirrored to the server so send_venue_push
+/// knows the audience.
+enum DealsPush {
+    static let optInKey = "sesh.deals.pushOptIn.v1"
+    /// Whether we've shown the one-time "want deals from nearby bars?" ask.
+    static let promptedKey = "sesh.deals.pushPrompted.v1"
+    private static let locSentKey = "sesh.deals.locSentAt.v1"
+
+    static var isOptedIn: Bool { UserDefaults.standard.bool(forKey: optInKey) }
+    static var wasPrompted: Bool { UserDefaults.standard.bool(forKey: promptedKey) }
+
+    static func setOptIn(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: optInKey)
+        // Force the next location report through so a fresh opt-in can be
+        // targeted right away.
+        if on { UserDefaults.standard.removeObject(forKey: locSentKey) }
+        struct P: Encodable { let p_on: Bool }
+        Task { _ = try? await supabase.rpc("set_deals_push_opt_in", params: P(p_on: on)).execute() }
+    }
+
+    static func markPrompted() { UserDefaults.standard.set(true, forKey: promptedKey) }
+
+    /// Report a COARSE recent location so nearby-bar pushes can target the
+    /// user — only when opted in, throttled to once an hour, and rounded to
+    /// ~1 km (2 decimals) for privacy. No-op otherwise.
+    static func reportLocation(_ loc: CLLocation) {
+        guard isOptedIn else { return }
+        let now = Date().timeIntervalSince1970
+        let last = UserDefaults.standard.double(forKey: locSentKey)
+        guard now - last > 3600 else { return }
+        UserDefaults.standard.set(now, forKey: locSentKey)
+        let lat = (loc.coordinate.latitude * 100).rounded() / 100
+        let lon = (loc.coordinate.longitude * 100).rounded() / 100
+        struct P: Encodable { let p_lat: Double; let p_lon: Double }
+        Task { _ = try? await supabase.rpc("set_deals_location", params: P(p_lat: lat, p_lon: lon)).execute() }
+    }
+}
+
+/// Pairs an interstitial offer with its venue for `.fullScreenCover(item:)`.
+struct InterstitialPayload: Identifiable {
+    let offer: VenueOffer
+    let venue: Venue
+    var id: UUID { offer.id }
+}
+
+/// App-open promo — the top "interstitial" add-on. A contained card (like the
+/// poster pop-up, not full-screen) floating over a dimmed backdrop: the bar's
+/// 4:3 POSTER image up top, then the offer and a "see this deal" CTA that flies
+/// the Deals map to the bar. Marked SPONSORED — paid placement is never
+/// disguised. Shown once per campaign per device, only near the bar. Tap the
+/// backdrop, the ✕, or "Maybe later" to dismiss.
+struct InterstitialView: View {
+    let offer: VenueOffer
+    let venue: Venue
+    let onClose: () -> Void
+    let onSeeDeal: () -> Void
+
+    var body: some View {
+        ZStack {
+            // Dimmed backdrop — tap anywhere outside the card to dismiss.
+            Color.black.opacity(0.7)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { onClose() }
+
+            card
+                .padding(.horizontal, 22)
+        }
+        .onAppear { CampaignStats.impression(offer.id) }
+    }
+
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // 4:3 poster image — same ratio + fill-crop idiom as the poster
+            // pin/card so artwork never reflows or overflows.
+            Color.clear
+                .aspectRatio(CampaignArt.posterRatio, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .overlay {
+                    ZStack {
+                        Color.smoke
+                        if let url = offer.imageURL {
+                            DownsampledAsyncImage(url: url, targetPoints: 700, fill: true, placeholder: Color.smoke)
+                        }
+                    }
+                }
+                .clipped()
+                .overlay(alignment: .topLeading) {
+                    Text("SPONSORED")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .tracking(1.4)
+                        .foregroundStyle(Color.cream.opacity(0.9))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Capsule().fill(Color.black.opacity(0.45)))
+                        .padding(10)
+                }
+                .overlay(alignment: .topTrailing) {
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .frame(width: 30, height: 30)
+                            .background(Circle().fill(Color.black.opacity(0.5)))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(10)
+                }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(venue.name.uppercased())
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .tracking(2)
+                    .foregroundStyle(Color.whiskey)
+                Text(offer.title)
+                    .font(.system(size: 22, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .lineLimit(2)
+                if let d = offer.description, !d.isEmpty {
+                    Text(d)
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.8))
+                        .lineLimit(2)
+                }
+                if let valid = offer.validDaysLabel {
+                    Label(valid, systemImage: "calendar")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.65))
+                }
+
+                Button(action: onSeeDeal) {
+                    HStack(spacing: 8) {
+                        Text("SEE THIS DEAL")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .tracking(1.5)
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                    }
+                    .foregroundStyle(Color.ink)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.whiskey))
+                    .shadow(color: Color.whiskey.opacity(0.45), radius: 14, y: 6)
+                }
+                .buttonStyle(PressScaleStyle())
+                .padding(.top, 4)
+
+                Button(action: onClose) {
+                    Text("Maybe later")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(18)
+        }
+        .background(Color.ink)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+        .shadow(color: .black.opacity(0.5), radius: 30, y: 12)
+    }
+}
+
 /// Poster-tier map pin: the bar's artwork in a rounded 4:3 frame — big enough
 /// to stand out on the map, and the SAME ratio as the expanded poster card so
 /// the image doesn't reflow when you tap it.
@@ -1314,19 +1547,34 @@ private struct BillboardCarousel: View {
     let entries: [(offer: VenueOffer, venue: Venue)]
     let onOpen: (Venue) -> Void
 
+    @State private var index = 0
+    /// Auto-advance between bars roughly every 3 seconds.
+    private let rotate = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
+
     var body: some View {
-        TabView {
-            ForEach(entries, id: \.offer.id) { entry in
+        TabView(selection: $index) {
+            ForEach(Array(entries.enumerated()), id: \.element.offer.id) { i, entry in
                 BillboardCard(offer: entry.offer, venue: entry.venue) {
                     CampaignStats.tap(entry.offer.id)
                     onOpen(entry.venue)
                 }
                 .padding(.horizontal, 16)
+                .tag(i)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: entries.count > 1 ? .automatic : .never))
         // image (3:1 of ~345 ≈ 115) + info bar (~62) + page-dot room.
         .frame(height: 200)
+        .onReceive(rotate) { _ in
+            guard entries.count > 1 else { return }
+            withAnimation(.easeInOut(duration: 0.6)) {
+                index = (index + 1) % entries.count
+            }
+        }
+        // Keep the selection valid if the campaign set shrinks under us.
+        .onChange(of: entries.count) { _, n in
+            if index >= n { index = 0 }
+        }
     }
 }
 

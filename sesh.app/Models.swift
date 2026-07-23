@@ -707,6 +707,8 @@ struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
     var imageUrl: String? = nil
     /// Wide billboard artwork (3:1) — billboard placement only (migration 056).
     var billboardImageUrl: String? = nil
+    /// App-open full-screen promo flag (migration 057). Shown once per user.
+    var interstitial: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -720,6 +722,7 @@ struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
         case placement
         case imageUrl    = "image_url"
         case billboardImageUrl = "billboard_image_url"
+        case interstitial
     }
 
     var imageURL: URL? { imageUrl.flatMap(URL.init(string:)) }
@@ -729,6 +732,9 @@ struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
     var hasArtPlacement: Bool {
         (placement == "poster" || placement == "billboard") && imageURL != nil
     }
+    /// The best image for a full-screen interstitial — the wide billboard art
+    /// if present, else the poster image.
+    var interstitialImageURL: URL? { billboardImageURL ?? imageURL }
 
     /// "Valid Thu" / "Valid Fri–Sat" line, or nil when it runs every day.
     var validDaysLabel: String? {

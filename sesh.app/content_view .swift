@@ -4959,6 +4959,34 @@ private struct TabHintChip: View {
     }
 }
 
+/// Bundles the Deals promo surfaces (app-open interstitial cover + one-time
+/// opt-in alert) into a single modifier so SessionView.body stays inside the
+/// Swift type-checker's budget.
+private struct DealsPromosModifier<Cover: View>: ViewModifier {
+    @Binding var interstitial: InterstitialPayload?
+    @Binding var dealPromptOpen: Bool
+    @ObservedObject var location: LocationService
+    let cover: (InterstitialPayload) -> Cover
+    let onEnable: () -> Void
+    let onDecline: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .fullScreenCover(item: $interstitial) { cover($0) }
+            .alert("Deals from nearby bars?", isPresented: $dealPromptOpen) {
+                Button("Enable", action: onEnable)
+                Button("Not now", role: .cancel, action: onDecline)
+            } message: {
+                Text("Get the occasional heads-up when a bar near you drops a happy hour or special — only bars close to you, and only a few a week. Turn it off anytime in your profile.")
+            }
+            // Report a coarse location once a fix arrives (throttled + opt-in
+            // gated inside reportLocation) so nearby-bar push can target it.
+            .onChange(of: location.location != nil) { _, hasFix in
+                if hasFix, let loc = location.location { DealsPush.reportLocation(loc) }
+            }
+    }
+}
+
 private struct SessionView: View {
     let profile: Profile
     @ObservedObject var auth: AuthService
@@ -5027,6 +5055,11 @@ private struct SessionView: View {
     @State private var hours: Double = 1
     @State private var menuOpen = false
     @State private var profileOpen = false
+    /// The app-open Deals interstitial payload, when one is due to show.
+    @State private var interstitial: InterstitialPayload? = nil
+    /// One-time "want deals from nearby bars?" opt-in ask, shown the first
+    /// time the user lands on the Deals tab.
+    @State private var dealPromptOpen = false
     /// First-run feature walkthrough — shown once per account, replayable
     /// from the profile sheet.
     @State private var tourOpen = false
@@ -5835,11 +5868,18 @@ private struct SessionView: View {
             }
             // Switching sections (tap or swipe) drops the keyboard — so
             // leaving a chat mid-typing doesn't strand it open.
-            .onChange(of: tab) { _, _ in
-                UIApplication.shared.sendAction(
-                    #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
-                )
-            }
+            .onChange(of: tab) { _, newTab in handleTabChange(newTab) }
+            .modifier(DealsPromosModifier(
+                interstitial: $interstitial,
+                dealPromptOpen: $dealPromptOpen,
+                location: location,
+                cover: { interstitialCover($0) },
+                onEnable: {
+                    DealsPush.setOptIn(true)
+                    if let loc = location.location { DealsPush.reportLocation(loc) }
+                },
+                onDecline: { DealsPush.setOptIn(false) }
+            ))
 
             // Floating invite banner — pinned just below the ModeTopBar.
             // Drops in from the top whenever a new pending invite arrives
@@ -6053,7 +6093,7 @@ private struct SessionView: View {
         // picker have something to render. With no curated seed list,
         // an empty DB just means "Featured" stays empty and the user
         // discovers their bar via the search field.
-        .task { await venues.refresh() }
+        .task { await loadAndMaybePromote() }
         // Auto-recap for a sesh that wound down while the app was closed.
         // autoEnd: already ended (nothing to tear down) but still offers
         // save-or-discard, same as a normal END.
@@ -6265,6 +6305,66 @@ private struct SessionView: View {
     /// First-frame boot: seed saved groups, start the polling services,
     /// sweep stale journey leftovers, and wire the journey's session-id
     /// stamp. Extracted from the body's onAppear (type-checker budget).
+    /// Show one app-open Deals interstitial if a fresh, nearby campaign is due
+    /// (once per campaign per device, once per launch). No-op when nothing
+    /// qualifies or one already showed this launch.
+    private func maybeShowInterstitial() {
+        guard !DealsInterstitial.shownThisLaunch, interstitial == nil else { return }
+        guard let cand = venues.interstitialCandidate(near: location.location,
+                                                       excluding: DealsInterstitial.seenIDs())
+        else { return }
+        DealsInterstitial.shownThisLaunch = true
+        interstitial = InterstitialPayload(offer: cand.offer, venue: cand.venue)
+    }
+
+    /// App-open catalog load, then (after a beat for a location fix) the Deals
+    /// interstitial + a coarse location report for push targeting.
+    private func loadAndMaybePromote() async {
+        await venues.refresh()
+        try? await Task.sleep(nanoseconds: 1_800_000_000)
+        maybeShowInterstitial()
+        if let loc = location.location { DealsPush.reportLocation(loc) }
+    }
+
+    private func handleTabChange(_ newTab: TopTab) {
+        // Switching sections drops the keyboard (leaving a chat mid-typing).
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
+        )
+        // First landing on Deals → offer the nearby-bar push opt-in once. Skip
+        // if an interstitial already promoted this launch (no double ask).
+        if newTab == .offers, !DealsPush.wasPrompted,
+           interstitial == nil, !DealsInterstitial.shownThisLaunch {
+            DealsPush.markPrompted()
+            dealPromptOpen = true
+        }
+    }
+
+    @ViewBuilder
+    private func interstitialCover(_ payload: InterstitialPayload) -> some View {
+        InterstitialView(
+            offer: payload.offer,
+            venue: payload.venue,
+            onClose: { closeInterstitial(payload) },
+            onSeeDeal: { seeInterstitialDeal(payload) }
+        )
+        // Transparent so the card floats over the dimmed live app.
+        .presentationBackground(.clear)
+    }
+
+    private func closeInterstitial(_ payload: InterstitialPayload) {
+        DealsInterstitial.markSeen(payload.offer.id)
+        interstitial = nil
+    }
+
+    private func seeInterstitialDeal(_ payload: InterstitialPayload) {
+        CampaignStats.tap(payload.offer.id)
+        DealsInterstitial.markSeen(payload.offer.id)
+        venues.pendingFocusVenueId = payload.venue.id
+        interstitial = nil
+        tab = .offers
+    }
+
     private func bootSession() {
         recordSavedGroup(from: planGroup)
         recordSavedGroup(from: liveGroup)
@@ -8320,6 +8420,11 @@ private struct ProfileSheet: View {
     /// friends still see I'm live (BAC/stories) but not where I am.
     @AppStorage(ShareLocationSetting.key) private var shareLocation = true
 
+    /// Opt-in to push notifications for deals from nearby bars. Default OFF;
+    /// the flag is mirrored to the server (set_deals_push_opt_in) so
+    /// send_venue_push knows who to reach.
+    @AppStorage(DealsPush.optInKey) private var dealsPushOptIn = false
+
     /// Saved night recaps (loaded from disk on open) + which one is
     /// being replayed full-screen.
     @StateObject private var nightHistory = RecapHistoryStore()
@@ -8464,6 +8569,28 @@ private struct ProfileSheet: View {
                                     .padding(.horizontal, 4)
                             }
                         }
+                        LoungePickerField(label: "DEAL ALERTS") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Toggle(isOn: $dealsPushOptIn) {
+                                    Text("Deals from nearby bars")
+                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(Color.cream)
+                                }
+                                .toggleStyle(SwitchToggleStyle(tint: .whiskey))
+                                Text(dealsPushOptIn
+                                     ? "You'll get the occasional push when a nearby bar drops a deal."
+                                     : "No deal pushes. Turn on for happy-hour heads-ups near you.")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.55))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.horizontal, 4)
+                            }
+                        }
+                    }
+                    .onChange(of: dealsPushOptIn) { _, on in
+                        // Mirror the preference to the server (audience list).
+                        DealsPush.setOptIn(on)
+                        DealsPush.markPrompted()
                     }
                     .onChange(of: bacUnitMode) { _ in
                         // Push the new unit out to the home-screen widget and
@@ -9062,8 +9189,13 @@ struct AdminOffer: Decodable, Identifiable {
     var placement: String = "pin"
     var imageUrl: String? = nil
     var billboardImageUrl: String? = nil
+    /// App-open interstitial add-on flag (migration 057).
+    var interstitial: Bool = false
     var impressions: Int = 0
     var taps: Int = 0
+    /// Last-7-day impressions/taps for the admin "this week" line (migration 057).
+    var weekImpressions: Int = 0
+    var weekTaps: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -9083,7 +9215,10 @@ struct AdminOffer: Decodable, Identifiable {
         case placement
         case imageUrl = "image_url"
         case billboardImageUrl = "billboard_image_url"
+        case interstitial
         case impressions, taps
+        case weekImpressions = "week_impressions"
+        case weekTaps = "week_taps"
     }
 
     /// "Mon Tue · 16:00–19:00 · until 30 Jun" style line for the admin list.
@@ -9142,7 +9277,8 @@ final class OffersAdminService: ObservableObject {
         venue: MapKitVenueResult,
         kind: String, title: String, description: String, finePrint: String,
         placement: String, posterImageData: Data?, billboardImageData: Data?,
-        startsAt: Date, endsAt: Date?, activeDays: [Int]?, startMinute: Int?, endMinute: Int?
+        startsAt: Date, endsAt: Date?, activeDays: [Int]?, startMinute: Int?, endMinute: Int?,
+        interstitial: Bool
     ) async -> Bool {
         struct P: Encodable {
             let p_name: String
@@ -9165,6 +9301,7 @@ final class OffersAdminService: ObservableObject {
             let p_placement: String
             let p_image_url: String?
             let p_billboard_image_url: String?
+            let p_interstitial: Bool
         }
         let iso = ISO8601DateFormatter()
         lastError = nil
@@ -9192,7 +9329,8 @@ final class OffersAdminService: ObservableObject {
                 p_end_minute: endMinute,
                 p_placement: placement,
                 p_image_url: posterURL,
-                p_billboard_image_url: billboardURL
+                p_billboard_image_url: billboardURL,
+                p_interstitial: interstitial
             )).execute()
             await load()
             return true
@@ -9209,7 +9347,8 @@ final class OffersAdminService: ObservableObject {
         offer: AdminOffer, venueExternalId: String?,
         kind: String, title: String, description: String, finePrint: String,
         placement: String, posterImageData: Data?, billboardImageData: Data?,
-        startsAt: Date?, endsAt: Date?, activeDays: [Int]?, startMinute: Int?, endMinute: Int?
+        startsAt: Date?, endsAt: Date?, activeDays: [Int]?, startMinute: Int?, endMinute: Int?,
+        interstitial: Bool
     ) async -> Bool {
         struct P: Encodable {
             let p_offer_id: String
@@ -9225,6 +9364,7 @@ final class OffersAdminService: ObservableObject {
             let p_placement: String
             let p_image_url: String?
             let p_billboard_image_url: String?
+            let p_interstitial: Bool
         }
         let iso = ISO8601DateFormatter()
         lastError = nil
@@ -9247,7 +9387,8 @@ final class OffersAdminService: ObservableObject {
                 p_end_minute: endMinute,
                 p_placement: placement,
                 p_image_url: posterURL,
-                p_billboard_image_url: billboardURL
+                p_billboard_image_url: billboardURL,
+                p_interstitial: interstitial
             )).execute()
             await load()
             return true
@@ -9255,6 +9396,19 @@ final class OffersAdminService: ObservableObject {
             lastError = String(describing: error)
             return false
         }
+    }
+
+    /// Fire an opt-in deal push for a campaign's venue. Returns the recipient
+    /// count on success, else throws so the caller can show the reason
+    /// (weekly_cap / quiet_hours / not_admin).
+    @discardableResult
+    func sendPush(offerId: UUID, title: String, body: String) async throws -> Int {
+        struct P: Encodable { let p_offer_id: String; let p_title: String; let p_body: String }
+        return try await supabase.rpc("send_venue_push", params: P(
+            p_offer_id: offerId.uuidString.lowercased(),
+            p_title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            p_body: body.trimmingCharacters(in: .whitespacesAndNewlines)
+        )).execute().value
     }
 
     func delete(_ id: UUID) async {
@@ -9274,6 +9428,8 @@ struct OffersAdminView: View {
     @State private var addOpen = false
     /// A campaign the admin tapped to edit in place (nil = creating new).
     @State private var editing: AdminOffer?
+    /// A campaign the admin is composing an opt-in deal push for.
+    @State private var pushTarget: AdminOffer?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -9300,6 +9456,27 @@ struct OffersAdminView: View {
                                 .background(Circle().fill(Color.cream.opacity(0.06)))
                         }
                         .buttonStyle(PressScaleStyle())
+                    }
+
+                    // Stats at a glance — aggregate across every live campaign
+                    // this week (each row below breaks it down per campaign).
+                    if !svc.offers.isEmpty {
+                        let wImp = svc.offers.reduce(0) { $0 + $1.weekImpressions }
+                        let wTap = svc.offers.reduce(0) { $0 + $1.weekTaps }
+                        HStack(spacing: 0) {
+                            statCell("VIEWS", wImp)
+                            Rectangle().fill(Color.cream.opacity(0.08)).frame(width: 1, height: 34)
+                            statCell("TAPS", wTap)
+                            Rectangle().fill(Color.cream.opacity(0.08)).frame(width: 1, height: 34)
+                            statCell("LIVE", svc.offers.count)
+                        }
+                        .padding(.vertical, 14)
+                        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.cream.opacity(0.04)))
+                        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+                        Text("THIS WEEK · tap a campaign for its own numbers")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .tracking(1.5)
+                            .foregroundStyle(Color.cream.opacity(0.4))
                     }
 
                     Button { addOpen = true } label: {
@@ -9345,50 +9522,215 @@ struct OffersAdminView: View {
             CampaignComposer(svc: svc, editing: offer) { editing = nil }
                 .presentationBackground(Color.ink)
         }
+        .sheet(item: $pushTarget) { offer in
+            PushComposer(svc: svc, offer: offer) { pushTarget = nil }
+                .presentationDetents([.medium])
+                .presentationBackground(Color.ink)
+        }
+    }
+
+    private func statCell(_ label: String, _ value: Int) -> some View {
+        VStack(spacing: 3) {
+            Text("\(value)")
+                .font(.system(size: 22, weight: .black, design: .rounded).monospacedDigit())
+                .foregroundStyle(Color.cream)
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .tracking(1.5)
+                .foregroundStyle(Color.bronze)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private func adminOfferRow(_ o: AdminOffer) -> some View {
-        Button { editing = o } label: {
-            HStack(alignment: .top, spacing: 12) {
-                // Artwork thumbnail for poster/billboard campaigns.
-                if let s = o.imageUrl, let url = URL(string: s) {
-                    DownsampledAsyncImage(url: url, targetPoints: 46)
-                        .frame(width: 46, height: 46)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Text(o.title)
-                            .font(.system(size: 15, weight: .heavy, design: .rounded))
-                            .foregroundStyle(Color.cream)
-                            .lineLimit(1)
-                        PlacementTag(placement: o.placement)
+        VStack(spacing: 0) {
+            // Tap the main body to edit the campaign in place.
+            Button { editing = o } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    // Artwork thumbnail for poster/billboard campaigns.
+                    if let s = o.imageUrl, let url = URL(string: s) {
+                        DownsampledAsyncImage(url: url, targetPoints: 46)
+                            .frame(width: 46, height: 46)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
-                    Text(o.venueName)
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.7))
-                        .lineLimit(1)
-                    HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text(o.title)
+                                .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                                .lineLimit(1)
+                            PlacementTag(placement: o.placement)
+                            if o.interstitial {
+                                Image(systemName: "rectangle.portrait.on.rectangle.portrait.fill")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(Color.whiskey)
+                            }
+                        }
+                        Text(o.venueName)
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.7))
+                            .lineLimit(1)
                         Text(o.scheduleSummary)
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.bronze)
                             .lineLimit(1)
-                        Text("· \(o.impressions) views · \(o.taps) taps")
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundStyle(Color.cream.opacity(0.45))
                     }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.35))
+                        .padding(.top, 4)
                 }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.cream.opacity(0.35))
-                    .padding(.top, 4)
+                .padding(14)
             }
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.cream.opacity(0.04)))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+            .buttonStyle(PressScaleStyle())
+
+            Rectangle().fill(Color.cream.opacity(0.07)).frame(height: 1)
+
+            // Stats + push footer. "This week" is the screenshot number for
+            // bars; the paper-plane fires an opt-in deal push.
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("THIS WEEK  \(o.weekImpressions) views · \(o.weekTaps) taps")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.cream.opacity(0.7))
+                    Text("all time  \(o.impressions) · \(o.taps)")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.cream.opacity(0.4))
+                }
+                Spacer()
+                Button { pushTarget = o } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "paperplane.fill").font(.system(size: 10, weight: .bold))
+                        Text("PUSH").font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1)
+                    }
+                    .foregroundStyle(Color.ink)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Capsule().fill(Color.whiskey))
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
         }
-        .buttonStyle(PressScaleStyle())
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.cream.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+    }
+}
+
+/// Compose + fire an opt-in "deal from a nearby bar" push for one campaign.
+/// Server enforces the weekly cap + quiet hours; we surface the reason on a
+/// rejection so the admin knows why nothing sent.
+private struct PushComposer: View {
+    @ObservedObject var svc: OffersAdminService
+    let offer: AdminOffer
+    var onDone: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var pushTitle: String
+    @State private var pushBody: String
+    @State private var phase: Phase = .idle
+
+    enum Phase: Equatable { case idle, sending, sent(Int), failed(String) }
+
+    init(svc: OffersAdminService, offer: AdminOffer, onDone: @escaping () -> Void) {
+        self.svc = svc
+        self.offer = offer
+        self.onDone = onDone
+        _pushTitle = State(initialValue: offer.venueName)
+        _pushBody  = State(initialValue: offer.title)
+    }
+
+    private var canSend: Bool {
+        !pushTitle.trimmingCharacters(in: .whitespaces).isEmpty
+            && !pushBody.trimmingCharacters(in: .whitespaces).isEmpty
+            && phase != .sending
+    }
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 16) {
+                Text("SEND A DEAL PUSH")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .tracking(2).foregroundStyle(Color.bronze)
+                Text("Goes to everyone who opted in to nearby-bar deals. Capped at 3/week per bar; muted 04:00–10:00.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.5))
+
+                field("TITLE", text: $pushTitle, placeholder: offer.venueName)
+                field("MESSAGE", text: $pushBody, placeholder: offer.title, multiline: true)
+
+                switch phase {
+                case .sent(let n):
+                    Label("Sent to \(n) \(n == 1 ? "person" : "people")", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.whiskey)
+                case .failed(let msg):
+                    Label(msg, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.red.opacity(0.9))
+                default:
+                    EmptyView()
+                }
+
+                Spacer()
+                Button(action: send) {
+                    HStack(spacing: 8) {
+                        if phase == .sending { ProgressView().tint(Color.ink) }
+                        Text(phase == .sending ? "SENDING…" : "SEND PUSH")
+                            .font(.system(size: 14, weight: .bold, design: .monospaced)).tracking(1.5)
+                    }
+                    .foregroundStyle(Color.ink)
+                    .frame(maxWidth: .infinity).padding(.vertical, 15)
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(canSend ? Color.whiskey : Color.cream.opacity(0.15)))
+                }
+                .buttonStyle(PressScaleStyle())
+                .disabled(!canSend)
+            }
+            .padding(22)
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func send() {
+        phase = .sending
+        Task {
+            do {
+                let n = try await svc.sendPush(offerId: offer.id, title: pushTitle, body: pushBody)
+                phase = .sent(n)
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                onDone(); dismiss()
+            } catch {
+                phase = .failed(Self.friendlyError(error))
+            }
+        }
+    }
+
+    /// Map the RPC's raised exceptions to something the admin can act on.
+    private static func friendlyError(_ error: Error) -> String {
+        let s = String(describing: error).lowercased()
+        if s.contains("weekly_cap") { return "Weekly limit reached (3/week for this bar)." }
+        if s.contains("quiet_hours") { return "Quiet hours — deal pushes pause 04:00–10:00." }
+        if s.contains("empty") { return "Add a title and a message." }
+        if s.contains("not_admin") { return "Admins only." }
+        return "Couldn't send. Try again."
+    }
+
+    @ViewBuilder
+    private func field(_ label: String, text: Binding<String>, placeholder: String, multiline: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .tracking(2).foregroundStyle(Color.bronze)
+            TextField("", text: text,
+                      prompt: Text(placeholder).foregroundStyle(Color.cream.opacity(0.35)),
+                      axis: multiline ? .vertical : .horizontal)
+                .lineLimit(multiline ? 1...3 : 1...1)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.cream.opacity(0.05)))
+        }
     }
 }
 
@@ -9445,6 +9787,7 @@ private struct CampaignComposer: View {
     @State private var posterData: Data?
     @State private var billboardItem: PhotosPickerItem?
     @State private var billboardData: Data?
+    @State private var interstitial: Bool
     @State private var saving = false
 
     private let kinds = ["price", "happy_hour", "free_entry", "bundle", "event"]
@@ -9472,6 +9815,7 @@ private struct CampaignComposer: View {
         _startDate = State(initialValue: o?.startsAt ?? Date())
         _hasEnd    = State(initialValue: o?.endsAt != nil)
         _endDate   = State(initialValue: o?.endsAt ?? Date().addingTimeInterval(7 * 24 * 3600))
+        _interstitial = State(initialValue: o?.interstitial ?? false)
     }
 
     private var isEditing: Bool { editing != nil }
@@ -9504,6 +9848,7 @@ private struct CampaignComposer: View {
 
                     if isEditing {
                         fixedVenueHeader
+                        if let o = editing { campaignStats(o) }
                         offerForm
                     } else {
                         venuePicker
@@ -9521,6 +9866,43 @@ private struct CampaignComposer: View {
             guard !Task.isCancelled else { return }
             search.search(query: query, origin: location.location)
         }
+    }
+
+    /// This campaign's own performance — the numbers to screenshot for the
+    /// bar. THIS WEEK (last 7 days) up top, lifetime underneath.
+    private func campaignStats(_ o: AdminOffer) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            kicker("PERFORMANCE · THIS WEEK")
+            HStack(spacing: 0) {
+                statCell("TIMES SHOWN", o.weekImpressions)
+                Rectangle().fill(Color.cream.opacity(0.08)).frame(width: 1, height: 40)
+                statCell("TAP-THROUGHS", o.weekTaps)
+            }
+            .padding(.vertical, 14)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.04)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+            Text("How often it appeared on the Deals map, and how many times people opened the deal. All time: \(o.impressions) shown · \(o.taps) opened.")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.45))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func statCell(_ label: String, _ value: Int) -> some View {
+        statCell(label, "\(value)")
+    }
+
+    private func statCell(_ label: String, _ value: String) -> some View {
+        VStack(spacing: 3) {
+            Text(value)
+                .font(.system(size: 22, weight: .black, design: .rounded).monospacedDigit())
+                .foregroundStyle(Color.cream)
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .tracking(1.3)
+                .foregroundStyle(Color.bronze)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     /// Edit mode: the venue is locked (you're editing that bar's campaign),
@@ -9646,6 +10028,24 @@ private struct CampaignComposer: View {
             if placement == "billboard" {
                 artPicker(title: "BILLBOARD IMAGE (3:1)", ratio: CampaignArt.billboardRatio,
                           item: $billboardItem, data: $billboardData, existing: editing?.billboardImageUrl)
+            }
+
+            // App-open interstitial add-on. Needs artwork, so pin campaigns
+            // can't opt in. Shows the offer full-screen once per user.
+            if placement != "pin" {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle(isOn: $interstitial) {
+                        Text("App-open interstitial")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                    }
+                    .tint(Color.whiskey)
+                    Text("Full-screen promo shown once when a nearby user opens the app.")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.cream.opacity(0.45))
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.cream.opacity(0.05)))
             }
 
             VStack(alignment: .leading, spacing: 7) {
@@ -9826,6 +10226,8 @@ private struct CampaignComposer: View {
         // Only send artwork for placements that use it.
         let poster    = placement != "pin" ? posterData : nil
         let billboard = placement == "billboard" ? billboardData : nil
+        // Interstitial needs artwork; a pin can never be one.
+        let inter     = placement != "pin" && interstitial
         Task {
             let ok: Bool
             if let editing {
@@ -9834,7 +10236,7 @@ private struct CampaignComposer: View {
                     kind: kind, title: title, description: desc, finePrint: finePrint,
                     placement: placement, posterImageData: poster, billboardImageData: billboard,
                     startsAt: startDate, endsAt: hasEnd ? endDate : nil, activeDays: daysArg,
-                    startMinute: startMin, endMinute: endMin
+                    startMinute: startMin, endMinute: endMin, interstitial: inter
                 )
             } else if let venue = selected {
                 ok = await svc.create(
@@ -9842,7 +10244,7 @@ private struct CampaignComposer: View {
                     kind: kind, title: title, description: desc, finePrint: finePrint,
                     placement: placement, posterImageData: poster, billboardImageData: billboard,
                     startsAt: startDate, endsAt: hasEnd ? endDate : nil, activeDays: daysArg,
-                    startMinute: startMin, endMinute: endMin
+                    startMinute: startMin, endMinute: endMin, interstitial: inter
                 )
             } else { ok = false }
             saving = false
