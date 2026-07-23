@@ -9058,6 +9058,12 @@ struct AdminOffer: Decodable, Identifiable {
     let isActive: Bool
     let approved: Bool
     let createdAt: Date
+    /// Paid placement level + artwork + lifetime stats (migration 054/056).
+    var placement: String = "pin"
+    var imageUrl: String? = nil
+    var billboardImageUrl: String? = nil
+    var impressions: Int = 0
+    var taps: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -9074,6 +9080,10 @@ struct AdminOffer: Decodable, Identifiable {
         case isActive = "is_active"
         case approved
         case createdAt = "created_at"
+        case placement
+        case imageUrl = "image_url"
+        case billboardImageUrl = "billboard_image_url"
+        case impressions, taps
     }
 
     /// "Mon Tue · 16:00–19:00 · until 30 Jun" style line for the admin list.
@@ -9113,10 +9123,25 @@ final class OffersAdminService: ObservableObject {
         }
     }
 
+    /// Upload campaign artwork (downscaled + thumbnail via StorageUploader)
+    /// to the venue's folder in campaign-art; returns the public URL.
+    private func uploadArt(venueExternalId: String?, imageData: Data) async -> String? {
+        guard let jpeg = ImageDownscale.jpeg(imageData, maxDim: 1400, quality: 0.72) else { return nil }
+        let folder = (venueExternalId ?? UUID().uuidString).replacingOccurrences(of: "/", with: "_")
+        let path = "\(folder)/\(UUID().uuidString.lowercased()).jpg"
+        do {
+            try await StorageUploader.uploadImage(bucket: "campaign-art", path: path, data: jpeg)
+            return try supabase.storage.from("campaign-art").getPublicURL(path: path).absoluteString
+        } catch {
+            return nil
+        }
+    }
+
     @discardableResult
     func create(
         venue: MapKitVenueResult,
         kind: String, title: String, description: String, finePrint: String,
+        placement: String, posterImageData: Data?, billboardImageData: Data?,
         startsAt: Date, endsAt: Date?, activeDays: [Int]?, startMinute: Int?, endMinute: Int?
     ) async -> Bool {
         struct P: Encodable {
@@ -9137,9 +9162,15 @@ final class OffersAdminService: ObservableObject {
             let p_active_days: [Int]?
             let p_start_minute: Int?
             let p_end_minute: Int?
+            let p_placement: String
+            let p_image_url: String?
+            let p_billboard_image_url: String?
         }
         let iso = ISO8601DateFormatter()
         lastError = nil
+        var posterURL: String? = nil, billboardURL: String? = nil
+        if let d = posterImageData { posterURL = await uploadArt(venueExternalId: venue.id, imageData: d) }
+        if let d = billboardImageData { billboardURL = await uploadArt(venueExternalId: venue.id, imageData: d) }
         do {
             _ = try await supabase.rpc("admin_create_offer", params: P(
                 p_name: venue.name,
@@ -9158,7 +9189,65 @@ final class OffersAdminService: ObservableObject {
                 p_ends_at: endsAt.map { iso.string(from: $0) },
                 p_active_days: activeDays,
                 p_start_minute: startMinute,
-                p_end_minute: endMinute
+                p_end_minute: endMinute,
+                p_placement: placement,
+                p_image_url: posterURL,
+                p_billboard_image_url: billboardURL
+            )).execute()
+            await load()
+            return true
+        } catch {
+            lastError = String(describing: error)
+            return false
+        }
+    }
+
+    /// Edit a campaign in place — shift the start/end dates, change the copy,
+    /// swap artwork, or move up/down the pin→poster→billboard ladder.
+    @discardableResult
+    func update(
+        offer: AdminOffer, venueExternalId: String?,
+        kind: String, title: String, description: String, finePrint: String,
+        placement: String, posterImageData: Data?, billboardImageData: Data?,
+        startsAt: Date?, endsAt: Date?, activeDays: [Int]?, startMinute: Int?, endMinute: Int?
+    ) async -> Bool {
+        struct P: Encodable {
+            let p_offer_id: String
+            let p_kind: String
+            let p_title: String
+            let p_description: String?
+            let p_fine_print: String?
+            let p_starts_at: String?
+            let p_ends_at: String?
+            let p_active_days: [Int]?
+            let p_start_minute: Int?
+            let p_end_minute: Int?
+            let p_placement: String
+            let p_image_url: String?
+            let p_billboard_image_url: String?
+        }
+        let iso = ISO8601DateFormatter()
+        lastError = nil
+        // Only upload when the admin picked a NEW image; nil keeps the
+        // existing artwork (the RPC coalesces).
+        var posterURL: String? = nil, billboardURL: String? = nil
+        if let d = posterImageData { posterURL = await uploadArt(venueExternalId: venueExternalId, imageData: d) }
+        if let d = billboardImageData { billboardURL = await uploadArt(venueExternalId: venueExternalId, imageData: d) }
+        do {
+            _ = try await supabase.rpc("admin_update_offer", params: P(
+                p_offer_id: offer.id.uuidString.lowercased(),
+                p_kind: kind,
+                p_title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                p_description: description.isEmpty ? nil : description,
+                p_fine_print: finePrint.isEmpty ? nil : finePrint,
+                p_starts_at: startsAt.map { iso.string(from: $0) },
+                p_ends_at: endsAt.map { iso.string(from: $0) },
+                p_active_days: activeDays,
+                p_start_minute: startMinute,
+                p_end_minute: endMinute,
+                p_placement: placement,
+                p_image_url: posterURL,
+                p_billboard_image_url: billboardURL
             )).execute()
             await load()
             return true
@@ -9183,6 +9272,8 @@ final class OffersAdminService: ObservableObject {
 struct OffersAdminView: View {
     @StateObject private var svc = OffersAdminService()
     @State private var addOpen = false
+    /// A campaign the admin tapped to edit in place (nil = creating new).
+    @State private var editing: AdminOffer?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -9196,7 +9287,7 @@ struct OffersAdminView: View {
                                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                                 .tracking(2.4)
                                 .foregroundStyle(Color.bronze)
-                            Text("Venue specials")
+                            Text("Campaigns")
                                 .font(.system(size: 26, weight: .heavy, design: .rounded))
                                 .foregroundStyle(Color.cream)
                         }
@@ -9216,7 +9307,7 @@ struct OffersAdminView: View {
                             Image(systemName: "plus.circle.fill")
                                 .font(.system(size: 20, weight: .bold, design: .rounded))
                                 .foregroundStyle(Color.ink)
-                            Text("Add a special")
+                            Text("New campaign")
                                 .font(.system(size: 15, weight: .heavy, design: .rounded))
                                 .foregroundStyle(Color.ink)
                             Spacer()
@@ -9227,11 +9318,14 @@ struct OffersAdminView: View {
                     .buttonStyle(PressScaleStyle())
 
                     if svc.offers.isEmpty {
-                        Text(svc.loading ? "Loading…" : "No specials yet. Add one above.")
+                        Text(svc.loading ? "Loading…" : "No campaigns yet. Create one above.")
                             .font(.system(size: 13, weight: .medium, design: .rounded))
                             .foregroundStyle(Color.cream.opacity(0.5))
                             .padding(.vertical, 24)
                     } else {
+                        Text("Tap a campaign to edit · expired ones auto-delete")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.45))
                         ForEach(svc.offers) { offer in
                             adminOfferRow(offer)
                         }
@@ -9244,54 +9338,88 @@ struct OffersAdminView: View {
         .preferredColorScheme(.dark)
         .task { await svc.load() }
         .sheet(isPresented: $addOpen) {
-            AddOfferSheet(svc: svc) { addOpen = false }
+            CampaignComposer(svc: svc, editing: nil) { addOpen = false }
+                .presentationBackground(Color.ink)
+        }
+        .sheet(item: $editing) { offer in
+            CampaignComposer(svc: svc, editing: offer) { editing = nil }
                 .presentationBackground(Color.ink)
         }
     }
 
     private func adminOfferRow(_ o: AdminOffer) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(o.title)
-                        .font(.system(size: 15, weight: .heavy, design: .rounded))
-                        .foregroundStyle(Color.cream)
-                        .lineLimit(1)
-                    Text(offerKindLabel(o.kind).uppercased())
-                        .font(.system(size: 8, weight: .black, design: .monospaced))
-                        .tracking(0.8)
-                        .foregroundStyle(Color.ink)
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(Capsule().fill(Color.whiskey))
+        Button { editing = o } label: {
+            HStack(alignment: .top, spacing: 12) {
+                // Artwork thumbnail for poster/billboard campaigns.
+                if let s = o.imageUrl, let url = URL(string: s) {
+                    DownsampledAsyncImage(url: url, targetPoints: 46)
+                        .frame(width: 46, height: 46)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
-                Text(o.venueName)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.cream.opacity(0.7))
-                Text(o.scheduleSummary)
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.bronze)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(o.title)
+                            .font(.system(size: 15, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .lineLimit(1)
+                        PlacementTag(placement: o.placement)
+                    }
+                    Text(o.venueName)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.7))
+                        .lineLimit(1)
+                    HStack(spacing: 8) {
+                        Text(o.scheduleSummary)
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.bronze)
+                            .lineLimit(1)
+                        Text("· \(o.impressions) views · \(o.taps) taps")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.cream.opacity(0.45))
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.35))
+                    .padding(.top, 4)
             }
-            Spacer(minLength: 0)
-            Button {
-                Task { await svc.delete(o.id) }
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color(red: 0.85, green: 0.40, blue: 0.34))
-                    .frame(width: 36, height: 36)
-                    .background(Circle().fill(Color.cream.opacity(0.05)))
-            }
-            .buttonStyle(PressScaleStyle())
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.cream.opacity(0.04)))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
         }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.cream.opacity(0.04)))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
+/// pin / POSTER / BILLBOARD tag — the placement level at a glance.
+private struct PlacementTag: View {
+    let placement: String
+    var body: some View {
+        Text(placement.uppercased())
+            .font(.system(size: 8, weight: .black, design: .monospaced))
+            .tracking(0.8)
+            .foregroundStyle(placement == "pin" ? Color.cream.opacity(0.7) : Color.ink)
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(Capsule().fill(color))
+    }
+    private var color: Color {
+        switch placement {
+        case "billboard": return .whiskey
+        case "poster":    return .foam
+        default:          return Color.cream.opacity(0.12)
+        }
     }
 }
 
 /// The add-offer form: pick a bar on the map, write the offer, choose when.
-private struct AddOfferSheet: View {
+/// New / edit campaign: search a bar, write the offer, pick the placement
+/// level (pin / poster / billboard) + artwork, choose when. Editing an
+/// existing campaign locks the venue and pre-fills every field.
+private struct CampaignComposer: View {
     @ObservedObject var svc: OffersAdminService
+    /// nil → creating; non-nil → editing this campaign in place.
+    let editing: AdminOffer?
     var onDone: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -9301,23 +9429,57 @@ private struct AddOfferSheet: View {
     @State private var camera: MapCameraPosition = .userLocation(fallback: .automatic)
     @State private var selected: MapKitVenueResult?
 
-    @State private var kind = "price"
-    @State private var title = ""
-    @State private var desc = ""
-    @State private var finePrint = ""
-    @State private var days: Set<Int> = []
-    @State private var allDay = true
-    @State private var startTime = Calendar.current.date(bySettingHour: 16, minute: 0, second: 0, of: Date()) ?? Date()
-    @State private var endTime = Calendar.current.date(bySettingHour: 19, minute: 0, second: 0, of: Date()) ?? Date()
-    @State private var hasEnd = false
-    @State private var endDate = Date().addingTimeInterval(7 * 24 * 3600)
+    @State private var kind: String
+    @State private var title: String
+    @State private var desc: String
+    @State private var finePrint: String
+    @State private var placement: String
+    @State private var days: Set<Int>
+    @State private var allDay: Bool
+    @State private var startTime: Date
+    @State private var endTime: Date
+    @State private var startDate: Date
+    @State private var hasEnd: Bool
+    @State private var endDate: Date
+    @State private var posterItem: PhotosPickerItem?
+    @State private var posterData: Data?
+    @State private var billboardItem: PhotosPickerItem?
+    @State private var billboardData: Data?
     @State private var saving = false
 
     private let kinds = ["price", "happy_hour", "free_entry", "bundle", "event"]
     private let dayLabels = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
 
+    init(svc: OffersAdminService, editing: AdminOffer?, onDone: @escaping () -> Void) {
+        self.svc = svc
+        self.editing = editing
+        self.onDone = onDone
+        let o = editing
+        _kind      = State(initialValue: o?.kind ?? "price")
+        _title     = State(initialValue: o?.title ?? "")
+        _desc      = State(initialValue: o?.description ?? "")
+        _finePrint = State(initialValue: o?.finePrint ?? "")
+        _placement = State(initialValue: o?.placement ?? "pin")
+        _days      = State(initialValue: Set(o?.activeDays ?? []))
+        _allDay    = State(initialValue: o?.startMinute == nil)
+        let cal = Calendar.current
+        func time(_ m: Int?, default def: Int) -> Date {
+            let mins = m ?? def
+            return cal.date(bySettingHour: mins / 60, minute: mins % 60, second: 0, of: Date()) ?? Date()
+        }
+        _startTime = State(initialValue: time(o?.startMinute, default: 16 * 60))
+        _endTime   = State(initialValue: time(o?.endMinute, default: 19 * 60))
+        _startDate = State(initialValue: o?.startsAt ?? Date())
+        _hasEnd    = State(initialValue: o?.endsAt != nil)
+        _endDate   = State(initialValue: o?.endsAt ?? Date().addingTimeInterval(7 * 24 * 3600))
+    }
+
+    private var isEditing: Bool { editing != nil }
+
     private var canSave: Bool {
-        selected != nil && !title.trimmingCharacters(in: .whitespaces).isEmpty && !saving
+        (isEditing || selected != nil)
+            && !title.trimmingCharacters(in: .whitespaces).isEmpty
+            && !saving
     }
 
     var body: some View {
@@ -9326,7 +9488,7 @@ private struct AddOfferSheet: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
                     HStack {
-                        Text("New special")
+                        Text(isEditing ? "Edit campaign" : "New campaign")
                             .font(.system(size: 24, weight: .heavy, design: .rounded))
                             .foregroundStyle(Color.cream)
                         Spacer()
@@ -9340,8 +9502,13 @@ private struct AddOfferSheet: View {
                         .buttonStyle(PressScaleStyle())
                     }
 
-                    venuePicker
-                    if selected != nil { offerForm }
+                    if isEditing {
+                        fixedVenueHeader
+                        offerForm
+                    } else {
+                        venuePicker
+                        if selected != nil { offerForm }
+                    }
                     Spacer(minLength: 24)
                 }
                 .padding(20)
@@ -9353,6 +9520,21 @@ private struct AddOfferSheet: View {
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
             search.search(query: query, origin: location.location)
+        }
+    }
+
+    /// Edit mode: the venue is locked (you're editing that bar's campaign),
+    /// shown read-only so there's nothing to re-pick.
+    private var fixedVenueHeader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            kicker("VENUE")
+            Text(editing?.venueName ?? "—")
+                .font(.system(size: 16, weight: .heavy, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.whiskey.opacity(0.1)))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1))
         }
     }
 
@@ -9441,6 +9623,31 @@ private struct AddOfferSheet: View {
     @ViewBuilder
     private var offerForm: some View {
         VStack(alignment: .leading, spacing: 16) {
+            // Placement is the price ladder: pin (map dot) → poster (branded
+            // card) → billboard (hero carousel). Poster+ needs artwork.
+            VStack(alignment: .leading, spacing: 7) {
+                kicker("PLACEMENT")
+                Picker("", selection: $placement) {
+                    Text("Pin").tag("pin")
+                    Text("Poster").tag("poster")
+                    Text("Billboard").tag("billboard")
+                }
+                .pickerStyle(.segmented)
+                Text(placementHint)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.cream.opacity(0.45))
+            }
+
+            // Poster art (poster + billboard). Billboard adds a wide image too.
+            if placement != "pin" {
+                artPicker(title: "POSTER IMAGE (4:3)", ratio: CampaignArt.posterRatio,
+                          item: $posterItem, data: $posterData, existing: editing?.imageUrl)
+            }
+            if placement == "billboard" {
+                artPicker(title: "BILLBOARD IMAGE (3:1)", ratio: CampaignArt.billboardRatio,
+                          item: $billboardItem, data: $billboardData, existing: editing?.billboardImageUrl)
+            }
+
             VStack(alignment: .leading, spacing: 7) {
                 kicker("TYPE")
                 Menu {
@@ -9464,7 +9671,7 @@ private struct AddOfferSheet: View {
             formField("FINE PRINT (optional)", text: $finePrint, placeholder: "20+ · one per guest")
 
             VStack(alignment: .leading, spacing: 8) {
-                kicker("ON WHICH DAYS")
+                kicker("VALID ON THESE DAYS")
                 HStack(spacing: 6) {
                     ForEach(0..<7, id: \.self) { d in
                         Button {
@@ -9480,9 +9687,13 @@ private struct AddOfferSheet: View {
                         .buttonStyle(.plain)
                     }
                 }
-                Text(days.isEmpty ? "Empty = every day" : "Selected days only")
+                // Clarify: days limit REDEMPTION, not visibility. The campaign
+                // markets across its whole start→end window regardless.
+                Text(days.isEmpty
+                     ? "Valid every day it's live."
+                     : "Shows all week; deal only redeemable on the selected days.")
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color.cream.opacity(0.4))
+                    .foregroundStyle(Color.cream.opacity(0.5))
             }
 
             Toggle(isOn: $allDay) {
@@ -9499,21 +9710,29 @@ private struct AddOfferSheet: View {
                 .tint(Color.whiskey)
             }
 
-            Toggle(isOn: $hasEnd) {
-                Text("Has an end date").font(.system(size: 14, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream)
-            }
-            .tint(Color.whiskey)
-            if hasEnd {
-                DatePicker("Ends", selection: $endDate, displayedComponents: .date)
+            // Marketing window: when the campaign starts showing, and (opt) ends.
+            VStack(alignment: .leading, spacing: 8) {
+                kicker("MARKETING WINDOW")
+                DatePicker("Starts", selection: $startDate, displayedComponents: .date)
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.7))
                     .tint(Color.whiskey)
+                Toggle(isOn: $hasEnd) {
+                    Text("Has an end date").font(.system(size: 14, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream)
+                }
+                .tint(Color.whiskey)
+                if hasEnd {
+                    DatePicker("Ends", selection: $endDate, in: startDate..., displayedComponents: .date)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.7))
+                        .tint(Color.whiskey)
+                }
             }
 
             Button(action: save) {
                 HStack {
                     if saving { ProgressView().tint(Color.ink) }
-                    Text(saving ? "Saving…" : "Save special")
+                    Text(saving ? "Saving…" : (isEditing ? "Save changes" : "Launch campaign"))
                         .font(.system(size: 15, weight: .black, design: .rounded))
                         .foregroundStyle(Color.ink)
                 }
@@ -9534,26 +9753,98 @@ private struct AddOfferSheet: View {
         }
     }
 
+    private var placementHint: String {
+        switch placement {
+        case "poster":    return "Branded card + artwork map pin"
+        case "billboard": return "Everything + hero carousel on Deals"
+        default:          return "A dot on the deals map"
+        }
+    }
+
+    /// One artwork picker at a fixed aspect ratio. Shows the newly-picked
+    /// image, else the existing artwork (edit), else a dashed placeholder.
+    @ViewBuilder
+    private func artPicker(
+        title: String, ratio: CGFloat,
+        item: Binding<PhotosPickerItem?>, data: Binding<Data?>, existing: String?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            kicker(title)
+            PhotosPicker(selection: item, matching: .images) {
+                // Color.clear fixes the ratio box; the greedy fill image lives
+                // in an overlay so it crops to the frame instead of stretching
+                // it — exactly how it renders on the map.
+                Color.clear
+                    .aspectRatio(ratio, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .overlay {
+                        ZStack {
+                            Color.smoke
+                            if let d = data.wrappedValue, let img = UIImage(data: d) {
+                                Image(uiImage: img).resizable().scaledToFill()
+                            } else if let s = existing, let url = URL(string: s) {
+                                DownsampledAsyncImage(url: url, targetPoints: 360)
+                            } else {
+                                VStack(spacing: 4) {
+                                    Image(systemName: "photo.badge.plus")
+                                        .font(.system(size: 20, design: .rounded))
+                                    Text("Pick artwork")
+                                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                }
+                                .foregroundStyle(Color.cream.opacity(0.6))
+                            }
+                            if data.wrappedValue == nil, existing != nil {
+                                Text("Tap to replace")
+                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.cream)
+                                    .padding(.horizontal, 10).padding(.vertical, 5)
+                                    .background(Capsule().fill(Color.ink.opacity(0.7)))
+                                    .frame(maxHeight: .infinity, alignment: .bottom)
+                                    .padding(8)
+                            }
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+            }
+            .onChange(of: item.wrappedValue) { _, newItem in
+                guard let newItem else { return }
+                Task { data.wrappedValue = try? await newItem.loadTransferable(type: Data.self) }
+            }
+        }
+    }
+
     private func save() {
-        guard let venue = selected else { return }
         saving = true
         func minutes(_ d: Date) -> Int {
             let c = Calendar.current.dateComponents([.hour, .minute], from: d)
             return (c.hour ?? 0) * 60 + (c.minute ?? 0)
         }
+        let startMin = allDay ? nil : minutes(startTime)
+        let endMin   = allDay ? nil : minutes(endTime)
+        let daysArg  = days.isEmpty ? nil : days.sorted()
+        // Only send artwork for placements that use it.
+        let poster    = placement != "pin" ? posterData : nil
+        let billboard = placement == "billboard" ? billboardData : nil
         Task {
-            let ok = await svc.create(
-                venue: venue,
-                kind: kind,
-                title: title,
-                description: desc,
-                finePrint: finePrint,
-                startsAt: Date(),
-                endsAt: hasEnd ? endDate : nil,
-                activeDays: days.isEmpty ? nil : days.sorted(),
-                startMinute: allDay ? nil : minutes(startTime),
-                endMinute: allDay ? nil : minutes(endTime)
-            )
+            let ok: Bool
+            if let editing {
+                ok = await svc.update(
+                    offer: editing, venueExternalId: nil,
+                    kind: kind, title: title, description: desc, finePrint: finePrint,
+                    placement: placement, posterImageData: poster, billboardImageData: billboard,
+                    startsAt: startDate, endsAt: hasEnd ? endDate : nil, activeDays: daysArg,
+                    startMinute: startMin, endMinute: endMin
+                )
+            } else if let venue = selected {
+                ok = await svc.create(
+                    venue: venue,
+                    kind: kind, title: title, description: desc, finePrint: finePrint,
+                    placement: placement, posterImageData: poster, billboardImageData: billboard,
+                    startsAt: startDate, endsAt: hasEnd ? endDate : nil, activeDays: daysArg,
+                    startMinute: startMin, endMinute: endMin
+                )
+            } else { ok = false }
             saving = false
             if ok { onDone(); dismiss() }
         }

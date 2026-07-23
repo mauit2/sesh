@@ -6,6 +6,15 @@ import SwiftUI
 import Foundation
 import CoreLocation
 
+// MARK: - Deals campaign artwork
+
+/// Fixed aspect ratios so a campaign's image looks identical on the map pin
+/// and in its expanded card. Poster and billboard differ on purpose.
+enum CampaignArt {
+    static let posterRatio: CGFloat = 4.0 / 3.0   // poster: pin + card
+    static let billboardRatio: CGFloat = 3.0 / 1.0 // billboard: wide banner
+}
+
 // MARK: - Settings keys
 
 /// Whether to share my live check-in location with friends (friends map).
@@ -569,6 +578,9 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
     var isFeatured: Bool = false
     var source: VenueSource = .curated
     var externalId: String? = nil
+    /// Paid Deals placement — 'none' | 'pin' | 'poster' | 'billboard'
+    /// (migration 053). 'none' venues never appear on Deals surfaces.
+    var tier: String = "none"
     let createdAt: Date
 
     enum CodingKeys: String, CodingKey {
@@ -576,6 +588,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         case isFeatured = "is_featured"
         case source
         case externalId = "external_id"
+        case tier
         case createdAt  = "created_at"
     }
 
@@ -589,6 +602,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         isFeatured: Bool = false,
         source: VenueSource = .curated,
         externalId: String? = nil,
+        tier: String = "none",
         createdAt: Date
     ) {
         self.id = id
@@ -600,6 +614,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         self.isFeatured = isFeatured
         self.source = source
         self.externalId = externalId
+        self.tier = tier
         self.createdAt = createdAt
     }
 
@@ -614,8 +629,10 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         isFeatured = (try c.decodeIfPresent(Bool.self, forKey: .isFeatured)) ?? false
         source     = (try c.decodeIfPresent(VenueSource.self, forKey: .source)) ?? .curated
         externalId = try c.decodeIfPresent(String.self, forKey: .externalId)
+        tier       = (try c.decodeIfPresent(String.self, forKey: .tier)) ?? "none"
         createdAt  = try c.decode(Date.self,   forKey: .createdAt)
     }
+
 
     /// Human-readable single-line location: "Vasagatan 1, Göteborg".
     var displayLocation: String {
@@ -681,6 +698,15 @@ struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
     let code: String?
     let startMinute: Int?       // local minutes from midnight; nil = all day
     let endMinute: Int?
+    /// Days the deal is actually VALID (0=Sun..6=Sat); nil = every day. The
+    /// campaign still markets the whole starts_at..ends_at window regardless.
+    var activeDays: [Int]? = nil
+    /// Paid placement level — pin | poster | billboard (migration 054).
+    var placement: String = "pin"
+    /// Poster artwork (16:9). Also the map-pin image for poster/billboard.
+    var imageUrl: String? = nil
+    /// Wide billboard artwork (3:1) — billboard placement only (migration 056).
+    var billboardImageUrl: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -690,6 +716,30 @@ struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
         case redeem, code
         case startMinute = "start_minute"
         case endMinute   = "end_minute"
+        case activeDays  = "active_days"
+        case placement
+        case imageUrl    = "image_url"
+        case billboardImageUrl = "billboard_image_url"
+    }
+
+    var imageURL: URL? { imageUrl.flatMap(URL.init(string:)) }
+    var billboardImageURL: URL? { billboardImageUrl.flatMap(URL.init(string:)) }
+    /// Poster/billboard campaign that carries a poster image (the map pin +
+    /// poster card use this).
+    var hasArtPlacement: Bool {
+        (placement == "poster" || placement == "billboard") && imageURL != nil
+    }
+
+    /// "Valid Thu" / "Valid Fri–Sat" line, or nil when it runs every day.
+    var validDaysLabel: String? {
+        guard let days = activeDays, !days.isEmpty, days.count < 7 else { return nil }
+        let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        let sorted = days.filter { (0..<7).contains($0) }.sorted()
+        // Contiguous run → "Fri–Sat", else "Thu · Sat".
+        if sorted.count > 1, sorted.last! - sorted.first! == sorted.count - 1 {
+            return "Valid \(names[sorted.first!])–\(names[sorted.last!])"
+        }
+        return "Valid " + sorted.map { names[$0] }.joined(separator: " · ")
     }
 
     /// SF Symbol for the offer kind — drives the pin/row glyph.

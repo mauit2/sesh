@@ -286,6 +286,8 @@ final class VenueService: ObservableObject {
     @Published private(set) var venues: [Venue] = []
     @Published private(set) var specialsByVenue: [UUID: [VenueSpecial]] = [:]
     /// Live promotional offers grouped by venue (Phase A "deals near you").
+    /// Since migration 054 each offer carries its paid placement level
+    /// (pin/poster/billboard) + optional artwork — offers ARE the campaigns.
     @Published private(set) var offersByVenue: [UUID: [VenueOffer]] = [:]
     /// Real Apple Maps coordinates resolved per venue (the seeded lat/lon can
     /// be approximate). Resolved once and cached to disk — see
@@ -366,6 +368,47 @@ final class VenueService: ObservableObject {
     /// the deals map.
     var venuesWithOffers: [Venue] {
         venues.filter { !(offersByVenue[$0.id]?.isEmpty ?? true) }
+    }
+
+    /// A venue's artwork-carrying campaign, if any (poster or billboard
+    /// placement) — drives the branded map pin + the poster banner.
+    func posterOffer(for venue: Venue) -> VenueOffer? {
+        offersByVenue[venue.id]?.first { $0.hasArtPlacement }
+    }
+
+    /// City-scale radius. Deals — pins, billboards, and the list — are all
+    /// scoped to bars near the user; a global catalog shouldn't surface a bar
+    /// on another continent. Shared so every surface uses the same cutoff.
+    static let dealsRadiusMeters: CLLocationDistance = 50_000
+
+    private func isNearby(_ venue: Venue, to location: CLLocation?) -> Bool {
+        guard let here = location else { return true }   // no fix yet → show all
+        let c = coordinate(for: venue)
+        return CLLocation(latitude: c.latitude, longitude: c.longitude)
+            .distance(from: here) <= Self.dealsRadiusMeters
+    }
+
+    /// All live billboard campaigns with their venues, for the carousel —
+    /// restricted to the user's city. Uses the dedicated billboard image,
+    /// falling back to the poster image.
+    func billboardEntries(near location: CLLocation?) -> [(offer: VenueOffer, venue: Venue)] {
+        venues.compactMap { v in
+            guard isNearby(v, to: location) else { return nil }
+            return offersByVenue[v.id]?
+                .first { $0.placement == "billboard" && ($0.billboardImageURL ?? $0.imageURL) != nil }
+                .map { ($0, v) }
+        }
+    }
+
+    /// Venues with a live campaign in the user's city, nearest first — for the
+    /// Deals list sheet.
+    func dealsList(near location: CLLocation?) -> [Venue] {
+        let all = venuesWithOffers.filter { isNearby($0, to: location) }
+        guard let here = location else { return all.sorted { $0.name < $1.name } }
+        return all.sorted {
+            CLLocation(latitude: coordinate(for: $0).latitude, longitude: coordinate(for: $0).longitude).distance(from: here)
+              < CLLocation(latitude: coordinate(for: $1).latitude, longitude: coordinate(for: $1).longitude).distance(from: here)
+        }
     }
 
     /// Where to pin a venue — the MapKit-resolved coordinate if we have it,
@@ -791,16 +834,33 @@ private struct OffersMapView: View {
     var onClose: (() -> Void)? = nil
 
     @State private var camera: MapCameraPosition = .automatic
-    @State private var selectedVenueId: UUID? = nil
+    /// The venue whose card is presented (as a real sheet).
+    @State private var selectedVenue: Venue? = nil
+    /// The "all deals" list sheet.
+    @State private var listOpen = false
+
+    /// Fly the camera to a venue and open its card. The center is nudged SOUTH
+    /// so the pin sits in the top half, visible ABOVE the medium sheet.
+    private func focus(_ venue: Venue) {
+        let c = venues.coordinate(for: venue)
+        let shifted = CLLocationCoordinate2D(latitude: c.latitude - 0.005, longitude: c.longitude)
+        withAnimation(.easeInOut(duration: 0.5)) {
+            camera = .region(MKCoordinateRegion(center: shifted,
+                                                latitudinalMeters: 1600, longitudinalMeters: 1600))
+        }
+        selectedVenue = venue
+    }
 
     /// Only surface offers within this radius of the user — a global dataset
     /// shouldn't dump bars on the other side of the planet onto the map.
     /// (Server-side geo-filtering is a Phase B concern; client-side is fine
     /// for the small Phase A catalog.) Falls back to showing all when we have
-    /// no location fix yet.
-    private let radiusMeters: CLLocationDistance = 50_000
+    /// no location fix yet. Shared with the list + billboards.
+    private let radiusMeters = VenueService.dealsRadiusMeters
 
     private var pins: [Venue] {
+        // Only venues with live campaigns exist here — and campaigns are
+        // admin-created (paid), so the Deals map is pay-to-play by design.
         let all = venues.venuesWithOffers
         guard let here = location.location else { return all }
         return all.filter {
@@ -820,13 +880,18 @@ private struct OffersMapView: View {
                         venue.name,
                         coordinate: venues.coordinate(for: venue)
                     ) {
-                        OfferPin(count: venues.offers(for: venue).count,
-                                 selected: selectedVenueId == venue.id)
-                            .onTapGesture {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                    selectedVenueId = venue.id
-                                }
+                        // Poster/billboard campaign with artwork → branded
+                        // pin; pin placement keeps the classic whiskey dot.
+                        Group {
+                            if let art = venues.posterOffer(for: venue)?.imageURL {
+                                PosterPin(url: art,
+                                          selected: selectedVenue?.id == venue.id)
+                            } else {
+                                OfferPin(count: venues.offers(for: venue).count,
+                                         selected: selectedVenue?.id == venue.id)
                             }
+                        }
+                        .onTapGesture { selectedVenue = venue }
                     }
                 }
             }
@@ -834,15 +899,51 @@ private struct OffersMapView: View {
 
             header
 
-            if let id = selectedVenueId, let venue = pins.first(where: { $0.id == id }) {
-                offerSheet(for: venue)
+            // Billboard tier: rotating hero creative pinned to the bottom.
+            // Hidden while a venue card is up so the two never stack.
+            // Restricted to billboards in the user's city.
+            let billboards = venues.billboardEntries(near: location.location)
+            if selectedVenue == nil, !billboards.isEmpty {
+                VStack {
+                    Spacer()
+                    // Tapping a billboard flies the map to that bar + opens it.
+                    BillboardCarousel(entries: billboards) { venue in
+                        focus(venue)
+                    }
+                    // Clears Apple's "Maps / Legal" attribution at the bottom.
+                    .padding(.bottom, 40)
+                }
             }
+        }
+        // The venue card is a real sheet — reliable buttons + dismiss, and the
+        // medium detent leaves the pin visible on the map above it.
+        .sheet(item: $selectedVenue) { venue in
+            // NOTE: no presentationBackgroundInteraction — enabling it makes
+            // the sheet non-modal and lets the map behind swallow the card's
+            // button taps (only system swipe-dismiss survived). A normal modal
+            // sheet keeps every button working; the map + pin still show
+            // (dimmed) in the top half at the medium detent.
+            VenueOfferCard(venue: venue, venues: venues)
+                .presentationDetents([.fraction(0.58), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
         }
         .task {
             recenter()
             await venues.refreshIfStale()
             await venues.resolveOfferCoordinates()
             recenter()
+        }
+        .sheet(isPresented: $listOpen) {
+            DealsListSheet(venues: venues, location: location) { venue in
+                listOpen = false
+                // Defer so the list sheet fully dismisses before the card
+                // sheet presents (SwiftUI drops back-to-back presentations).
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { focus(venue) }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.ink)
         }
     }
 
@@ -860,6 +961,16 @@ private struct OffersMapView: View {
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(Capsule().fill(Color.ink.opacity(0.6)))
             Spacer()
+            // Browse every bar with a live campaign as a list.
+            Button { listOpen = true } label: {
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .frame(width: 40, height: 40)
+                    .background(Circle().fill(Color.ink.opacity(0.7)))
+                    .overlay(Circle().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
+            }
+            .buttonStyle(PressScaleStyle())
             if let onClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
@@ -876,47 +987,6 @@ private struct OffersMapView: View {
         .padding(.top, 8)
     }
 
-    @ViewBuilder
-    private func offerSheet(for venue: Venue) -> some View {
-        VStack {
-            Spacer()
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(venue.name)
-                            .font(.system(size: 18, weight: .heavy, design: .rounded))
-                            .foregroundStyle(Color.cream)
-                        if !venue.displayLocation.isEmpty {
-                            Text(venue.displayLocation)
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .foregroundStyle(Color.cream.opacity(0.55))
-                        }
-                    }
-                    Spacer()
-                    Button {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                            selectedVenueId = nil
-                        }
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 22, design: .rounded))
-                            .foregroundStyle(Color.cream.opacity(0.4))
-                    }
-                    .buttonStyle(.plain)
-                }
-                ForEach(venues.offers(for: venue)) { offer in
-                    OfferRow(offer: offer)
-                }
-            }
-            .padding(18)
-            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.inkElev))
-            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.whiskey.opacity(0.25), lineWidth: 1))
-            .padding(.horizontal, 14)
-            .padding(.bottom, 24)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-        }
-    }
-
     private func recenter() {
         let span: CLLocationDistance = 4000
         if let loc = location.location {
@@ -929,6 +999,173 @@ private struct OffersMapView: View {
         } else {
             camera = .automatic
         }
+    }
+}
+
+/// The venue's offer card, presented as a real sheet (medium detent) so the
+/// map + pin stay visible above it and every button/dismiss works reliably.
+private struct VenueOfferCard: View {
+    let venue: Venue
+    @ObservedObject var venues: VenueService
+
+    var body: some View {
+        // No close button: the top-of-sheet spot is contested by the
+        // ScrollView pan + the sheet's drag gesture, so a tap there never
+        // lands. Dismissal is swipe-down or a tap on the dimmed map above.
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(venue.name)
+                        .font(.system(size: 18, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    if !venue.displayLocation.isEmpty {
+                        Text(venue.displayLocation)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.55))
+                    }
+                }
+                if let poster = venues.posterOffer(for: venue) {
+                    PosterBanner(offer: poster)
+                }
+                ForEach(venues.offers(for: venue)) { offer in
+                    OfferRow(offer: offer)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 16)
+            .padding(.bottom, 24)
+        }
+        .background(Color.ink)
+    }
+}
+
+/// The "all deals" list — every bar with a live campaign, nearest first.
+/// Tapping a row flies the map to it and opens its card.
+private struct DealsListSheet: View {
+    @ObservedObject var venues: VenueService
+    @ObservedObject var location: LocationService
+    let onSelect: (Venue) -> Void
+
+    @State private var query = ""
+
+    /// Nearby deals, then narrowed by the search text (name, offer, or area).
+    private var list: [Venue] {
+        let nearby = venues.dealsList(near: location.location)
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return nearby }
+        return nearby.filter { v in
+            if v.name.lowercased().contains(q) { return true }
+            if v.displayLocation.lowercased().contains(q) { return true }
+            return venues.offers(for: v).contains { $0.title.lowercased().contains(q) }
+        }
+    }
+
+    var body: some View {
+        let list = self.list
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("ALL DEALS")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.bronze)
+                    .padding(.bottom, 2)
+
+                searchField
+
+                if list.isEmpty {
+                    Text(query.isEmpty ? "No live deals near you right now."
+                                       : "No deals match “\(query)”.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                        .padding(.vertical, 20)
+                }
+                ForEach(list) { v in
+                    Button { onSelect(v) } label: { row(v) }
+                        .buttonStyle(PressScaleStyle())
+                }
+            }
+            .padding(20)
+        }
+        .background(Color.ink)
+        .preferredColorScheme(.dark)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.4))
+            TextField("", text: $query, prompt:
+                Text("Search bars or deals")
+                    .foregroundStyle(Color.cream.opacity(0.4)))
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .submitLabel(.search)
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.35))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+        .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private func row(_ v: Venue) -> some View {
+        let offers = venues.offers(for: v)
+        HStack(spacing: 12) {
+            Group {
+                if let art = venues.posterOffer(for: v)?.imageURL {
+                    DownsampledAsyncImage(url: art, targetPoints: 52)
+                } else {
+                    Color.whiskey.opacity(0.15)
+                        .overlay(Image(systemName: "wineglass.fill")
+                            .font(.system(size: 16, design: .rounded))
+                            .foregroundStyle(Color.whiskey))
+                }
+            }
+            .frame(width: 52, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(v.name)
+                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .lineLimit(1)
+                if let top = offers.first {
+                    Text(top.title)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.whiskey)
+                        .lineLimit(1)
+                }
+                if !v.displayLocation.isEmpty {
+                    Text(v.displayLocation)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.45))
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 4)
+            if let d = venues.distance(from: location.location, to: v) {
+                Text(d < 1000 ? "\(Int(d)) m" : String(format: "%.1f km", d / 1000))
+                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                    .foregroundStyle(Color.cream.opacity(0.6))
+            }
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.35))
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.cream.opacity(0.04)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
     }
 }
 
@@ -960,6 +1197,218 @@ private struct OfferPin: View {
     }
 }
 
+// MARK: - Paid placements (migration 053)
+
+/// Fire-and-forget impression/tap counters for paid creative. Impressions
+/// dedupe per campaign per app session so scroll jitter can't inflate the
+/// numbers the bars are paying to see.
+enum CampaignStats {
+    private static var seenThisSession = Set<UUID>()
+
+    static func impression(_ id: UUID) {
+        guard !seenThisSession.contains(id) else { return }
+        seenThisSession.insert(id)
+        bump(id, impressions: 1, taps: 0)
+    }
+
+    static func tap(_ id: UUID) {
+        bump(id, impressions: 0, taps: 1)
+    }
+
+    private static func bump(_ id: UUID, impressions: Int, taps: Int) {
+        struct P: Encodable {
+            let p_campaign: String
+            let p_impressions: Int
+            let p_taps: Int
+        }
+        Task {
+            _ = try? await supabase.rpc("bump_campaign_stats", params: P(
+                p_campaign: id.uuidString.lowercased(),
+                p_impressions: impressions,
+                p_taps: taps
+            )).execute()
+        }
+    }
+}
+
+/// Poster-tier map pin: the bar's artwork in a rounded 4:3 frame — big enough
+/// to stand out on the map, and the SAME ratio as the expanded poster card so
+/// the image doesn't reflow when you tap it.
+private struct PosterPin: View {
+    let url: URL
+    let selected: Bool
+
+    /// Poster pins are large + prominent (the paid difference). 4:3.
+    private var width: CGFloat { selected ? 108 : 92 }
+    private var height: CGFloat { width / CampaignArt.posterRatio }
+
+    var body: some View {
+        ZStack {
+            Color.smoke
+            DownsampledAsyncImage(url: url, targetPoints: 220)  // fill the 4:3 pin
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.whiskey, lineWidth: selected ? 3 : 2)
+        )
+        .shadow(color: Color.whiskey.opacity(0.6), radius: selected ? 12 : 7, y: 2)
+        .shadow(color: .black.opacity(0.4), radius: 4, y: 2)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: selected)
+    }
+}
+
+/// Poster creative at the top of a venue's offer card: artwork with a
+/// bottom gradient carrying the campaign title/description. Marked
+/// "Sponsored" — paid placement is never disguised as editorial content.
+private struct PosterBanner: View {
+    let offer: VenueOffer
+
+    var body: some View {
+        // Color.clear drives the 4:3 box size (same ratio as the map pin);
+        // the greedy scaledToFill image lives in an overlay so it can't push
+        // the box past the ratio.
+        Color.clear
+            .aspectRatio(CampaignArt.posterRatio, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .overlay {
+                ZStack(alignment: .bottomLeading) {
+                    Color.smoke
+                    if let url = offer.imageURL {
+                        DownsampledAsyncImage(url: url, targetPoints: 360)
+                    }
+                    LinearGradient(colors: [.clear, Color.ink.opacity(0.85)],
+                                   startPoint: .center, endPoint: .bottom)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(offer.title)
+                            .font(.system(size: 17, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        if let desc = offer.description {
+                            Text(desc)
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.75))
+                                .lineLimit(2)
+                        }
+                    }
+                    .padding(12)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                Text("SPONSORED")
+                    .font(.system(size: 8, weight: .black, design: .monospaced))
+                    .tracking(1.2)
+                    .foregroundStyle(Color.cream.opacity(0.75))
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.ink.opacity(0.65)))
+                    .padding(8)
+            }
+            .onAppear { CampaignStats.impression(offer.id) }
+    }
+}
+
+/// Billboard tier: full-width rotating hero cards over the Deals map — a
+/// strict 3:1 image banner with an info + CTA bar beneath it.
+private struct BillboardCarousel: View {
+    let entries: [(offer: VenueOffer, venue: Venue)]
+    let onOpen: (Venue) -> Void
+
+    var body: some View {
+        TabView {
+            ForEach(entries, id: \.offer.id) { entry in
+                BillboardCard(offer: entry.offer, venue: entry.venue) {
+                    CampaignStats.tap(entry.offer.id)
+                    onOpen(entry.venue)
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: entries.count > 1 ? .automatic : .never))
+        // image (3:1 of ~345 ≈ 115) + info bar (~62) + page-dot room.
+        .frame(height: 200)
+    }
+}
+
+private struct BillboardCard: View {
+    let offer: VenueOffer
+    let venue: Venue
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(spacing: 0) {
+                // Strict 3:1 banner — Color.clear fixes the height, the greedy
+                // fill image lives in an overlay so it can't stretch the box.
+                Color.clear
+                    .aspectRatio(CampaignArt.billboardRatio, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .overlay {
+                        ZStack {
+                            Color.smoke
+                            if let url = offer.billboardImageURL ?? offer.imageURL {
+                                DownsampledAsyncImage(url: url, targetPoints: 400)
+                            }
+                        }
+                    }
+                    .clipped()
+                    .overlay(alignment: .topLeading) {
+                    Text("SPONSORED")
+                        .font(.system(size: 8, weight: .black, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(Color.cream.opacity(0.85))
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.ink.opacity(0.7)))
+                        .padding(8)
+                }
+
+                // Info + CTA bar beneath the banner.
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(venue.name.uppercased())
+                            .font(.system(size: 9, weight: .black, design: .monospaced))
+                            .tracking(1.4)
+                            .foregroundStyle(Color.whiskey)
+                            .lineLimit(1)
+                        Text(offer.title)
+                            .font(.system(size: 15, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .lineLimit(1)
+                        if let desc = offer.description {
+                            Text(desc)
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.65))
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 6)
+                    HStack(spacing: 5) {
+                        Text("SEE DEAL")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .tracking(0.8)
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 11, weight: .black, design: .rounded))
+                    }
+                    .foregroundStyle(Color.ink)
+                    .padding(.horizontal, 12).padding(.vertical, 9)
+                    .background(Capsule().fill(Color.whiskey))
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .background(Color.inkElev)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.5), radius: 16, y: 6)
+        }
+        .buttonStyle(PressScaleStyle())
+        .onAppear { CampaignStats.impression(offer.id) }
+    }
+}
+
 /// One offer inside the venue card, with a tap-to-reveal "show at the bar"
 /// redeem state. No server validation in Phase A — the live clock just lets
 /// staff see it's genuine and not a screenshot.
@@ -985,12 +1434,15 @@ private struct OfferRow: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     HStack(spacing: 8) {
+                        // Which days the deal is actually redeemable — the
+                        // campaign still markets every day of its run.
+                        if let vd = offer.validDaysLabel { tag(vd, system: "calendar") }
                         if let w = offer.windowLabel { tag(w, system: "clock") }
-                        if let fp = offer.finePrint {
-                            Text(fp)
-                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(Color.bronze)
-                        }
+                    }
+                    if let fp = offer.finePrint {
+                        Text(fp)
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Color.bronze)
                     }
                 }
                 Spacer(minLength: 0)
