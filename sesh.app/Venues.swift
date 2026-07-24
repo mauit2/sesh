@@ -299,6 +299,9 @@ final class VenueService: ObservableObject {
     /// map to fly to + open a specific venue when it next appears. The map
     /// consumes and clears it.
     @Published var pendingFocusVenueId: UUID? = nil
+    /// Crowdsourced beer prices per venue (migrations 061–063): all reported
+    /// serving sizes for each venue, for the price map.
+    @Published private(set) var beerPricesByVenue: [UUID: [VenueBeerPrice]] = [:]
     private let coordCacheKey = "sesh.venueCoords.v1"
 
     /// User-selected current venue. Persisted across launches via
@@ -367,6 +370,76 @@ final class VenueService: ObservableObject {
     /// campaigns are hidden outside their day/time window (isVisibleNow).
     func offers(for venue: Venue) -> [VenueOffer] {
         (offersByVenue[venue.id] ?? []).filter { $0.isVisibleNow() }
+    }
+
+    // MARK: - Crowdsourced beer prices (migration 061)
+
+    /// Pull the median-recent price per venue+serving for the beer-price map.
+    func loadBeerPrices() async {
+        do {
+            let rows: [VenueBeerPrice] = try await supabase
+                .rpc("venue_beer_prices").execute().value
+            var map: [UUID: [VenueBeerPrice]] = [:]
+            for r in rows { map[r.venueId, default: []].append(r) }
+            beerPricesByVenue = map
+        } catch {
+            // keep whatever we had; a transient failure shouldn't blank the map
+        }
+    }
+
+    /// This venue's price for a specific serving, if reported.
+    func beerPrice(for venue: Venue, serving: BeerServing) -> VenueBeerPrice? {
+        beerPricesByVenue[venue.id]?.first { $0.serving == serving.rawValue }
+    }
+
+    /// All reported servings for a venue, smallest first.
+    func servingPrices(for venue: Venue) -> [VenueBeerPrice] {
+        (beerPricesByVenue[venue.id] ?? []).sorted { $0.servingSize.cl < $1.servingSize.cl }
+    }
+
+    /// Venues that have a price for the given serving — the dots on the price
+    /// map for that filter.
+    func venuesWithBeerPrice(serving: BeerServing) -> [Venue] {
+        venues.filter { beerPricesByVenue[$0.id]?.contains { $0.serving == serving.rawValue } ?? false }
+    }
+
+    /// Any venue that has at least one reported price (any serving).
+    var venuesWithAnyBeerPrice: [Venue] {
+        venues.filter { !(beerPricesByVenue[$0.id]?.isEmpty ?? true) }
+    }
+
+    /// Record a price for a serving. Finds-or-creates the bar server-side, then
+    /// refreshes the map. `name/lat/lon/externalId` carry the MapKit identity
+    /// when the bar isn't in our DB yet.
+    @discardableResult
+    func submitBeerPrice(name: String, lat: Double, lon: Double,
+                         externalId: String?, city: String?, address: String?,
+                         price: Double, serving: BeerServing, currency: String, note: String?) async -> Bool {
+        struct P: Encodable {
+            let p_name: String
+            let p_lat: Double
+            let p_lon: Double
+            let p_external_id: String?
+            let p_city: String?
+            let p_address: String?
+            let p_price: Double
+            let p_note: String?
+            let p_serving: String
+            let p_currency: String
+        }
+        do {
+            _ = try await supabase.rpc("submit_beer_price", params: P(
+                p_name: name, p_lat: lat, p_lon: lon,
+                p_external_id: externalId, p_city: city, p_address: address,
+                p_price: price, p_note: (note?.isEmpty ?? true) ? nil : note,
+                p_serving: serving.rawValue, p_currency: currency
+            )).execute()
+            await refresh()          // pull the (maybe new) venue into `venues`
+            await loadBeerPrices()
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Venues that currently have at least one VISIBLE offer — the pins shown
@@ -859,6 +932,9 @@ struct DeferredOffersPage: View {
     }
 }
 
+/// The two Deals-map layers: paid campaigns, or crowdsourced beer prices.
+private enum DealsMapMode { case deals, prices }
+
 private struct OffersMapView: View {
     @ObservedObject var venues: VenueService
     @ObservedObject var location: LocationService
@@ -871,6 +947,15 @@ private struct OffersMapView: View {
     @State private var selectedVenue: Venue? = nil
     /// The "all deals" list sheet.
     @State private var listOpen = false
+    /// Which map layer is showing.
+    @State private var mapMode: DealsMapMode = .deals
+    /// The serving size the price map is filtered to.
+    @State private var selectedServing: BeerServing = .canonical
+    /// Beer-price submit sheet + its optional pre-filled bar.
+    @State private var submitOpen = false
+    @State private var submitPreset: BeerPriceTarget? = nil
+    /// The searchable price list sheet.
+    @State private var priceListOpen = false
 
     /// Fly the camera to a venue and open its card. The center is nudged SOUTH
     /// so the pin sits in the top half, visible ABOVE the medium sheet.
@@ -904,12 +989,45 @@ private struct OffersMapView: View {
     private var pins: [Venue] {
         // Only venues with live campaigns exist here — and campaigns are
         // admin-created (paid), so the Deals map is pay-to-play by design.
-        let all = venues.venuesWithOffers
-        guard let here = location.location else { return all }
-        return all.filter {
+        withinRadius(venues.venuesWithOffers)
+    }
+
+    /// Bars with a price for the selected serving — the dots in price mode.
+    private var pricePins: [Venue] {
+        withinRadius(venues.venuesWithBeerPrice(serving: selectedServing))
+    }
+
+    private func withinRadius(_ list: [Venue]) -> [Venue] {
+        guard let here = location.location else { return list }
+        return list.filter {
             let c = venues.coordinate(for: $0)
             return CLLocation(latitude: c.latitude, longitude: c.longitude).distance(from: here) <= radiusMeters
         }
+    }
+
+    /// Cheapest beer (selected serving) among the visible pins — the header hook.
+    private var cheapestPrice: VenueBeerPrice? {
+        pricePins.compactMap { venues.beerPrice(for: $0, serving: selectedServing) }.min { $0.price < $1.price }
+    }
+
+    /// Average price for the selected serving across the visible pins — feeds
+    /// the "cheaper than nearby" comparison in the detail card.
+    private var areaAverage: Double? {
+        let ps = pricePins.compactMap { venues.beerPrice(for: $0, serving: selectedServing)?.price }
+        guard !ps.isEmpty else { return nil }
+        return ps.reduce(0, +) / Double(ps.count)
+    }
+
+    /// Cheapest nearby price per serving — the green anchor for the relative
+    /// colour scale. Computed over every priced bar within the city radius.
+    private var cheapestByServing: [String: Double] {
+        var m: [String: Double] = [:]
+        for v in withinRadius(venues.venuesWithAnyBeerPrice) {
+            for p in venues.servingPrices(for: v) {
+                m[p.serving] = min(m[p.serving] ?? .greatestFiniteMagnitude, p.price)
+            }
+        }
+        return m
     }
 
     var body: some View {
@@ -918,23 +1036,32 @@ private struct OffersMapView: View {
 
             Map(position: $camera) {
                 UserAnnotation()
-                ForEach(pins) { venue in
-                    Annotation(
-                        venue.name,
-                        coordinate: venues.coordinate(for: venue)
-                    ) {
-                        // Poster/billboard campaign with artwork → branded
-                        // pin; pin placement keeps the classic whiskey dot.
-                        Group {
-                            if let art = venues.posterOffer(for: venue)?.imageURL {
-                                PosterPin(url: art,
-                                          selected: selectedVenue?.id == venue.id)
-                            } else {
-                                OfferPin(count: venues.offers(for: venue).count,
-                                         selected: selectedVenue?.id == venue.id)
+                if mapMode == .deals {
+                    ForEach(pins) { venue in
+                        Annotation(venue.name, coordinate: venues.coordinate(for: venue)) {
+                            // Poster/billboard artwork → branded pin; pins keep
+                            // the classic whiskey dot.
+                            Group {
+                                if let art = venues.posterOffer(for: venue)?.imageURL {
+                                    PosterPin(url: art, selected: selectedVenue?.id == venue.id)
+                                } else {
+                                    OfferPin(count: venues.offers(for: venue).count,
+                                             selected: selectedVenue?.id == venue.id)
+                                }
+                            }
+                            .onTapGesture { selectedVenue = venue }
+                        }
+                    }
+                } else {
+                    ForEach(pricePins) { venue in
+                        Annotation(venue.name, coordinate: venues.coordinate(for: venue)) {
+                            if let p = venues.beerPrice(for: venue, serving: selectedServing) {
+                                BeerPricePin(price: p,
+                                             cheapest: cheapestByServing[selectedServing.rawValue] ?? p.price,
+                                             selected: selectedVenue?.id == venue.id)
+                                    .onTapGesture { selectedVenue = venue }
                             }
                         }
-                        .onTapGesture { selectedVenue = venue }
                     }
                 }
             }
@@ -942,39 +1069,68 @@ private struct OffersMapView: View {
 
             header
 
-            // Billboard tier: rotating hero creative pinned to the bottom.
-            // Hidden while a venue card is up so the two never stack.
-            // Restricted to billboards in the user's city.
-            let billboards = venues.billboardEntries(near: location.location)
-            if selectedVenue == nil, !billboards.isEmpty {
-                VStack {
-                    Spacer()
-                    // Tapping a billboard flies the map to that bar + opens it.
-                    BillboardCarousel(entries: billboards) { venue in
-                        focus(venue)
+            // Billboard carousel — deals mode only, hidden while a card is up.
+            if mapMode == .deals, selectedVenue == nil {
+                let billboards = venues.billboardEntries(near: location.location)
+                if !billboards.isEmpty {
+                    VStack {
+                        Spacer()
+                        BillboardCarousel(entries: billboards) { venue in focus(venue) }
+                            .padding(.bottom, 40)   // clears Apple's attribution
                     }
-                    // Clears Apple's "Maps / Legal" attribution at the bottom.
-                    .padding(.bottom, 40)
                 }
             }
         }
         // The venue card is a real sheet — reliable buttons + dismiss, and the
         // medium detent leaves the pin visible on the map above it.
         .sheet(item: $selectedVenue) { venue in
-            // NOTE: no presentationBackgroundInteraction — enabling it makes
-            // the sheet non-modal and lets the map behind swallow the card's
-            // button taps (only system swipe-dismiss survived). A normal modal
-            // sheet keeps every button working; the map + pin still show
-            // (dimmed) in the top half at the medium detent.
-            VenueOfferCard(venue: venue, venues: venues)
-                .presentationDetents([.fraction(0.58), .large])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(Color.ink)
+            // A normal modal sheet keeps every button working; the map + pin
+            // stay visible (dimmed) in the top half at the medium detent.
+            Group {
+                if mapMode == .deals {
+                    VenueOfferCard(venue: venue, venues: venues)
+                } else {
+                    BeerPriceDetailCard(
+                        venue: venue, venues: venues,
+                        serving: selectedServing, areaAverage: areaAverage,
+                        cheapestByServing: cheapestByServing,
+                        onReport: { target in
+                            selectedVenue = nil
+                            submitPreset = target
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { submitOpen = true }
+                        },
+                        onPickServing: { selectedServing = $0 }
+                    )
+                }
+            }
+            .presentationDetents([.fraction(0.58), .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.ink)
+        }
+        // Report / add a beer price.
+        .sheet(isPresented: $submitOpen, onDismiss: { submitPreset = nil }) {
+            BeerPriceSubmitSheet(venues: venues, location: location,
+                                 preset: submitPreset, initialServing: selectedServing) {
+                submitOpen = false
+            }
+            .presentationDetents([.large])
+            .presentationBackground(Color.ink)
+        }
+        // Searchable, price-sorted list of bars for the selected serving.
+        .sheet(isPresented: $priceListOpen) {
+            BeerPriceListSheet(venues: venues, location: location, serving: selectedServing) { venue in
+                priceListOpen = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { focus(venue) }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.ink)
         }
         .task {
             recenter()
             await venues.refreshIfStale()
             await venues.resolveOfferCoordinates()
+            await venues.loadBeerPrices()
             recenter()
             consumePendingFocus()
         }
@@ -995,43 +1151,98 @@ private struct OffersMapView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("DEALS NEARBY")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .tracking(2.4)
-                    .foregroundStyle(Color.bronze)
-                Text("\(pins.count) \(pins.count == 1 ? "spot" : "spots")")
-                    .font(.system(size: 22, weight: .heavy, design: .rounded))
-                    .foregroundStyle(Color.cream)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(Capsule().fill(Color.ink.opacity(0.6)))
-            Spacer()
-            // Browse every bar with a live campaign as a list.
-            Button { listOpen = true } label: {
-                Image(systemName: "list.bullet")
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.cream)
-                    .frame(width: 40, height: 40)
-                    .background(Circle().fill(Color.ink.opacity(0.7)))
-                    .overlay(Circle().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
-            }
-            .buttonStyle(PressScaleStyle())
-            if let onClose {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(mapMode == .deals ? "DEALS NEARBY" : "BEER PRICES")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .tracking(2.4)
+                        .foregroundStyle(Color.bronze)
+                    Text(headerValue)
+                        .font(.system(size: 22, weight: .heavy, design: .rounded))
                         .foregroundStyle(Color.cream)
-                        .frame(width: 40, height: 40)
-                        .background(Circle().fill(Color.ink.opacity(0.7)))
-                        .overlay(Circle().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
                 }
-                .buttonStyle(PressScaleStyle())
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Capsule().fill(Color.ink.opacity(0.6)))
+                Spacer()
+                if mapMode == .deals {
+                    circleButton("list.bullet") { listOpen = true }
+                } else {
+                    circleButton("magnifyingglass") { priceListOpen = true }
+                    circleButton("plus") { submitPreset = nil; submitOpen = true }
+                }
+                if let onClose { circleButton("xmark", action: onClose) }
             }
+            modeToggle
+            if mapMode == .prices { servingFilter }
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
+    }
+
+    /// Serving-size filter for the price map.
+    private var servingFilter: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(BeerServing.allCases) { s in
+                    let on = selectedServing == s
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { selectedServing = s }
+                    } label: {
+                        Text(s.label)
+                            .font(.system(size: 11, weight: .black, design: .rounded))
+                            .foregroundStyle(on ? Color.ink : Color.cream.opacity(0.8))
+                            .padding(.horizontal, 12).padding(.vertical, 7)
+                            .background(Capsule().fill(on ? Color.whiskey : Color.ink.opacity(0.6)))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .scrollClipDisabled()
+    }
+
+    private var headerValue: String {
+        if mapMode == .deals { return "\(pins.count) \(pins.count == 1 ? "spot" : "spots")" }
+        if let c = cheapestPrice { return "from \(c.priceLabel)" }
+        return pricePins.isEmpty ? "tap ＋ to add" : "\(pricePins.count) bars"
+    }
+
+    private var modeToggle: some View {
+        HStack(spacing: 0) {
+            segButton("Deals", .deals)
+            segButton("Beer prices", .prices)
+        }
+        .padding(3)
+        .background(Capsule().fill(Color.ink.opacity(0.65)))
+        .frame(maxWidth: 240)
+    }
+
+    private func segButton(_ title: String, _ mode: DealsMapMode) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                mapMode = mode; selectedVenue = nil
+            }
+        } label: {
+            Text(title)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(mapMode == mode ? Color.ink : Color.cream.opacity(0.7))
+                .frame(maxWidth: .infinity).padding(.vertical, 7)
+                .background(Capsule().fill(mapMode == mode ? Color.whiskey : .clear))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func circleButton(_ system: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: system)
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(Color.ink.opacity(0.7)))
+                .overlay(Circle().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
     }
 
     private func recenter() {

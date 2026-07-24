@@ -807,6 +807,110 @@ struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
     }
 }
 
+/// A standard beer serving size (migration 063). Colour anchors scale with the
+/// serving so a cheap 25cl and a cheap pint both read green.
+enum BeerServing: String, CaseIterable, Identifiable {
+    case s25 = "25", s33 = "33", s40 = "40", s50 = "50", pint = "pint"
+    var id: String { rawValue }
+    static let canonical = BeerServing.s40   // "stor stark" — the map default
+
+    /// Chip / picker label.
+    var label: String {
+        switch self {
+        case .s25: return "25 cl"
+        case .s33: return "33 cl"
+        case .s40: return "40 cl"
+        case .s50: return "50 cl"
+        case .pint: return "Pint"
+        }
+    }
+    /// Longer descriptor for the detail card.
+    var longLabel: String { self == .s40 ? "40 cl · stor stark" : label }
+    /// Representative centilitres — sorts sizes and scales the colour anchors.
+    var cl: Double {
+        switch self {
+        case .s25: return 25
+        case .s33: return 33
+        case .s40: return 40
+        case .s50: return 50
+        case .pint: return 57
+        }
+    }
+}
+
+/// Local currency handling for beer prices (migration 064). A price is stored
+/// and shown in the currency it was reported in — we don't convert. The colour
+/// thresholds scale per-currency so a ¥600 pint and a 60 kr stor stark read the
+/// same green.
+enum BeerCurrency {
+    /// The user's device currency, e.g. "SEK", "JPY". Falls back to SEK. Used
+    /// only as a last resort — currency normally follows the bar's country.
+    static var current: String { Locale.current.currency?.identifier ?? "SEK" }
+
+    /// The currency used in a given ISO country (e.g. "US" → "USD", "SE" →
+    /// "SEK"). So a bar in the States is priced in dollars even if the reporter's
+    /// phone is set to Sweden.
+    static func forCountry(_ iso: String) -> String {
+        Locale(identifier: "en_\(iso)").currency?.identifier ?? current
+    }
+
+    static func symbol(_ code: String) -> String {
+        switch code.uppercased() {
+        case "SEK", "NOK", "DKK", "ISK": return "kr"
+        case "EUR": return "€"
+        case "GBP": return "£"
+        case "USD", "AUD", "CAD", "NZD": return "$"
+        case "JPY", "CNY": return "¥"
+        case "PLN": return "zł"
+        case "CHF": return "CHF"
+        default:    return code.uppercased()
+        }
+    }
+
+    /// "65 kr", "¥600", "€6" — whole units, symbol placed by convention.
+    static func format(_ amount: Double, _ code: String) -> String {
+        let n = Int(amount.rounded())
+        let sym = symbol(code)
+        switch code.uppercased() {
+        case "SEK", "NOK", "DKK", "ISK", "PLN", "CHF": return "\(n) \(sym)"
+        default: return "\(sym)\(n)"
+        }
+    }
+}
+
+/// Crowdsourced beer price for one venue + serving size (migrations 061–064):
+/// the median recent price (in its own currency) plus spread and freshness.
+/// Decoded from the venue_beer_prices() RPC.
+struct VenueBeerPrice: Codable, Identifiable {
+    let venueId: UUID
+    let serving: String
+    let currency: String
+    let price: Double
+    let reportCount: Int
+    let low: Double
+    let high: Double
+    let lastReported: Date?
+
+    var id: String { "\(venueId.uuidString)-\(serving)" }
+
+    enum CodingKeys: String, CodingKey {
+        case venueId     = "venue_id"
+        case serving, currency
+        case price
+        case reportCount = "report_count"
+        case low, high
+        case lastReported = "last_reported"
+    }
+
+    var servingSize: BeerServing { BeerServing(rawValue: serving) ?? .s40 }
+    /// "65 kr" / "¥600" — the map-pin label in the price's own currency.
+    var priceLabel: String { BeerCurrency.format(price, currency) }
+    /// "1 report" / "12 reports" trust line.
+    var reportsLabel: String { reportCount == 1 ? "1 report" : "\(reportCount) reports" }
+    /// True when low and high differ enough to be worth showing a range.
+    var hasSpread: Bool { high - low >= 1 }
+}
+
 /// Name-matched local "secret menu" — when a user checks in to a venue
 /// whose name matches one of the patterns below, these specials are
 /// attached to that venue in memory and surface in the drink picker.
