@@ -363,32 +363,33 @@ final class VenueService: ObservableObject {
         specialsByVenue[venue.id] ?? []
     }
 
-    /// Live offers at a venue (Phase A deals map).
+    /// Live + currently-VISIBLE offers at a venue. "Show on valid days only"
+    /// campaigns are hidden outside their day/time window (isVisibleNow).
     func offers(for venue: Venue) -> [VenueOffer] {
-        offersByVenue[venue.id] ?? []
+        (offersByVenue[venue.id] ?? []).filter { $0.isVisibleNow() }
     }
 
-    /// Venues that currently have at least one live offer — the pins shown on
-    /// the deals map.
+    /// Venues that currently have at least one VISIBLE offer — the pins shown
+    /// on the deals map.
     var venuesWithOffers: [Venue] {
-        venues.filter { !(offersByVenue[$0.id]?.isEmpty ?? true) }
+        venues.filter { (offersByVenue[$0.id] ?? []).contains { $0.isVisibleNow() } }
     }
 
     /// A venue's artwork-carrying campaign, if any (poster or billboard
     /// placement) — drives the branded map pin + the poster banner.
     func posterOffer(for venue: Venue) -> VenueOffer? {
-        offersByVenue[venue.id]?.first { $0.hasArtPlacement }
+        offersByVenue[venue.id]?.first { $0.hasArtPlacement && $0.isVisibleNow() }
     }
 
     /// City-scale radius. Deals — pins, billboards, and the list — are all
     /// scoped to bars near the user; a global catalog shouldn't surface a bar
     /// on another continent. Shared so every surface uses the same cutoff.
     static let dealsRadiusMeters: CLLocationDistance = 50_000
-    /// "Near the bar" radius — used for the app-open interstitial and, on the
-    /// server, for deal-push targeting (migration 059). Much tighter than the
-    /// city-scale list radius: a promo/push should only reach people right
-    /// around the venue.
-    static let dealsProximityMeters: CLLocationDistance = 5_000
+    /// City-scale promo radius — used for the app-open interstitial and, on the
+    /// server, for deal-push targeting (migrations 059/060). Covers a whole
+    /// city + inner suburbs so promotions reach the city, not just a small
+    /// circle around the bar.
+    static let dealsProximityMeters: CLLocationDistance = 25_000
 
     private func meters(from location: CLLocation?, to venue: Venue) -> CLLocationDistance? {
         guard let here = location else { return nil }
@@ -408,7 +409,7 @@ final class VenueService: ObservableObject {
         venues.compactMap { v in
             guard isNearby(v, to: location) else { return nil }
             return offersByVenue[v.id]?
-                .first { $0.placement == "billboard" && ($0.billboardImageURL ?? $0.imageURL) != nil }
+                .first { $0.placement == "billboard" && $0.isVisibleNow() && ($0.billboardImageURL ?? $0.imageURL) != nil }
                 .map { ($0, v) }
         }
     }
@@ -425,7 +426,7 @@ final class VenueService: ObservableObject {
         for v in venues {
             guard let d = meters(from: location, to: v), d <= Self.dealsProximityMeters else { continue }
             guard let offer = offersByVenue[v.id]?.first(where: {
-                $0.interstitial && $0.imageURL != nil && !seen.contains($0.id)
+                $0.interstitial && $0.isVisibleNow() && $0.imageURL != nil && !seen.contains($0.id)
             }) else { continue }
             if best == nil || d < best!.dist { best = (offer, v, d) }
         }
@@ -1424,9 +1425,13 @@ struct InterstitialView: View {
                         .lineLimit(2)
                 }
                 if let valid = offer.validDaysLabel {
-                    Label(valid, systemImage: "calendar")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.65))
+                    HStack(spacing: 4) {
+                        Image(systemName: "calendar").font(.system(size: 11, weight: .bold, design: .rounded))
+                        Text(valid).font(.system(size: 12, weight: .black, design: .rounded))
+                    }
+                    .foregroundStyle(Color.ink)
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Capsule().fill(Color.whiskey))
                 }
 
                 Button(action: onSeeDeal) {
@@ -1609,6 +1614,20 @@ private struct BillboardCard: View {
                         .background(Capsule().fill(Color.ink.opacity(0.7)))
                         .padding(8)
                 }
+                    // Which days it's valid — pinned to the banner's top-right
+                    // so it reads even in the compact billboard.
+                    .overlay(alignment: .topTrailing) {
+                        if let vd = offer.validDaysPill {
+                            HStack(spacing: 3) {
+                                Image(systemName: "calendar").font(.system(size: 8, weight: .bold, design: .rounded))
+                                Text(vd).font(.system(size: 9, weight: .black, design: .monospaced)).tracking(0.6)
+                            }
+                            .foregroundStyle(Color.ink)
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(Capsule().fill(Color.whiskey))
+                            .padding(8)
+                        }
+                    }
 
                 // Info + CTA bar beneath the banner.
                 HStack(spacing: 10) {
@@ -1681,12 +1700,14 @@ private struct OfferRow: View {
                             .foregroundStyle(Color.cream.opacity(0.7))
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    // Which days/times the deal is actually redeemable — made
+                    // loud so a "valid Wednesdays" deal reads at a glance, even
+                    // when it's marketed all week.
                     HStack(spacing: 8) {
-                        // Which days the deal is actually redeemable — the
-                        // campaign still markets every day of its run.
-                        if let vd = offer.validDaysLabel { tag(vd, system: "calendar") }
+                        if let vd = offer.validDaysLabel { validPill(vd) }
                         if let w = offer.windowLabel { tag(w, system: "clock") }
                     }
+                    .padding(.top, 2)
                     if let fp = offer.finePrint {
                         Text(fp)
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -1749,6 +1770,18 @@ private struct OfferRow: View {
         .foregroundStyle(Color.whiskey)
         .padding(.horizontal, 7).padding(.vertical, 3)
         .background(Capsule().fill(Color.whiskey.opacity(0.12)))
+    }
+
+    /// The prominent validity pill — solid whiskey so the redeemable days
+    /// can't be missed ("Valid Wednesdays", "Valid Fri–Sat").
+    private func validPill(_ text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "calendar").font(.system(size: 10, weight: .bold, design: .rounded))
+            Text(text).font(.system(size: 11, weight: .black, design: .rounded))
+        }
+        .foregroundStyle(Color.ink)
+        .padding(.horizontal, 9).padding(.vertical, 4)
+        .background(Capsule().fill(Color.whiskey))
     }
 }
 

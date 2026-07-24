@@ -4977,7 +4977,7 @@ private struct DealsPromosModifier<Cover: View>: ViewModifier {
                 Button("Enable", action: onEnable)
                 Button("Not now", role: .cancel, action: onDecline)
             } message: {
-                Text("Get the occasional heads-up when a bar near you drops a happy hour or special — only bars close to you, and only a few a week. Turn it off anytime in your profile.")
+                Text("Get the occasional heads-up when a bar in your city drops a happy hour or special — only a few a week. Turn it off anytime in your profile.")
             }
             // Report a coarse location once a fix arrives (throttled + opt-in
             // gated inside reportLocation) so nearby-bar push can target it.
@@ -9191,6 +9191,8 @@ struct AdminOffer: Decodable, Identifiable {
     var billboardImageUrl: String? = nil
     /// App-open interstitial add-on flag (migration 057).
     var interstitial: Bool = false
+    /// Display schedule flag (migration 060) — show only on valid days/times.
+    var showOnValidOnly: Bool = false
     var impressions: Int = 0
     var taps: Int = 0
     /// Last-7-day impressions/taps for the admin "this week" line (migration 057).
@@ -9216,6 +9218,7 @@ struct AdminOffer: Decodable, Identifiable {
         case imageUrl = "image_url"
         case billboardImageUrl = "billboard_image_url"
         case interstitial
+        case showOnValidOnly = "show_on_valid_only"
         case impressions, taps
         case weekImpressions = "week_impressions"
         case weekTaps = "week_taps"
@@ -9278,7 +9281,7 @@ final class OffersAdminService: ObservableObject {
         kind: String, title: String, description: String, finePrint: String,
         placement: String, posterImageData: Data?, billboardImageData: Data?,
         startsAt: Date, endsAt: Date?, activeDays: [Int]?, startMinute: Int?, endMinute: Int?,
-        interstitial: Bool
+        interstitial: Bool, showOnValidOnly: Bool
     ) async -> Bool {
         struct P: Encodable {
             let p_name: String
@@ -9302,6 +9305,7 @@ final class OffersAdminService: ObservableObject {
             let p_image_url: String?
             let p_billboard_image_url: String?
             let p_interstitial: Bool
+            let p_show_on_valid_only: Bool
         }
         let iso = ISO8601DateFormatter()
         lastError = nil
@@ -9330,7 +9334,8 @@ final class OffersAdminService: ObservableObject {
                 p_placement: placement,
                 p_image_url: posterURL,
                 p_billboard_image_url: billboardURL,
-                p_interstitial: interstitial
+                p_interstitial: interstitial,
+                p_show_on_valid_only: showOnValidOnly
             )).execute()
             await load()
             return true
@@ -9348,7 +9353,7 @@ final class OffersAdminService: ObservableObject {
         kind: String, title: String, description: String, finePrint: String,
         placement: String, posterImageData: Data?, billboardImageData: Data?,
         startsAt: Date?, endsAt: Date?, activeDays: [Int]?, startMinute: Int?, endMinute: Int?,
-        interstitial: Bool
+        interstitial: Bool, showOnValidOnly: Bool
     ) async -> Bool {
         struct P: Encodable {
             let p_offer_id: String
@@ -9365,6 +9370,7 @@ final class OffersAdminService: ObservableObject {
             let p_image_url: String?
             let p_billboard_image_url: String?
             let p_interstitial: Bool
+            let p_show_on_valid_only: Bool
         }
         let iso = ISO8601DateFormatter()
         lastError = nil
@@ -9388,7 +9394,8 @@ final class OffersAdminService: ObservableObject {
                 p_placement: placement,
                 p_image_url: posterURL,
                 p_billboard_image_url: billboardURL,
-                p_interstitial: interstitial
+                p_interstitial: interstitial,
+                p_show_on_valid_only: showOnValidOnly
             )).execute()
             await load()
             return true
@@ -9788,6 +9795,7 @@ private struct CampaignComposer: View {
     @State private var billboardItem: PhotosPickerItem?
     @State private var billboardData: Data?
     @State private var interstitial: Bool
+    @State private var showOnValidOnly: Bool
     @State private var saving = false
 
     private let kinds = ["price", "happy_hour", "free_entry", "bundle", "event"]
@@ -9816,6 +9824,7 @@ private struct CampaignComposer: View {
         _hasEnd    = State(initialValue: o?.endsAt != nil)
         _endDate   = State(initialValue: o?.endsAt ?? Date().addingTimeInterval(7 * 24 * 3600))
         _interstitial = State(initialValue: o?.interstitial ?? false)
+        _showOnValidOnly = State(initialValue: o?.showOnValidOnly ?? false)
     }
 
     private var isEditing: Bool { editing != nil }
@@ -10110,6 +10119,24 @@ private struct CampaignComposer: View {
                 .tint(Color.whiskey)
             }
 
+            // Display schedule: market the whole window, or only appear on the
+            // valid days/times (a day-of reminder, e.g. Wednesday evenings).
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle(isOn: $showOnValidOnly) {
+                    Text("Only show on the valid days & times")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                }
+                .tint(Color.whiskey)
+                Text(showOnValidOnly
+                     ? "Card appears only on the selected days\(allDay ? "" : " during the time window") — a day-of reminder."
+                     : "Card is marketed across the whole window below.")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.cream.opacity(0.45))
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.cream.opacity(0.05)))
+
             // Marketing window: when the campaign starts showing, and (opt) ends.
             VStack(alignment: .leading, spacing: 8) {
                 kicker("MARKETING WINDOW")
@@ -10236,7 +10263,8 @@ private struct CampaignComposer: View {
                     kind: kind, title: title, description: desc, finePrint: finePrint,
                     placement: placement, posterImageData: poster, billboardImageData: billboard,
                     startsAt: startDate, endsAt: hasEnd ? endDate : nil, activeDays: daysArg,
-                    startMinute: startMin, endMinute: endMin, interstitial: inter
+                    startMinute: startMin, endMinute: endMin, interstitial: inter,
+                    showOnValidOnly: showOnValidOnly
                 )
             } else if let venue = selected {
                 ok = await svc.create(
@@ -10244,7 +10272,8 @@ private struct CampaignComposer: View {
                     kind: kind, title: title, description: desc, finePrint: finePrint,
                     placement: placement, posterImageData: poster, billboardImageData: billboard,
                     startsAt: startDate, endsAt: hasEnd ? endDate : nil, activeDays: daysArg,
-                    startMinute: startMin, endMinute: endMin, interstitial: inter
+                    startMinute: startMin, endMinute: endMin, interstitial: inter,
+                    showOnValidOnly: showOnValidOnly
                 )
             } else { ok = false }
             saving = false

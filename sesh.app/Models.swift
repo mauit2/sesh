@@ -709,6 +709,10 @@ struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
     var billboardImageUrl: String? = nil
     /// App-open full-screen promo flag (migration 057). Shown once per user.
     var interstitial: Bool = false
+    /// Display schedule (migration 060). When true the card only SHOWS on its
+    /// valid days + time window (a day-of reminder) instead of marketing the
+    /// whole starts_at..ends_at window.
+    var showOnValidOnly: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -723,6 +727,25 @@ struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
         case imageUrl    = "image_url"
         case billboardImageUrl = "billboard_image_url"
         case interstitial
+        case showOnValidOnly = "show_on_valid_only"
+    }
+
+    /// Whether this offer should be DISPLAYED right now. Always true unless the
+    /// bar chose "show on valid days only", in which case it only appears on
+    /// its active weekday(s) and within its time-of-day window (viewer's local
+    /// clock). Independent of redeemability — that's what activeDays labels.
+    func isVisibleNow(_ now: Date = Date(), calendar: Calendar = .current) -> Bool {
+        guard showOnValidOnly else { return true }
+        if let days = activeDays, !days.isEmpty {
+            let weekday = calendar.component(.weekday, from: now) - 1   // 0=Sun..6=Sat
+            if !days.contains(weekday) { return false }
+        }
+        if let s = startMinute, let e = endMinute {
+            let c = calendar.dateComponents([.hour, .minute], from: now)
+            let mins = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+            if mins < s || mins > e { return false }
+        }
+        return true
     }
 
     var imageURL: URL? { imageUrl.flatMap(URL.init(string:)) }
@@ -736,16 +759,32 @@ struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
     /// if present, else the poster image.
     var interstitialImageURL: URL? { billboardImageURL ?? imageURL }
 
-    /// "Valid Thu" / "Valid Fri–Sat" line, or nil when it runs every day.
+    /// Clear validity line for the guest: "Valid Wednesdays" (single day, plural
+    /// = recurring), "Valid Wed–Sat" (a run), "Valid Wed, Fri & Sat" (a list).
+    /// nil when the deal is valid every day (no restriction to surface).
     var validDaysLabel: String? {
         guard let days = activeDays, !days.isEmpty, days.count < 7 else { return nil }
-        let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        let plural = ["Sundays","Mondays","Tuesdays","Wednesdays","Thursdays","Fridays","Saturdays"]
+        let abbr   = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
         let sorted = days.filter { (0..<7).contains($0) }.sorted()
-        // Contiguous run → "Fri–Sat", else "Thu · Sat".
-        if sorted.count > 1, sorted.last! - sorted.first! == sorted.count - 1 {
-            return "Valid \(names[sorted.first!])–\(names[sorted.last!])"
+        if sorted.count == 1 { return "Valid \(plural[sorted[0]])" }
+        if sorted.last! - sorted.first! == sorted.count - 1 {
+            return "Valid \(abbr[sorted.first!])–\(abbr[sorted.last!])"      // contiguous run
         }
-        return "Valid " + sorted.map { names[$0] }.joined(separator: " · ")
+        let names = sorted.map { abbr[$0] }
+        return "Valid " + names.dropLast().joined(separator: ", ") + " & " + names.last!
+    }
+
+    /// Short pill form for tight spots: "WED ONLY" / "WED–SAT" / "WED · FRI".
+    var validDaysPill: String? {
+        guard let days = activeDays, !days.isEmpty, days.count < 7 else { return nil }
+        let abbr = ["SUN","MON","TUE","WED","THU","FRI","SAT"]
+        let sorted = days.filter { (0..<7).contains($0) }.sorted()
+        if sorted.count == 1 { return "\(abbr[sorted[0]]) ONLY" }
+        if sorted.last! - sorted.first! == sorted.count - 1 {
+            return "\(abbr[sorted.first!])–\(abbr[sorted.last!])"
+        }
+        return sorted.map { abbr[$0] }.joined(separator: " · ")
     }
 
     /// SF Symbol for the offer kind — drives the pin/row glyph.
