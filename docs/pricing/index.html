@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta name="referrer" content="no-referrer" />
+<meta name="color-scheme" content="dark" />
+<meta name="theme-color" content="#140f0b" />
+<title>Sesh for bars — pricing</title>
+<meta name="description" content="Put your bar on the Sesh Deals map. Pins, posters, billboards and push — reach people out drinking near you tonight." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#140f0b; --bg-elev:#1d1610; --cream:#f3e9d8; --cream-dim:#cdbfa8;
+    --whiskey:#e8843c; --bronze:#b3895a; --line:rgba(243,233,216,.10);
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{margin:0;color:var(--cream);font-family:"Hanken Grotesk",system-ui,sans-serif;-webkit-font-smoothing:antialiased;
+    background:radial-gradient(120% 90% at 85% -10%, rgba(232,132,60,.16), transparent 55%),
+               radial-gradient(90% 70% at -10% 0%, rgba(179,137,90,.09), transparent 50%), var(--bg);
+    overflow-x:hidden;}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.04;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+  .orb{position:fixed;z-index:0;pointer-events:none;width:48vmax;height:48vmax;border-radius:50%;
+    background:radial-gradient(circle at 40% 40%, rgba(232,132,60,.12), transparent 62%);top:-16vmax;right:-12vmax;}
+
+  .wrap{position:relative;z-index:1;max-width:1060px;margin:0 auto;padding:0 clamp(18px,4vw,32px);}
+  header.top{display:flex;align-items:center;justify-content:space-between;padding:26px 0 8px;}
+  .brand{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:24px;letter-spacing:-.01em;color:var(--cream);text-decoration:none;}
+  .brand span{color:var(--whiskey);}
+  .back{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--cream-dim);text-decoration:none;}
+  .back:hover{color:var(--whiskey);}
+
+  .hero{text-align:center;padding:52px 0 30px;}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:var(--whiskey);}
+  h1{font-family:"Fraunces",Georgia,serif;font-weight:800;letter-spacing:-.02em;line-height:1.02;
+    font-size:clamp(2.3rem,6vw,3.6rem);margin:.35em 0 .3em;text-wrap:balance;}
+  h1 em{font-style:italic;color:var(--whiskey);}
+  .lede{max-width:56ch;margin:0 auto;color:var(--cream-dim);font-size:clamp(1rem,2.2vw,1.15rem);line-height:1.65;}
+
+  .tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:36px 0 16px;}
+  @media (max-width:800px){.tiers{grid-template-columns:1fr;max-width:420px;margin-inline:auto;}}
+  .tier{position:relative;background:var(--bg-elev);border:1px solid var(--line);border-radius:20px;padding:26px 24px;display:flex;flex-direction:column;
+    box-shadow:0 24px 60px -34px rgba(0,0,0,.8);}
+  .tier.feature{border-color:color-mix(in srgb,var(--whiskey) 55%,transparent);
+    background:linear-gradient(180deg, rgba(232,132,60,.12), var(--bg-elev) 44%);}
+  .flag{position:absolute;top:0;right:20px;transform:translateY(-50%);font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    background:var(--whiskey);color:#1a1108;font-weight:700;padding:5px 10px;border-radius:100px;}
+  .flag.dim{background:var(--bg);color:var(--cream-dim);border:1px solid var(--line);}
+  .tier h3{font-family:"Fraunces",serif;font-weight:800;font-size:1.5rem;margin:2px 0 3px;}
+  .tier .sub{color:var(--cream-dim);font-size:.9rem;margin:0 0 16px;min-height:2.4em;}
+  .price{display:flex;align-items:baseline;gap:6px;margin-bottom:18px;}
+  .price .amt{font-family:"Fraunces",serif;font-weight:800;font-size:2.4rem;letter-spacing:-.02em;}
+  .price .per{color:var(--cream-dim);font-size:.85rem;font-family:var(--mono);}
+  ul{list-style:none;margin:0 0 4px;padding:0;display:flex;flex-direction:column;gap:10px;}
+  li{position:relative;padding-left:24px;font-size:.95rem;line-height:1.4;}
+  li::before{content:"";position:absolute;left:2px;top:.45em;width:8px;height:8px;border-radius:50%;background:var(--whiskey);}
+  li.muted{color:var(--cream-dim);}li.muted::before{background:var(--bronze);}
+
+  .addons{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;}
+  @media (max-width:640px){.addons{grid-template-columns:1fr;}}
+  .addon{background:var(--bg-elev);border:1px dashed var(--line);border-radius:18px;padding:20px 22px;}
+  .addon .h{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:8px;flex-wrap:wrap;}
+  .addon h4{font-family:"Fraunces",serif;font-weight:800;font-size:1.15rem;margin:0;}
+  .addon .tag{font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--whiskey);
+    background:rgba(232,132,60,.13);padding:4px 9px;border-radius:100px;white-space:nowrap;}
+  .addon p{margin:0;color:var(--cream-dim);font-size:.9rem;line-height:1.5;}
+
+  .strip{margin-top:24px;background:var(--bg-elev);border:1px solid var(--line);border-radius:18px;padding:22px 24px;
+    display:flex;gap:22px;align-items:center;flex-wrap:wrap;}
+  .strip .big{flex:1 1 300px;font-family:"Fraunces",serif;font-weight:700;font-size:1.1rem;line-height:1.35;letter-spacing:-.01em;}
+  .strip .big b{color:var(--whiskey);}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;}
+  .chip{font-family:var(--mono);font-size:.66rem;letter-spacing:.05em;color:var(--cream-dim);border:1px solid var(--line);border-radius:100px;padding:7px 12px;white-space:nowrap;}
+  .chip b{color:var(--cream);}
+
+  .cta{text-align:center;margin:44px 0 20px;}
+  .cta h2{font-family:"Fraunces",serif;font-weight:800;font-size:clamp(1.6rem,4vw,2.2rem);margin:0 0 6px;letter-spacing:-.01em;}
+  .cta p{color:var(--cream-dim);margin:0 0 20px;}
+  .btn{display:inline-block;background:var(--whiskey);color:#1a1108;font-weight:700;font-size:15px;text-decoration:none;
+    padding:15px 28px;border-radius:100px;box-shadow:0 14px 34px -12px rgba(232,132,60,.6);}
+  .btn:hover{filter:brightness(1.05);}
+
+  footer{margin:40px 0 30px;padding-top:20px;border-top:1px solid var(--line);color:var(--bronze);font-size:12px;
+    display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;font-family:var(--mono);letter-spacing:.06em;}
+  footer a{color:var(--bronze);text-decoration:none;}footer a:hover{color:var(--whiskey);}
+</style>
+</head>
+<body>
+<div class="orb" aria-hidden="true"></div>
+<div class="wrap">
+
+  <header class="top">
+    <a class="brand" href="/">Sesh<span>.</span></a>
+    <a class="back" href="/">← back to sesh</a>
+  </header>
+
+  <section class="hero">
+    <p class="eyebrow">Sesh for bars</p>
+    <h1>Put your bar in front of people <em>out drinking</em> tonight.</h1>
+    <p class="lede">Sesh users are on a night out, phone in hand, deciding where to go next. Land on the Deals map — from a simple pin to the full billboard. Monthly, cancel anytime.</p>
+  </section>
+
+  <section class="tiers">
+    <div class="tier">
+      <h3>Pin</h3>
+      <p class="sub">On the map with a live deal.</p>
+      <div class="price"><span class="amt">$29</span><span class="per">/ mo</span></div>
+      <ul>
+        <li>Your bar on the Deals map</li>
+        <li>One always-on offer</li>
+        <li>Shown in the tap-through card</li>
+      </ul>
+    </div>
+
+    <div class="tier feature">
+      <span class="flag">Most popular</span>
+      <h3>Poster</h3>
+      <p class="sub">Your brand, not just a dot.</p>
+      <div class="price"><span class="amt">$89</span><span class="per">/ mo</span></div>
+      <ul>
+        <li>Everything in Pin</li>
+        <li>Branded photo card on the map</li>
+        <li>Big, image-led pin that stands out</li>
+      </ul>
+    </div>
+
+    <div class="tier">
+      <span class="flag dim">Limited slots</span>
+      <h3>Billboard</h3>
+      <p class="sub">Top of Deals, rotating hero.</p>
+      <div class="price"><span class="amt">$199</span><span class="per">/ mo</span></div>
+      <ul>
+        <li>Everything in Poster</li>
+        <li>Rotating hero banner on Deals</li>
+        <li>Wide billboard artwork</li>
+        <li class="muted">Only a few per city — scarce by design</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="addons">
+    <div class="addon">
+      <div class="h"><h4>Push</h4><span class="tag">from $69/mo · $25/send</span></div>
+      <p>A notification to opted-in people <b>near your bar</b> — "happy hour's on." Capped at a few a week, muted overnight, so it stays a signal, not spam.</p>
+    </div>
+    <div class="addon">
+      <div class="h"><h4>App-open card</h4><span class="tag">$150 / card</span></div>
+      <p>A full-screen promo when a nearby guest opens Sesh — shown <b>once per person</b>. The loudest unit, added on to Billboard.</p>
+    </div>
+  </section>
+
+  <div class="strip">
+    <div class="big">One extra table of four on a quiet night ≈ <b>$80–160</b>. The map pays for itself.</div>
+    <div class="chips">
+      <span class="chip"><b>Founding bars −50%</b> · first 3 mo</span>
+      <span class="chip"><b>First month free</b> · Pin &amp; Poster</span>
+      <span class="chip"><b>Annual</b> · 2 months free</span>
+    </div>
+  </div>
+
+  <section class="cta">
+    <h2>Get your bar on the map.</h2>
+    <p>Tell us your bar and city — we'll set you up and send the first artwork.</p>
+    <a class="btn" href="mailto:contact@seshapp.xyz?subject=Sesh%20for%20bars">Email contact@seshapp.xyz</a>
+  </section>
+
+  <footer>
+    <span>Prices in USD · billed monthly · taxes not included</span>
+    <span><a href="/">seshapp.xyz</a> · <a href="/map/">the map</a></span>
+  </footer>
+</div>
+</body>
+</html>
