@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.apple-mapkit.com; style-src 'unsafe-inline' https://cdn.apple-mapkit.com https://fonts.googleapis.com; font-src https://cdn.apple-mapkit.com https://fonts.gstatic.com data:; img-src 'self' data: blob: https://*.apple-mapkit.com https://cdn.apple-mapkit.com https://lltuozmbxacxiepardys.supabase.co; connect-src https://*.apple-mapkit.com https://cdn.apple-mapkit.com https://lltuozmbxacxiepardys.supabase.co; worker-src blob:; child-src blob:; base-uri 'none'" />
+<meta name="referrer" content="no-referrer" />
+<meta name="color-scheme" content="light dark" />
+<meta name="theme-color" content="#0b0a08" />
+<link rel="icon" href="data:," />
+<title>Sesh — beer prices & deals map</title>
+<meta name="description" content="See what beer costs at bars around the world, and tonight's deals near you. Crowdsourced on Sesh." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600..900&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --ink:#0b0a08; --ink-elev:#13110e; --smoke:#312d26;
+    --cream:#f5ede0; --whiskey:#e8a84a; --bronze:#8a7f6e; --line:rgba(245,237,224,.12);
+    --disp:ui-rounded,"SF Pro Rounded",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{background:var(--ink);color:var(--cream);font-family:var(--disp);-webkit-font-smoothing:antialiased;overflow:hidden;}
+  #map{position:fixed;inset:0;background:var(--ink);}
+  button{font-family:var(--disp);cursor:pointer;}
+
+  .bar{position:fixed;z-index:1000;top:0;left:0;right:0;padding:12px clamp(12px,3vw,20px);
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    background:linear-gradient(180deg,rgba(11,10,8,.9),rgba(11,10,8,.55) 68%,transparent);pointer-events:none;}
+  .bar > *{pointer-events:auto;}
+  .brand{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:22px;letter-spacing:-.01em;color:var(--cream);text-decoration:none;text-shadow:0 1px 6px rgba(0,0,0,.5);}
+  .brand span{color:var(--whiskey);}
+  .count{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--cream);text-transform:uppercase;text-shadow:0 1px 6px rgba(0,0,0,.6);}
+  .spacer{flex:1 1 auto;}
+  .icon-btn{display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:12px;color:var(--cream);
+    background:rgba(11,10,8,.8);border:1px solid var(--line);padding:8px 13px;border-radius:999px;}
+  .icon-btn.primary{background:var(--whiskey);color:var(--ink);border-color:var(--whiskey);}
+  .seg{display:flex;background:rgba(11,10,8,.8);border:1px solid var(--line);border-radius:999px;padding:3px;}
+  .seg button{font-weight:700;font-size:12px;color:var(--cream);opacity:.7;background:none;border:0;padding:7px 15px;border-radius:999px;}
+  .seg button.on{background:var(--whiskey);color:var(--ink);opacity:1;}
+  .sizes{display:flex;gap:6px;flex-wrap:wrap;width:100%;}
+  .sizes button{font-weight:800;font-size:11px;color:var(--cream);opacity:.85;background:rgba(11,10,8,.8);border:1px solid var(--line);padding:6px 11px;border-radius:999px;}
+  .sizes button.on{background:var(--whiskey);color:var(--ink);border-color:var(--whiskey);opacity:1;}
+  .sizes.hide{display:none;}
+
+  .legend{position:fixed;z-index:900;left:clamp(12px,3vw,20px);bottom:20px;
+    background:rgba(11,10,8,.86);border:1px solid var(--line);border-radius:14px;padding:10px 12px;
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;color:var(--bronze);}
+  .legend .grad{height:7px;width:120px;border-radius:99px;margin:6px 0 4px;background:linear-gradient(90deg,hsl(122,72%,48%),hsl(60,72%,50%),hsl(0,72%,52%));}
+  .legend .ends{display:flex;justify-content:space-between;color:var(--cream);opacity:.8;}
+
+  .pin{width:0;height:0;}
+  .pin .pill{position:absolute;left:0;top:0;transform:translate(-50%,-50%);white-space:nowrap;font-weight:800;font-size:12.5px;
+    color:rgba(0,0,0,.85);padding:4px 9px;border-radius:999px;box-shadow:0 3px 8px rgba(0,0,0,.5);border:1.5px solid rgba(255,255,255,.75);}
+  .pin .dot{position:absolute;left:0;top:0;transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;background:var(--whiskey);
+    border:2px solid #fff;box-shadow:0 0 10px rgba(232,168,74,.6),0 3px 8px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-size:15px;}
+  .pin .art{position:absolute;left:0;top:0;transform:translate(-50%,-50%);width:52px;height:39px;border-radius:9px;object-fit:cover;
+    border:2px solid var(--whiskey);box-shadow:0 0 12px rgba(232,168,74,.55),0 3px 8px rgba(0,0,0,.55);}
+  .pin .drop{position:absolute;left:0;top:0;transform:translate(-50%,-100%);font-size:30px;filter:drop-shadow(0 3px 6px rgba(0,0,0,.6));}
+
+  .callout{background:var(--ink-elev);color:var(--cream);border:1px solid var(--line);border-radius:16px;padding:14px 16px;
+    box-shadow:0 14px 40px rgba(0,0,0,.6);min-width:170px;font-family:var(--disp);transform:translateY(-12px);}
+  .callout h3{margin:0 0 2px;font-size:16px;font-weight:800;}
+  .callout .sub{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;color:var(--bronze);text-transform:uppercase;}
+  .callout .big{font-weight:900;font-size:30px;margin:6px 0 2px;letter-spacing:-.01em;}
+  .callout .note{font-size:12.5px;color:var(--cream);opacity:.72;margin-top:4px;}
+
+  .drawer{position:fixed;z-index:1100;top:0;right:0;bottom:0;width:min(360px,90vw);background:var(--ink);border-left:1px solid var(--line);
+    transform:translateX(100%);transition:transform .28s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;box-shadow:-12px 0 40px rgba(0,0,0,.5);}
+  .drawer.open{transform:translateX(0);}
+  .drawer .dh{padding:16px 16px 10px;display:flex;align-items:center;gap:10px;}
+  .drawer .dh h2{margin:0;font-size:16px;font-weight:800;}
+  .drawer .dh .x{margin-left:auto;background:rgba(245,237,216,.06);border:0;color:var(--cream);opacity:.7;width:30px;height:30px;border-radius:50%;}
+  .drawer .search{margin:0 16px 8px;display:flex;gap:8px;align-items:center;background:rgba(245,237,216,.05);border:1px solid var(--line);border-radius:12px;padding:9px 11px;}
+  .drawer .search input{flex:1;background:none;border:0;color:var(--cream);font-size:14px;font-family:var(--disp);outline:none;}
+  .rows{flex:1;overflow:auto;padding:4px 12px 20px;}
+  .row{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:14px;border:1px solid var(--line);background:rgba(245,237,216,.04);margin-bottom:8px;cursor:pointer;}
+  .row .rp{font-weight:800;font-size:13px;color:rgba(0,0,0,.85);padding:5px 9px;border-radius:999px;min-width:52px;text-align:center;}
+  .row .rn{font-weight:800;font-size:14px;color:var(--cream);}
+  .row .rl{font-family:var(--mono);font-size:10px;color:var(--bronze);}
+  .empty{color:var(--bronze);font-size:13px;padding:24px 6px;text-align:center;}
+
+  .backdrop{position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:16px;}
+  .backdrop.open{display:flex;}
+  .modal{width:min(390px,94vw);max-height:90vh;overflow:auto;background:var(--ink);border:1px solid var(--line);border-radius:20px;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.6);}
+  .modal h2{margin:0 0 3px;font-size:20px;font-weight:800;}
+  .modal .lead{color:var(--cream);opacity:.6;font-size:13px;margin:0 0 14px;}
+  .lab{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--bronze);text-transform:uppercase;display:block;margin:12px 0 6px;}
+  .modal input,.modal select{width:100%;background:rgba(245,237,216,.05);border:1px solid var(--line);color:var(--cream);border-radius:12px;padding:11px 12px;font-size:15px;font-family:var(--disp);outline:none;}
+  .results{margin-top:8px;max-height:190px;overflow:auto;}
+  .rres{padding:9px 11px;border-radius:10px;cursor:pointer;border:1px solid transparent;}
+  .rres:hover{background:rgba(245,237,216,.05);border-color:var(--line);}
+  .rres b{display:block;font-size:14px;color:var(--cream);}
+  .rres span{font-size:11px;color:var(--bronze);}
+  .picked{margin-top:8px;background:rgba(232,168,74,.12);border:1px solid rgba(232,168,74,.4);border-radius:12px;padding:10px 12px;font-size:13px;font-weight:600;}
+  .modal .two{display:flex;gap:10px;} .modal .two > *{flex:1;}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;}
+  .chips button{font-weight:800;font-size:12px;color:var(--cream);opacity:.8;background:rgba(245,237,216,.05);border:1px solid var(--line);padding:8px 12px;border-radius:999px;}
+  .chips button.on{background:var(--whiskey);color:var(--ink);border-color:var(--whiskey);opacity:1;}
+  .modal .go{width:100%;margin-top:16px;background:var(--whiskey);color:var(--ink);border:0;border-radius:14px;padding:14px;font-weight:800;font-size:14px;}
+  .modal .go[disabled]{opacity:.4;}
+  .modal .cancel{width:100%;margin-top:8px;background:none;border:0;color:var(--cream);opacity:.5;font-size:13px;padding:6px;}
+  .modal .err{color:#e8756a;font-size:12.5px;font-weight:600;margin-top:10px;min-height:1em;}
+  .hidden{display:none;}
+  .toast{position:fixed;z-index:1300;left:50%;bottom:30px;transform:translateX(-50%);background:var(--ink-elev);color:var(--cream);border:1px solid var(--line);border-radius:12px;padding:11px 18px;font-weight:700;font-size:13px;display:none;}
+  .toast.on{display:block;}
+  .msg{position:fixed;z-index:800;top:50%;left:50%;transform:translate(-50%,-50%);font-family:var(--mono);font-size:12px;letter-spacing:.1em;color:var(--bronze);}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<header class="bar">
+  <a class="brand" href="/">Sesh<span>.</span></a>
+  <span class="count" id="count">loading…</span>
+  <div class="spacer"></div>
+  <button class="icon-btn" id="listBtn">☰ List</button>
+  <button class="icon-btn primary" id="addBtn">＋ Add price</button>
+  <div class="seg" id="modeSeg">
+    <button data-mode="prices" class="on">Beer prices</button>
+    <button data-mode="deals">Deals</button>
+  </div>
+  <div class="sizes" id="sizes"></div>
+</header>
+
+<div class="legend" id="legend">
+  CHEAPEST → PRICIEST NEARBY
+  <div class="grad"></div>
+  <div class="ends"><span>cheap</span><span>2× the cheapest</span></div>
+</div>
+
+<aside class="drawer" id="drawer">
+  <div class="dh"><h2 id="drawerTitle">Cheapest in view</h2><button class="x" id="drawerClose">✕</button></div>
+  <div class="search">🔍<input id="search" placeholder="Search a bar" autocomplete="off" /></div>
+  <div class="rows" id="rows"></div>
+</aside>
+
+<div class="backdrop" id="backdrop">
+  <div class="modal">
+    <h2>Add a beer price</h2>
+    <p class="lead">Search Apple Maps for the bar, then add its price.</p>
+    <label class="lab">Find the bar</label>
+    <input id="fSearch" placeholder="Bar, pub or restaurant name…" autocomplete="off" />
+    <div class="results" id="fResults"></div>
+    <div class="picked hidden" id="fPicked"></div>
+    <input id="fName" type="hidden" />
+    <div id="fDetails" class="hidden">
+      <label class="lab">Serving size</label>
+      <div class="chips" id="fSizes"></div>
+      <div class="two">
+        <div><label class="lab">Price</label><input id="fPrice" inputmode="decimal" placeholder="65" /></div>
+        <div><label class="lab">Currency</label><select id="fCur"></select></div>
+      </div>
+    </div>
+    <div class="err" id="fErr"></div>
+    <button class="go" id="fGo" disabled>Add price</button>
+    <button class="cancel" id="fCancel">Cancel</button>
+  </div>
+</div>
+
+<div class="toast" id="toast">Thanks — added to the map!</div>
+<div class="msg" id="msg">Loading the map…</div>
+
+<script src="https://cdn.apple-mapkit.com/mk/5.x.x/mapkit.js" crossorigin async data-callback="initMapKit" data-libraries="map,annotations,services"></script>
+<script>
+(function(){
+  "use strict";
+  var TOKEN="eyJhbGciOiJFUzI1NiIsImtpZCI6Ik02NjhNU0EzRk4iLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJIN0E0VEIzS1ZBIiwiaWF0IjoxNzg0OTc5MTY3LCJleHAiOjE4MDA1MzExNjcsIm9yaWdpbiI6Imh0dHBzOi8vc2VzaGFwcC54eXoifQ.peFBRBfuLv0-QI7hH4KppzuW4opNCbHDHVKrVhnliaJdW7iiIko3IEL7VImZNNwSvgf-dcmyqBMPofKly4kryg";
+  var SB_URL="https://lltuozmbxacxiepardys.supabase.co";
+  var SB_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsdHVvem1ieGFjeGllcGFyZHlzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3MTIyMDgsImV4cCI6MjA5MjI4ODIwOH0.dQzFgHJbSkUqz5eJ8d_X85g5M7SPCTNfOD4nIV5dz9I";
+
+  var SERVINGS=[["25","25 cl"],["33","33 cl"],["40","40 cl"],["50","50 cl"],["pint","Pint"]];
+  // Common first, then a broad world set so any bar's currency can be chosen.
+  var CURRENCIES=["SEK","NOK","DKK","EUR","GBP","USD","JPY","CHF","AUD","CAD","PLN","CZK",
+    "AED","ARS","BGN","BRL","CLP","CNY","COP","EGP","HKD","HUF","IDR","ILS","INR","ISK","KRW","MAD",
+    "MXN","MYR","NGN","NZD","PHP","QAR","RON","RSD","RUB","SAR","SGD","THB","TRY","TWD","UAH","VND","ZAR"];
+  var TRAIL={SEK:1,NOK:1,DKK:1,ISK:1,PLN:1,CHF:1,CZK:1,HUF:1,RON:1};
+  var SYM={SEK:"kr",NOK:"kr",DKK:"kr",ISK:"kr",EUR:"€",GBP:"£",USD:"$",JPY:"¥",CNY:"¥",PLN:"zł",CHF:"CHF",
+    CZK:"Kč",AUD:"$",CAD:"$",NZD:"$",HKD:"$",SGD:"$",MXN:"$",BRL:"R$",INR:"₹",KRW:"₩",TRY:"₺",RUB:"₽",
+    THB:"฿",ILS:"₪",PHP:"₱",ZAR:"R",HUF:"Ft"};
+  var CC2CUR={SE:"SEK",NO:"NOK",DK:"DKK",IS:"ISK",FI:"EUR",DE:"EUR",FR:"EUR",ES:"EUR",IT:"EUR",NL:"EUR",BE:"EUR",AT:"EUR",IE:"EUR",PT:"EUR",GR:"EUR",LU:"EUR",EE:"EUR",LV:"EUR",LT:"EUR",SK:"EUR",SI:"EUR",CY:"EUR",MT:"EUR",HR:"EUR",
+    GB:"GBP",US:"USD",JP:"JPY",CH:"CHF",PL:"PLN",CZ:"CZK",AU:"AUD",CA:"CAD",NZ:"NZD",CN:"CNY",HK:"HKD",SG:"SGD",
+    IN:"INR",KR:"KRW",TR:"TRY",RU:"RUB",TH:"THB",IL:"ILS",PH:"PHP",ZA:"ZAR",HU:"HUF",RO:"RON",BG:"BGN",RS:"RSD",UA:"UAH",
+    MX:"MXN",BR:"BRL",AR:"ARS",CL:"CLP",CO:"COP",AE:"AED",SA:"SAR",QA:"QAR",EG:"EGP",MA:"MAD",NG:"NGN",ID:"IDR",MY:"MYR",VN:"VND",TW:"TWD"};
+
+  function fmt(a,c){var n=Math.round(a),s=SYM[c]||c;return TRAIL[c]?(n+" "+s):(s+n);}
+  function esc(t){return String(t==null?"":t).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+  function servingLabel(x){return (SERVINGS.filter(function(s){return s[0]===x;})[0]||["",x])[1];}
+  function hav(aLat,aLon,bLat,bLon){var R=6371000,dLat=(bLat-aLat)*Math.PI/180,dLon=(bLon-aLon)*Math.PI/180,la1=aLat*Math.PI/180,la2=bLat*Math.PI/180;
+    var h=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)*Math.sin(dLon/2);return 2*R*Math.asin(Math.min(1,Math.sqrt(h)));}
+  function localCheapest(row,all){var best=row.price;for(var i=0;i<all.length;i++){var q=all[i];
+    if(q.serving!==row.serving||q.currency!==row.currency)continue;if(hav(row.lat,row.lon,q.lat,q.lon)<=200000)best=Math.min(best,q.price);}return best;}
+  function colorFor(p,cheap){var t=Math.min(1,Math.max(0,p/cheap-1));return "hsl("+Math.round((1-t)*122)+",72%,50%)";}
+
+  async function rpc(fn,args){
+    var r=await fetch(SB_URL+"/rest/v1/rpc/"+fn,{method:"POST",headers:{"Content-Type":"application/json","apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY},body:JSON.stringify(args||{})});
+    if(!r.ok){var t="";try{t=(await r.json()).message||"";}catch(e){}throw new Error(t||("HTTP "+r.status));}
+    return r.json();
+  }
+
+  var map,search,layerAnn=[],annById={},tempAnn=null;
+  var beerData=[],dealData=[],mode="prices",serving="40",addLoc=null,fSize="40",searchTimer;
+  var $=function(id){return document.getElementById(id);};
+  var countEl,msgEl;
+
+  window.initMapKit=function(){ mapkit.init({authorizationCallback:function(done){done(TOKEN);}}); boot(); };
+
+  function boot(){
+    countEl=$("count");msgEl=$("msg");
+    map=new mapkit.Map("map",{colorScheme:mapkit.Map.ColorSchemes.Dark,showsCompass:mapkit.FeatureVisibility.Hidden,
+      showsScale:mapkit.FeatureVisibility.Hidden,showsZoomControl:true,showsMapTypeControl:false,isRotationEnabled:false,
+      center:new mapkit.Coordinate(57.70,11.96),cameraDistance:9000});
+    search=new mapkit.Search({getsUserLocation:false});
+
+    SERVINGS.forEach(function(s){var b=document.createElement("button");b.textContent=s[1];b.dataset.serving=s[0];if(s[0]===serving)b.className="on";
+      b.onclick=function(){serving=s[0];[].forEach.call($("sizes").children,function(c){c.className=c.dataset.serving===serving?"on":"";});render();renderList();};$("sizes").appendChild(b);});
+    SERVINGS.forEach(function(s){var b=document.createElement("button");b.textContent=s[1];b.dataset.serving=s[0];if(s[0]===fSize)b.className="on";
+      b.onclick=function(){fSize=s[0];[].forEach.call($("fSizes").children,function(c){c.className=c.dataset.serving===fSize?"on":"";});validate();};$("fSizes").appendChild(b);});
+    CURRENCIES.forEach(function(c){var o=document.createElement("option");o.value=c;o.textContent=c+" ("+(SYM[c]||c)+")";$("fCur").appendChild(o);});
+
+    $("modeSeg").addEventListener("click",function(e){var btn=e.target.closest("button");if(!btn)return;mode=btn.dataset.mode;
+      [].forEach.call(this.children,function(c){c.className=c.dataset.mode===mode?"on":"";});$("sizes").className=mode==="prices"?"sizes":"sizes hide";$("legend").style.display=mode==="prices"?"":"none";render();});
+    $("listBtn").onclick=function(){$("drawer").classList.add("open");renderList();};
+    $("drawerClose").onclick=function(){$("drawer").classList.remove("open");};
+    $("search").addEventListener("input",renderList);
+    map.addEventListener("region-change-end",function(){if($("drawer").classList.contains("open"))renderList();});
+
+    $("addBtn").onclick=openAdd;
+    $("fCancel").onclick=closeAdd;
+    $("fPrice").addEventListener("input",validate);
+    $("fGo").onclick=submitAdd;
+    $("fSearch").addEventListener("input",function(){clearTimeout(searchTimer);var q=this.value.trim();
+      if(q.length<2){$("fResults").innerHTML="";return;}searchTimer=setTimeout(function(){doSearch(q);},280);});
+
+    Promise.all([rpc("public_beer_prices"),rpc("public_deals")]).then(function(res){
+      beerData=res[0].map(function(r){r.price=+r.price;return r;});dealData=res[1];msgEl.style.display="none";render();
+    }).catch(function(err){msgEl.textContent="Couldn't load the data.";console.error(err);});
+  }
+
+  function makePin(coord,html,popupHtml,id){
+    var ann=new mapkit.Annotation(coord,function(){var el=document.createElement("div");el.className="pin";el.innerHTML=html;return el;},{anchorOffset:new DOMPoint(0,0),calloutEnabled:!!popupHtml});
+    if(popupHtml){ann.callout={calloutElementForAnnotation:function(){var c=document.createElement("div");c.className="callout";c.innerHTML=popupHtml;return c;}};}
+    map.addAnnotation(ann);layerAnn.push(ann);if(id)annById[id]=ann;return ann;
+  }
+  function clearPins(){if(layerAnn.length)map.removeAnnotations(layerAnn);layerAnn=[];annById={};}
+
+  function popupBeer(r,cheap){var pct=r.price/cheap,v=pct<1.05?"Cheapest around":pct<1.25?"Cheap":pct<1.6?"About average":"On the pricey side";
+    var rep=r.report_count==1?"1 report":(r.report_count+" reports");
+    return '<div class="sub">'+esc(servingLabel(r.serving))+' · '+esc(rep)+'</div><h3>'+esc(r.venue_name)+'</h3><div class="big" style="color:'+colorFor(r.price,cheap)+'">'+fmt(r.price,r.currency)+'</div><div class="note">'+v+'</div>';}
+  function popupDeal(d){return '<div class="sub">'+esc(d.venue_name)+'</div><h3>'+esc(d.title)+'</h3>'+(d.description?'<div class="note">'+esc(d.description)+'</div>':'');}
+
+  function render(){
+    clearPins();
+    if(mode==="prices"){$("legend").style.display="";
+      beerData.filter(function(r){return r.serving===serving;}).forEach(function(r){var cheap=localCheapest(r,beerData);
+        makePin(new mapkit.Coordinate(r.lat,r.lon),'<span class="pill" style="background:'+colorFor(r.price,cheap)+'">'+fmt(r.price,r.currency)+'</span>',popupBeer(r,cheap),r.venue_id);});
+      var n=Object.keys(annById).length;countEl.textContent=n+(n===1?" bar":" bars");
+    }else{$("legend").style.display="none";
+      dealData.forEach(function(d){var h=d.image_url?'<img class="art" src="'+esc(d.image_url)+'" alt="" />':'<div class="dot">🍺</div>';makePin(new mapkit.Coordinate(d.lat,d.lon),h,popupDeal(d));});
+      countEl.textContent=dealData.length+(dealData.length===1?" deal":" deals");}
+    if(layerAnn.length){try{map.showItems(layerAnn,{animate:false,padding:new mapkit.Padding(100,60,60,60),minimumSpan:new mapkit.CoordinateSpan(0.01,0.01)});}catch(e){}}
+  }
+
+  function inView(r){var reg=map.region;if(!reg)return true;var c=reg.center,sp=reg.span;
+    return Math.abs(r.lat-c.latitude)<=sp.latitudeDelta/2 && Math.abs(r.lon-c.longitude)<=sp.longitudeDelta/2;}
+
+  function renderList(){
+    var q=$("search").value.trim().toLowerCase();
+    var rows=beerData.filter(function(r){return r.serving===serving && inView(r);})
+      .filter(function(r){return !q||r.venue_name.toLowerCase().indexOf(q)>=0;})
+      .sort(function(a,b){return a.price-b.price;});
+    $("drawerTitle").textContent="Cheapest "+servingLabel(serving)+" in view";
+    var host=$("rows");host.innerHTML="";
+    if(!rows.length){host.innerHTML='<div class="empty">'+(q?"No bars match here.":"No "+servingLabel(serving)+" prices in view — zoom out or pan.")+'</div>';return;}
+    rows.forEach(function(r){var cheap=localCheapest(r,beerData);var el=document.createElement("div");el.className="row";
+      el.innerHTML='<span class="rp" style="background:'+colorFor(r.price,cheap)+'">'+fmt(r.price,r.currency)+'</span><div><div class="rn">'+esc(r.venue_name)+'</div><div class="rl">'+esc(servingLabel(r.serving))+' · '+r.report_count+' rep</div></div>';
+      el.onclick=function(){if(mode!=="prices"){$("modeSeg").querySelector('[data-mode="prices"]').click();}
+        map.setRegionAnimated(new mapkit.CoordinateRegion(new mapkit.Coordinate(r.lat,r.lon),new mapkit.CoordinateSpan(0.02,0.02)));
+        var a=annById[r.venue_id];if(a)a.selected=true;$("drawer").classList.remove("open");};
+      host.appendChild(el);});
+  }
+
+  // ---- add via Apple Maps search ----
+  function openAdd(){addLoc=null;$("fSearch").value="";$("fResults").innerHTML="";$("fName").value="";$("fPrice").value="";$("fErr").textContent="";
+    $("fPicked").className="picked hidden";$("fDetails").className="hidden";$("backdrop").classList.add("open");validate();setTimeout(function(){$("fSearch").focus();},60);}
+  function closeAdd(){$("backdrop").classList.remove("open");if(tempAnn){map.removeAnnotation(tempAnn);tempAnn=null;}}
+
+  function doSearch(q){
+    try{
+      search.search(q,function(err,data){
+        if(err||!data){$("fResults").innerHTML="";return;}
+        var places=data.places||[];var host=$("fResults");host.innerHTML="";
+        places.slice(0,6).forEach(function(p){var el=document.createElement("div");el.className="rres";
+          el.innerHTML='<b>'+esc(p.name||"")+'</b><span>'+esc(p.formattedAddress||"")+'</span>';
+          el.onclick=function(){pickPlace(p);};host.appendChild(el);});
+        if(!places.length)host.innerHTML='<div class="empty">No matches — try the bar\'s name + city.</div>';
+      },{region:map.region});
+    }catch(e){console.error(e);}
+  }
+
+  function pickPlace(p){
+    addLoc={lat:p.coordinate.latitude,lon:p.coordinate.longitude};
+    $("fName").value=p.name||"";
+    var cc=(p.countryCode||"")+"";if(cc&&CC2CUR[cc])$("fCur").value=CC2CUR[cc];
+    $("fSearch").value=p.name||"";$("fResults").innerHTML="";
+    $("fPicked").className="picked";$("fPicked").textContent="📍 "+(p.name||"")+(p.formattedAddress?" · "+p.formattedAddress:"");
+    $("fDetails").className="";
+    if(tempAnn)map.removeAnnotation(tempAnn);
+    tempAnn=new mapkit.Annotation(p.coordinate,function(){var el=document.createElement("div");el.className="pin";el.innerHTML='<div class="drop">📍</div>';return el;},{anchorOffset:new DOMPoint(0,0)});
+    map.addAnnotation(tempAnn);
+    validate();
+  }
+
+  function validate(){$("fGo").disabled=!(addLoc&&$("fName").value.trim()&&parseFloat(($("fPrice").value||"").replace(",","."))>0);}
+  function toast(t){var el=$("toast");el.textContent=t;el.classList.add("on");setTimeout(function(){el.classList.remove("on");},2600);}
+  async function reload(){var d=await rpc("public_beer_prices");beerData=d.map(function(r){r.price=+r.price;return r;});render();if($("drawer").classList.contains("open"))renderList();}
+
+  async function submitAdd(){
+    if(!addLoc)return;var price=parseFloat(($("fPrice").value||"").replace(",","."));$("fGo").disabled=true;$("fErr").textContent="";
+    try{
+      await rpc("submit_beer_price_web",{p_name:$("fName").value.trim(),p_lat:addLoc.lat,p_lon:addLoc.lon,p_price:price,p_serving:fSize,p_currency:$("fCur").value});
+      closeAdd();await reload();toast("Thanks — added to the map!");
+    }catch(err){var m=String(err.message||err);
+      $("fErr").textContent=m.indexOf("implausible")>=0?"That price looks off for this currency — double-check it.":m.indexOf("name_required")>=0?"Pick a bar first.":"Couldn't save — try again.";
+      $("fGo").disabled=false;}
+  }
+})();
+</script>
+</body>
+</html>

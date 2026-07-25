@@ -102,14 +102,15 @@ struct BeerPriceDetailCard: View {
     let venue: Venue
     @ObservedObject var venues: VenueService
     let serving: BeerServing
-    /// Nearby average price for `serving` (for the "cheaper than nearby" line).
-    let areaAverage: Double?
-    /// Cheapest nearby price per serving code — the green anchor for colours.
-    let cheapestByServing: [String: Double]
     let onReport: (BeerPriceTarget) -> Void
     let onPickServing: (BeerServing) -> Void
 
-    private func cheapest(_ p: VenueBeerPrice) -> Double { cheapestByServing[p.serving] ?? p.price }
+    /// Cheapest same-serving, same-currency beer in this bar's region — the
+    /// green anchor, so colours reflect local prices, not the whole world.
+    private func cheapest(_ p: VenueBeerPrice) -> Double {
+        venues.localCheapest(serving: p.serving, currency: p.currency,
+                             near: venues.coordinate(for: venue), own: p.price)
+    }
 
     var body: some View {
         let all = venues.servingPrices(for: venue)
@@ -178,9 +179,10 @@ struct BeerPriceDetailCard: View {
                 chip("\(Int(p.low.rounded()))–\(Int(p.high.rounded())) kr", system: "arrow.left.and.right")
             }
         }
-        if let a = areaAverage, abs(p.price - a) >= a * 0.03 {
+        if let a = venues.localAverage(serving: p.serving, currency: p.currency, near: venues.coordinate(for: venue)),
+           abs(p.price - a) >= a * 0.03 {
             let cheaper = p.price < a
-            Label("\(BeerCurrency.format(abs(p.price - a), p.currency)) \(cheaper ? "cheaper" : "pricier") than nearby",
+            Label("\(BeerCurrency.format(abs(p.price - a), p.currency)) \(cheaper ? "cheaper" : "pricier") than the \(p.servingSize.label) average nearby",
                   systemImage: cheaper ? "arrow.down.right" : "arrow.up.right")
                 .font(.system(size: 12, weight: .heavy, design: .rounded))
                 .foregroundStyle(cheaper ? BeerPriceScale.good : Color.cream.opacity(0.8))
@@ -412,14 +414,34 @@ struct BeerPriceSubmitSheet: View {
         }
     }
 
+    /// Every ISO currency, common ones first — so a user anywhere can pick the
+    /// right one if auto-detection is off.
+    private var currencyOptions: [String] {
+        let common = ["SEK","NOK","DKK","EUR","GBP","USD","JPY","CHF","AUD","CAD","PLN","CZK"]
+        let all = Locale.commonISOCurrencyCodes.sorted()
+        return common + all.filter { !common.contains($0) }
+    }
+
     private var priceEntry: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 SectionLabel("PRICE")
                 Spacer()
-                Text("in \(currencyCode)")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced)).tracking(1)
-                    .foregroundStyle(Color.cream.opacity(0.4))
+                // Auto-detected from the bar's country; tap to override to any
+                // currency (e.g. when the location couldn't be resolved).
+                Menu {
+                    ForEach(currencyOptions, id: \.self) { code in
+                        Button { currencyCode = code } label: { Text("\(code)  \(BeerCurrency.symbol(code))") }
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(currencyCode).font(.system(size: 11, weight: .heavy, design: .rounded))
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold, design: .rounded))
+                    }
+                    .foregroundStyle(Color.whiskey)
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(Capsule().fill(Color.whiskey.opacity(0.14)))
+                }
             }
             HStack(spacing: 8) {
                 TextField("", text: $priceText, prompt: Text("e.g. 65").foregroundStyle(Color.cream.opacity(0.35)))

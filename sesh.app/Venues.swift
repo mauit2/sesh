@@ -408,6 +408,41 @@ final class VenueService: ObservableObject {
         venues.filter { !(beerPricesByVenue[$0.id]?.isEmpty ?? true) }
     }
 
+    /// How far "this area" reaches when comparing prices — a region/country
+    /// scale. Colours anchor to the cheapest beer WITHIN this radius (and same
+    /// currency), so a bar reads cheap/pricey relative to its own area, not the
+    /// whole world.
+    static let beerRegionMeters: CLLocationDistance = 200_000
+
+    /// Prices of the same serving + currency at bars within `beerRegionMeters`
+    /// of a coordinate — the local comparison set.
+    private func localBeerPrices(serving: String, currency: String,
+                                 near coord: CLLocationCoordinate2D) -> [Double] {
+        let origin = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+        var out: [Double] = []
+        for v in venues {
+            guard let arr = beerPricesByVenue[v.id] else { continue }
+            let c = coordinate(for: v)
+            guard CLLocation(latitude: c.latitude, longitude: c.longitude)
+                    .distance(from: origin) <= Self.beerRegionMeters else { continue }
+            for p in arr where p.serving == serving && p.currency == currency { out.append(p.price) }
+        }
+        return out
+    }
+
+    /// Cheapest same-serving, same-currency beer in this bar's region — the
+    /// green anchor for its colour. Falls back to the bar's own price.
+    func localCheapest(serving: String, currency: String, near coord: CLLocationCoordinate2D, own: Double) -> Double {
+        localBeerPrices(serving: serving, currency: currency, near: coord).min() ?? own
+    }
+
+    /// Regional average for a serving + currency — the "vs typical" baseline.
+    func localAverage(serving: String, currency: String, near coord: CLLocationCoordinate2D) -> Double? {
+        let ps = localBeerPrices(serving: serving, currency: currency, near: coord)
+        guard ps.count > 1 else { return nil }
+        return ps.reduce(0, +) / Double(ps.count)
+    }
+
     /// Record a price for a serving. Finds-or-creates the bar server-side, then
     /// refreshes the map. `name/lat/lon/externalId` carry the MapKit identity
     /// when the bar isn't in our DB yet.
@@ -987,14 +1022,16 @@ private struct OffersMapView: View {
     private let radiusMeters = VenueService.dealsRadiusMeters
 
     private var pins: [Venue] {
-        // Only venues with live campaigns exist here — and campaigns are
-        // admin-created (paid), so the Deals map is pay-to-play by design.
-        withinRadius(venues.venuesWithOffers)
+        // Every venue with a live campaign, shown EVERYWHERE (like the beer
+        // map) — zoom out to see deals in other cities. Targeting for who gets
+        // pushed/promoted still uses the tight radius; this is just discovery.
+        venues.venuesWithOffers
     }
 
-    /// Bars with a price for the selected serving — the dots in price mode.
+    /// Bars with a price for the selected serving — shown EVERYWHERE, not just
+    /// near you. Zoom out to see prices across the whole world.
     private var pricePins: [Venue] {
-        withinRadius(venues.venuesWithBeerPrice(serving: selectedServing))
+        venues.venuesWithBeerPrice(serving: selectedServing)
     }
 
     private func withinRadius(_ list: [Venue]) -> [Venue] {
@@ -1003,31 +1040,6 @@ private struct OffersMapView: View {
             let c = venues.coordinate(for: $0)
             return CLLocation(latitude: c.latitude, longitude: c.longitude).distance(from: here) <= radiusMeters
         }
-    }
-
-    /// Cheapest beer (selected serving) among the visible pins — the header hook.
-    private var cheapestPrice: VenueBeerPrice? {
-        pricePins.compactMap { venues.beerPrice(for: $0, serving: selectedServing) }.min { $0.price < $1.price }
-    }
-
-    /// Average price for the selected serving across the visible pins — feeds
-    /// the "cheaper than nearby" comparison in the detail card.
-    private var areaAverage: Double? {
-        let ps = pricePins.compactMap { venues.beerPrice(for: $0, serving: selectedServing)?.price }
-        guard !ps.isEmpty else { return nil }
-        return ps.reduce(0, +) / Double(ps.count)
-    }
-
-    /// Cheapest nearby price per serving — the green anchor for the relative
-    /// colour scale. Computed over every priced bar within the city radius.
-    private var cheapestByServing: [String: Double] {
-        var m: [String: Double] = [:]
-        for v in withinRadius(venues.venuesWithAnyBeerPrice) {
-            for p in venues.servingPrices(for: v) {
-                m[p.serving] = min(m[p.serving] ?? .greatestFiniteMagnitude, p.price)
-            }
-        }
-        return m
     }
 
     var body: some View {
@@ -1057,7 +1069,8 @@ private struct OffersMapView: View {
                         Annotation(venue.name, coordinate: venues.coordinate(for: venue)) {
                             if let p = venues.beerPrice(for: venue, serving: selectedServing) {
                                 BeerPricePin(price: p,
-                                             cheapest: cheapestByServing[selectedServing.rawValue] ?? p.price,
+                                             cheapest: venues.localCheapest(serving: p.serving, currency: p.currency,
+                                                                            near: venues.coordinate(for: venue), own: p.price),
                                              selected: selectedVenue?.id == venue.id)
                                     .onTapGesture { selectedVenue = venue }
                             }
@@ -1080,6 +1093,16 @@ private struct OffersMapView: View {
                     }
                 }
             }
+
+            // Contribute nudge — the price map is only as good as the crowd, so
+            // when there's nothing nearby yet, invite the user to seed it.
+            if mapMode == .prices, selectedVenue == nil, pricePins.isEmpty {
+                VStack {
+                    Spacer()
+                    contributeCard
+                    Spacer()
+                }
+            }
         }
         // The venue card is a real sheet — reliable buttons + dismiss, and the
         // medium detent leaves the pin visible on the map above it.
@@ -1092,8 +1115,7 @@ private struct OffersMapView: View {
                 } else {
                     BeerPriceDetailCard(
                         venue: venue, venues: venues,
-                        serving: selectedServing, areaAverage: areaAverage,
-                        cheapestByServing: cheapestByServing,
+                        serving: selectedServing,
                         onReport: { target in
                             selectedVenue = nil
                             submitPreset = target
@@ -1204,8 +1226,9 @@ private struct OffersMapView: View {
 
     private var headerValue: String {
         if mapMode == .deals { return "\(pins.count) \(pins.count == 1 ? "spot" : "spots")" }
-        if let c = cheapestPrice { return "from \(c.priceLabel)" }
-        return pricePins.isEmpty ? "tap ＋ to add" : "\(pricePins.count) bars"
+        // Global map now, mixed currencies — a single "cheapest" is meaningless,
+        // so just count the priced bars.
+        return pricePins.isEmpty ? "tap ＋ to add" : "\(pricePins.count) \(pricePins.count == 1 ? "bar" : "bars")"
     }
 
     private var modeToggle: some View {
@@ -1231,6 +1254,40 @@ private struct OffersMapView: View {
                 .background(Capsule().fill(mapMode == mode ? Color.whiskey : .clear))
         }
         .buttonStyle(.plain)
+    }
+
+    /// Empty-state nudge to seed the beer-price map.
+    private var contributeCard: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "mug.fill")
+                .font(.system(size: 30, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.whiskey)
+            Text("Help build the beer map")
+                .font(.system(size: 18, weight: .heavy, design: .rounded))
+                .foregroundStyle(Color.cream)
+            Text("No prices near you yet. Add what a beer costs at a bar you know — it takes 10 seconds and helps everyone find the cheap ones.")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.65))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button { submitPreset = nil; submitOpen = true } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus.circle.fill").font(.system(size: 15, weight: .bold, design: .rounded))
+                    Text("ADD A PRICE").font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(1.4)
+                }
+                .foregroundStyle(Color.ink)
+                .padding(.horizontal, 22).padding(.vertical, 13)
+                .background(Capsule().fill(Color.whiskey))
+                .shadow(color: Color.whiskey.opacity(0.4), radius: 14, y: 6)
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+        .padding(24)
+        .frame(maxWidth: 320)
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.ink.opacity(0.9)))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.whiskey.opacity(0.25), lineWidth: 1))
+        .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
+        .padding(.horizontal, 24)
     }
 
     private func circleButton(_ system: String, action: @escaping () -> Void) -> some View {

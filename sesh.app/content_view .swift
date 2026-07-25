@@ -4870,6 +4870,7 @@ private struct WelcomeTourView: View {
 private struct ProfileAndTourModifier: ViewModifier {
     @Binding var profileOpen: Bool
     @Binding var tourOpen: Bool
+    @Binding var walkthroughOpen: Bool
     let seenKey: String
     let profile: Profile
     @ObservedObject var auth: AuthService
@@ -4883,7 +4884,8 @@ private struct ProfileAndTourModifier: ViewModifier {
                 ProfileSheet(
                     profile: profile, auth: auth, admin: admin,
                     friends: friends, feed: feed,
-                    onReplayTour: { tourOpen = true }
+                    onReplayTour: { tourOpen = true },
+                    onWalkthrough: { profileOpen = false; walkthroughOpen = true }
                 )
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
@@ -5057,6 +5059,8 @@ private struct SessionView: View {
     @State private var profileOpen = false
     /// The app-open Deals interstitial payload, when one is due to show.
     @State private var interstitial: InterstitialPayload? = nil
+    /// The full guided walkthrough overlay (launched from the profile).
+    @State private var walkthroughActive = false
     /// One-time "want deals from nearby bars?" opt-in ask, shown the first
     /// time the user lands on the Deals tab.
     @State private var dealPromptOpen = false
@@ -6211,6 +6215,7 @@ private struct SessionView: View {
                 .presentationBackground(Color.ink)
         }
         .modifier(profileSheets)
+        .modifier(WalkthroughModifier(tab: $tab, active: $walkthroughActive))
         .sheet(isPresented: $friendsSheetOpen) {
             FriendsView(friends: friends, auth: auth, feed: feed)
                 .presentationBackground(Color.ink)
@@ -6480,6 +6485,7 @@ private struct SessionView: View {
         ProfileAndTourModifier(
             profileOpen: $profileOpen,
             tourOpen: $tourOpen,
+            walkthroughOpen: $walkthroughActive,
             seenKey: tourSeenKey,
             profile: profile,
             auth: auth,
@@ -8407,6 +8413,8 @@ private struct ProfileSheet: View {
     @ObservedObject var feed: FeedService
     /// Re-opens the first-run walkthrough (closes this sheet first).
     var onReplayTour: (() -> Void)? = nil
+    /// Launches the full guided walkthrough over the live app.
+    var onWalkthrough: (() -> Void)? = nil
 
     /// The user's own posted seshs (Instagram-style grid) + a tapped one.
     @State private var myPosts: [TimelinePost] = []
@@ -8435,11 +8443,13 @@ private struct ProfileSheet: View {
     init(
         profile: Profile, auth: AuthService, admin: AdminService,
         friends: FriendsService, feed: FeedService,
-        onReplayTour: (() -> Void)? = nil
+        onReplayTour: (() -> Void)? = nil,
+        onWalkthrough: (() -> Void)? = nil
     ) {
         self.profile = profile
         self.auth = auth
         self.admin = admin
+        self.onWalkthrough = onWalkthrough
         self.friends = friends
         self.feed = feed
         self.onReplayTour = onReplayTour
@@ -8850,6 +8860,45 @@ private struct ProfileSheet: View {
                                         .tracking(2.0)
                                         .foregroundStyle(Color.cream)
                                     Text("Questions or trouble? We're here.")
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.55))
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.bronze)
+                            }
+                            .padding(.vertical, 14)
+                            .padding(.horizontal, 18)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(Color.whiskey.opacity(0.08))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+
+                    // Full guided walkthrough — steps through every live screen
+                    // and annotates its functions.
+                    if let onWalkthrough {
+                        Button {
+                            dismiss()
+                            onWalkthrough()
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.whiskey)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("FULL WALKTHROUGH")
+                                        .font(.system(size: 12, weight: .black, design: .monospaced))
+                                        .tracking(2.0)
+                                        .foregroundStyle(Color.cream)
+                                    Text("A guided tour of every screen and what it does.")
                                         .font(.system(size: 11, weight: .medium, design: .rounded))
                                         .foregroundStyle(Color.cream.opacity(0.55))
                                 }
@@ -12010,42 +12059,45 @@ private struct GroupSheet: View {
                                 .font(.system(size: 11, weight: .black, design: .monospaced))
                                 .tracking(1.6)
                         }
-                        .foregroundStyle(Color.ink)
+                        // Secondary now — INVITE FRIENDS below is the primary CTA.
+                        .foregroundStyle(Color.whiskey)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                         .background(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.whiskey)
+                                .fill(Color.inkElev)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(Color.whiskey.opacity(0.45), lineWidth: 1)
                         )
                     }
                     .buttonStyle(PressScaleStyle())
                 }
 
-                // Pull friends straight in — or search anyone by username.
+                // Pull friends straight in — the primary action, so make it
+                // unmistakable: full whiskey with a glow.
                 Button {
                     friendPickerOpen = true
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "person.2.fill")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .font(.system(size: 13, weight: .heavy, design: .rounded))
                         Text("INVITE FRIENDS")
-                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .font(.system(size: 12, weight: .black, design: .monospaced))
                             .tracking(1.6)
                         Spacer()
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
                     }
-                    .foregroundStyle(Color.cream)
-                    .padding(.vertical, 14)
+                    .foregroundStyle(Color.ink)
+                    .padding(.vertical, 15)
                     .padding(.horizontal, 16)
                     .background(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.inkElev)
+                            .fill(Color.whiskey)
                     )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
-                    )
+                    .shadow(color: Color.whiskey.opacity(0.45), radius: 14, y: 6)
                 }
                 .buttonStyle(PressScaleStyle())
                 .padding(.top, 4)
@@ -14028,17 +14080,20 @@ private struct LiveSeshView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
+                        // Solid elevated tile (was a faint translucent wash) so
+                        // each recent drink reads clearly.
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.whiskey.opacity(shareModeActive ? 0.16 : 0.10))
+                                .fill(Color.inkElev)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
                                 .strokeBorder(
-                                    Color.whiskey.opacity(shareModeActive ? 0.55 : 0.35),
+                                    Color.whiskey.opacity(shareModeActive ? 0.6 : 0.32),
                                     lineWidth: 1
                                 )
                         )
+                        .shadow(color: .black.opacity(0.35), radius: 5, y: 2)
                     }
                     .buttonStyle(PressScaleStyle())
                 }
@@ -14048,27 +14103,24 @@ private struct LiveSeshView: View {
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: shareModeActive ? "person.2.fill" : "plus")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.bronze)
+                        .font(.system(size: 13, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.ink)
                     Text(shareModeActive ? "MORE SHARED DRINKS" : "MORE DRINKS")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .font(.system(size: 12, weight: .black, design: .monospaced))
                         .tracking(2.0)
-                        .foregroundStyle(Color.cream.opacity(0.85))
+                        .foregroundStyle(Color.ink)
                     Spacer()
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.bronze)
+                        .foregroundStyle(Color.ink.opacity(0.6))
                 }
                 .padding(.horizontal, 14)
-                .padding(.vertical, 12)
+                .padding(.vertical, 13)
                 .background(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.inkElev)
+                        .fill(Color.whiskey)
                 )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
-                )
+                .shadow(color: Color.whiskey.opacity(0.4), radius: 12, y: 6)
             }
             .buttonStyle(PressScaleStyle())
         }
