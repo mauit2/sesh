@@ -147,6 +147,8 @@
 
   function onScroll() {
     sweep();
+    // the top menu only frosts once you've left the hero
+    document.documentElement.classList.toggle("scrolled", window.scrollY > 40);
     const doc = document.documentElement;
     const max = doc.scrollHeight - window.innerHeight;
     const p = max > 4 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
