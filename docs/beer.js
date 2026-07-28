@@ -1,9 +1,22 @@
 /* seshapp.xyz — the pint.
  *
  * One fixed canvas behind the page. The beer level tracks scroll (a sip at the
- * top, brim-full at the bottom) and the surface is a 1-D spring lattice, so the
- * pointer stirs real waves that travel and bounce off the edges. Bubbles rise
- * and nudge the surface when they pop. One rAF loop, no dependencies.
+ * top, brim-full at the bottom). Realism comes from four layered motions:
+ *
+ *  - a 1-D spring lattice for ripples that travel and reflect off the walls,
+ *    with a light neighbour blur so fine chop dies fast and long waves glide
+ *    (viscosity damps high frequencies first, like real liquid);
+ *  - the container's fundamental slosh mode — the whole surface rocks as
+ *    cos(πx/W) on a damped ~2.3 s oscillator, which is the motion you actually
+ *    see when you knock a glass;
+ *  - a foam head: a thickness field riding the surface that fattens where the
+ *    liquid is agitated and where bubbles pop, then diffuses and relaxes;
+ *  - carbonation streams from fixed nucleation points, bubbles accelerating as
+ *    they rise (buoyancy) and feeding the head when they burst.
+ *
+ * Dragging the pointer through the beer ploughs a wake (pushed ahead, lifted
+ * behind) and feeds the rocking mode. Scrolling up leaves lacing rings on the
+ * glass as the level recedes. One rAF loop, no dependencies.
  */
 (() => {
   "use strict";
@@ -24,9 +37,16 @@
   const vel = new Float32Array(N);  // velocity
   const acc = new Float32Array(N);  // scratch: neighbour pull
   const K = 0.02;                   // stiffness back to rest
-  const DAMP = 0.985;
+  const DAMP = 0.988;
   const SPREAD = 0.18;              // wave speed — must stay under .5 to be stable
   const CLAMP = 34;
+  const BLUR = 0.06;                // viscosity: bleed into neighbours per frame
+
+  /* ---------- the slosh mode ---------- */
+  // First mode of a rocked container: surface shape cos(πx/W), one damped
+  // oscillator for the whole glass. ω² = SLOSH_K → ~2.3 s period.
+  const SLOSH_K = 7.5, SLOSH_C = 0.6;
+  let sloshP = 0, sloshV = 0;
 
   const REST = 0.055;               // level with the page at the very top
   let level = REST, target = REST;  // 0 = empty, 1 = full viewport
@@ -35,7 +55,11 @@
   let t = 0;
 
   let W = 0, H = 0;
-  let bubbles = [], foam = [];
+  let bubbles = [], streams = [], laces = [], foamBits = [];
+  let grain = null;                 // pre-rendered speckle for the liquid
+  const FOAM_BASE = 7.2;
+  const foamH = new Float32Array(N).fill(FOAM_BASE);  // head thickness (px)
+  let laceAnchor = 0;
 
   /* ---------- setup ---------- */
   function resize() {
@@ -47,37 +71,67 @@
     canvas.style.width = W + "px";
     canvas.style.height = H + "px";
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // haze in the liquid: a tiny speckle tile, stretched by the ctx transform
+    const gc = document.createElement("canvas");
+    gc.width = gc.height = 96;
+    const g2 = gc.getContext("2d");
+    for (let i = 0; i < 340; i++) {
+      g2.fillStyle = Math.random() < 0.5
+        ? "rgba(255,235,190," + (0.05 + Math.random() * 0.1) + ")"
+        : "rgba(90,40,10," + (0.05 + Math.random() * 0.09) + ")";
+      const r = Math.random() * 1.4;
+      g2.beginPath();
+      g2.arc(Math.random() * 96, Math.random() * 96, r, 0, Math.PI * 2);
+      g2.fill();
+    }
+    grain = ctx.createPattern(gc, "repeat");
     seed();
     onScroll();
+    laceAnchor = baseY();
     if (reduce) draw();
   }
 
   function seed() {
-    const nb = Math.round(Math.max(20, Math.min(54, W / 24)));
+    const nb = Math.round(Math.max(16, Math.min(44, W / 30)));
     bubbles = [];
-    for (let i = 0; i < nb; i++) bubbles.push(newBubble(Math.random()));
-    const nf = Math.round(Math.max(26, Math.min(80, W / 15)));
-    foam = [];
-    for (let i = 0; i < nf; i++) {
-      foam.push({
-        x: Math.random(),
-        r: 1.6 + Math.random() * 5.2,
-        o: 0.18 + Math.random() * 0.5,
-        d: (Math.random() - 0.5) * 0.00013,   // slow drift
-        y: Math.random() * 7
+    for (let i = 0; i < nb; i++) bubbles.push(newBubble(true));
+    // nucleation sites — the spots a real glass streams from
+    const ns = Math.round(Math.max(4, Math.min(9, W / 170)));
+    streams = [];
+    for (let i = 0; i < ns; i++) {
+      streams.push({
+        x: W * (0.06 + 0.88 * ((i + 0.2 + Math.random() * 0.6) / ns)),
+        w: 7 + Math.random() * 12,
+        glow: 0.03 + Math.random() * 0.05,
+        next: Math.random() * 0.8,
+        rate: 0.22 + Math.random() * 0.55
       });
     }
+    foamH.fill(FOAM_BASE);
+    foamBits = [];
+    const nfb = Math.round(Math.max(40, Math.min(110, W / 12)));
+    for (let i = 0; i < nfb; i++) {
+      foamBits.push({
+        x: Math.random(),
+        yf: Math.random(),                    // 0 = lip, 1 = waterline
+        r: 0.8 + Math.random() * 2.6,
+        o: 0.25 + Math.random() * 0.45,
+        d: (Math.random() - 0.5) * 0.00011
+      });
+    }
+    laces = [];
   }
 
   // depth = px above the bottom of the viewport
-  function newBubble(seeded) {
+  function newBubble(seeded, atX) {
     return {
-      x: Math.random() * W,
-      depth: seeded ? Math.random() * H : -Math.random() * 40,
-      r: 1.1 + Math.random() * 3.1,
-      sp: 14 + Math.random() * 46,          // px per second
+      x: atX != null ? atX + (Math.random() - 0.5) * 6 : Math.random() * W,
+      depth: seeded ? Math.random() * H : -Math.random() * 30,
+      r: atX != null ? 0.7 + Math.random() * 1.4 : 1.0 + Math.random() * 2.6,
+      sp: 10 + Math.random() * 22,          // px per second, grows with buoyancy
       ph: Math.random() * Math.PI * 2,
-      sw: 0.3 + Math.random() * 1.5         // sway
+      wf: 0.8 + Math.random() * 1.6,        // wobble frequency
+      sw: 0.3 + Math.random() * 1.3         // sway
     };
   }
 
@@ -90,9 +144,20 @@
     const k = f - i;
     const disp = h[i] + (h[i + 1] - h[i]) * k;
     const lean = (x / Math.max(W, 1) - 0.5) * tilt;
+    const rock = sloshP * Math.cos(Math.PI * x / Math.max(W, 1));
     const amb = (Math.sin(x * 0.0085 + t * 0.0011) * 2.1
-               + Math.sin(x * 0.019 - t * 0.0017) * 1.15) * (1 + energy * 2.6);
-    return baseY() + disp + lean + amb;
+               + Math.sin(x * 0.019 - t * 0.0017) * 1.15) * (1 + energy * 2.2)
+               + Math.sin(x * 0.0031 + t * 0.00042) * 2.4;
+    // meniscus: a wetting liquid climbs a little at the walls
+    const climb = 3.0 * (Math.exp(-x / 30) + Math.exp(-(W - x) / 30));
+    return baseY() + disp + lean + rock + amb - climb;
+  }
+
+  function foamAt(x) {
+    const f = (x / Math.max(W, 1)) * (N - 1);
+    const i = Math.max(0, Math.min(N - 2, Math.floor(f)));
+    const k = f - i;
+    return foamH[i] + (foamH[i + 1] - foamH[i]) * k;
   }
 
   function splash(px, power, width) {
@@ -106,7 +171,7 @@
     }
   }
 
-  function physics() {
+  function physics(dt) {
     // travelling waves: discrete Laplacian, reflecting off the glass walls
     for (let i = 0; i < N; i++) {
       const l = h[i > 0 ? i - 1 : 0];
@@ -120,6 +185,30 @@
       if (h[i] > CLAMP) { h[i] = CLAMP; vel[i] *= -0.4; }
       else if (h[i] < -CLAMP) { h[i] = -CLAMP; vel[i] *= -0.4; }
     }
+    // viscosity: fine chop bleeds away, long waves keep rolling
+    let prev = h[0];
+    for (let i = 1; i < N - 1; i++) {
+      const cur = h[i];
+      h[i] = cur + (prev + h[i + 1] - 2 * cur) * BLUR;
+      prev = cur;
+    }
+    // the rocking mode
+    sloshV += (-SLOSH_K * sloshP - SLOSH_C * sloshV) * dt;
+    sloshP += sloshV * dt;
+    if (sloshP > 26) sloshP = 26; else if (sloshP < -26) sloshP = -26;
+
+    // the head: fatten over agitated water, diffuse, relax
+    for (let i = 0; i < N; i++) {
+      const want = FOAM_BASE + Math.min(11, Math.abs(vel[i]) * 2.2 + energy * 3.0);
+      foamH[i] += (want - foamH[i]) * (want > foamH[i] ? 0.25 : 0.015);
+    }
+    prev = foamH[0];
+    for (let i = 1; i < N - 1; i++) {
+      const cur = foamH[i];
+      foamH[i] = cur + (prev + foamH[i + 1] - 2 * cur) * 0.12;
+      prev = cur;
+    }
+
     tilt += (tiltTarget - tilt) * 0.045;
     tiltTarget *= 0.97;
     energy *= 0.94;
@@ -156,12 +245,13 @@
     const d = target - lastP;
     lastP = target;
     if (!reduce && Math.abs(d) > 0.0002) {
-      // pouring in / tipping out rocks the whole surface
-      const imp = Math.max(-7, Math.min(7, -d * 340));
+      // pouring in / tipping out: some ripple, mostly a rock of the whole glass
+      const imp = Math.max(-5, Math.min(5, -d * 240));
       for (let i = 0; i < N; i++) {
         vel[i] += imp * (0.55 + 0.45 * Math.sin((i / (N - 1)) * Math.PI));
       }
-      energy = Math.min(1, energy + Math.abs(d) * 7);
+      sloshV += Math.max(-70, Math.min(70, -d * 2400));
+      energy = Math.min(1, energy + Math.abs(d) * 6);
     }
   }
 
@@ -172,11 +262,18 @@
     if (px !== null) {
       const dx = x - px, dy = y - py;
       const speed = Math.hypot(dx, dy);
-      tiltTarget = Math.max(-30, Math.min(30, tiltTarget + dx * 0.55));
+      tiltTarget = Math.max(-30, Math.min(30, tiltTarget + dx * 0.5));
       const sy = surfaceY(x);
       const near = y > sy - 190;                    // in or just above the beer
       const amp = Math.min(8, speed * 0.42) * (near ? 1 : 0.22);
-      if (amp > 0.05) splash(x, amp * (dy > 0 ? 1 : 0.55), 3.4);
+      if (amp > 0.05) {
+        // a wake: liquid piles up ahead of the drag and dips behind it
+        splash(x + dx * 2.4, amp * (dy > 0 ? 1 : 0.6), 3.2);
+        if (Math.abs(dx) > 2) splash(x - dx * 2.4, -amp * 0.45, 2.6);
+      }
+      // fast horizontal drags rock the whole glass
+      sloshV += dx * (near ? 0.5 : 0.1);
+      if (sloshV > 60) sloshV = 60; else if (sloshV < -60) sloshV = -60;
       energy = Math.min(1, energy + speed * 0.0035);
     }
     px = x; py = y;
@@ -185,6 +282,7 @@
   function onDown(e) {
     if (e.clientX == null) return;
     splash(e.clientX, 13, 5.5);
+    sloshV += (e.clientX < W / 2 ? 1 : -1) * 9;
     energy = Math.min(1, energy + 0.4);
   }
 
@@ -206,6 +304,23 @@
   function draw() {
     ctx.clearRect(0, 0, W, H);
     const base = baseY();
+
+    // lacing — broken foam residue left on the glass where the level receded
+    ctx.fillStyle = "rgba(255,243,220,.55)";
+    for (const l of laces) {
+      let x = (l.seed % 47);
+      let k = l.seed;
+      while (x < W) {
+        k = (k * 9301 + 49297) % 233280;          // cheap deterministic noise
+        const seg = 14 + (k / 233280) * 46;
+        k = (k * 9301 + 49297) % 233280;
+        const gap = 18 + (k / 233280) * 70;
+        ctx.globalAlpha = l.a * (0.55 + (k / 233280) * 0.45);
+        ctx.fillRect(x, l.y + Math.sin(x * 0.02 + l.seed) * 1.4, seg, 1.1);
+        x += seg + gap;
+      }
+    }
+    ctx.globalAlpha = 1;
 
     // body of the beer
     ctx.beginPath();
@@ -242,34 +357,125 @@
     ctx.fillStyle = cur;
     ctx.fillRect(0, base - 30, W, H - base + 40);
 
+    // texture: fine haze suspended in the liquid
+    if (grain) {
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = grain;
+      ctx.fillRect(0, base - 20, W, H - base + 20);
+      ctx.globalAlpha = 1;
+    }
+    // soft light columns where the bubble streams rise
+    if (!reduce) {
+      for (const s2 of streams) {
+        const drift = Math.sin(t * 0.0005 + s2.x) * 8;
+        const col = ctx.createLinearGradient(0, H, 0, base);
+        col.addColorStop(0, "rgba(255,214,140," + s2.glow + ")");
+        col.addColorStop(0.7, "rgba(255,224,160," + (s2.glow * 0.3) + ")");
+        col.addColorStop(1, "rgba(255,230,170,0)");
+        ctx.fillStyle = col;
+        ctx.fillRect(s2.x + drift - s2.w / 2, base, s2.w, H - base);
+      }
+    }
+
     // carbonation
     if (!reduce) {
       ctx.lineWidth = 1;
       for (const b of bubbles) {
-        const bx = b.x + Math.sin(t * 0.0016 + b.ph) * b.sw * 7;
+        const rise = Math.min(1, b.sp / 90);
+        const bx = b.x + Math.sin(t * 0.002 * b.wf + b.ph) * b.sw * (3 + 9 * rise);
         const by = H - b.depth;
         ctx.beginPath();
         ctx.arc(bx, by, b.r, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(255,240,200,.22)";
+        ctx.fillStyle = "rgba(255,240,200,.20)";
         ctx.fill();
-        ctx.strokeStyle = "rgba(255,246,214,.5)";
+        ctx.strokeStyle = "rgba(255,246,214,.45)";
         ctx.stroke();
+        // a glint on the shoulder of the bigger bubbles
+        if (b.r > 1.6) {
+          ctx.beginPath();
+          ctx.arc(bx - b.r * 0.35, by - b.r * 0.35, b.r * 0.3, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(255,250,235,.5)";
+          ctx.fill();
+        }
       }
     }
     ctx.restore();
 
-    // the head — foam sitting on the surface
     if (level < 0.995) {
+      // the head — a band of foam riding the surface
+      const dx = W / SEGS;
+      ctx.beginPath();
+      ctx.moveTo(0, surfaceY(0) - foamAt(0));
+      let xp = 0, yp = surfaceY(0) - foamAt(0);
+      for (let i = 1; i <= SEGS; i++) {
+        const x = i * dx;
+        const y = surfaceY(x) - foamAt(x)
+          - Math.sin(x * 0.045 + t * 0.0007) * 0.9;   // irregular top edge
+        ctx.quadraticCurveTo(xp, yp, (xp + x) / 2, (yp + y) / 2);
+        xp = x; yp = y;
+      }
+      ctx.lineTo(W, surfaceY(W) + 2);
+      for (let i = SEGS; i >= 0; i--) {
+        const x = i * dx;
+        ctx.lineTo(x, surfaceY(x) + 2);
+      }
+      ctx.closePath();
+      const fg = ctx.createLinearGradient(0, base - 22, 0, base + 4);
+      fg.addColorStop(0, "rgba(255,249,234,.78)");
+      fg.addColorStop(0.55, "rgba(255,242,214,.52)");
+      fg.addColorStop(1, "rgba(255,234,198,.26)");
+      ctx.fillStyle = fg;
+      ctx.fill();
       ctx.save();
-      for (const f of foam) {
-        const fx = f.x * W;
-        const fy = surfaceY(fx) + f.y - f.r * 0.35;
+      ctx.clip();
+      // bubble grain inside the head
+      for (const fb of foamBits) {
+        const fx = fb.x * W;
+        const th = foamAt(fx);
+        const fy = surfaceY(fx) - th + fb.yf * (th + 2);
         ctx.beginPath();
-        ctx.arc(fx, fy, f.r, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(255,243,220," + f.o * 0.5 + ")";
+        ctx.arc(fx, fy, fb.r, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255,250,236," + fb.o + ")";
         ctx.fill();
       }
+      // a darker seam where foam meets beer
+      ctx.beginPath();
+      ctx.moveTo(0, surfaceY(0) + 1);
+      traceSurface();
+      ctx.strokeStyle = "rgba(140,72,22,.30)";
+      ctx.lineWidth = 2.4;
+      ctx.stroke();
+      ctx.restore();
+      // the bright lip along the top of the head
+      ctx.beginPath();
+      ctx.moveTo(0, surfaceY(0) - foamAt(0));
+      for (let i = 1; i <= SEGS; i++) {
+        const x = i * dx;
+        ctx.lineTo(x, surfaceY(x) - foamAt(x) - Math.sin(x * 0.045 + t * 0.0007) * 0.9);
+      }
+      ctx.strokeStyle = "rgba(255,252,242,.55)";
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+
+      // specular glints where the surface tilts toward the light
+      ctx.lineWidth = 1.1;
+      for (let i = 1; i <= SEGS; i++) {
+        const x0 = (i - 1) * dx, x1 = i * dx;
+        const y0 = surfaceY(x0), y1 = surfaceY(x1);
+        const slope = (y1 - y0) / dx;
+        if (slope < -0.05) {
+          ctx.globalAlpha = Math.min(0.5, -slope * 1.8);
+          ctx.beginPath();
+          ctx.moveTo(x0, y0 + 2.2);
+          ctx.lineTo(x1, y1 + 2.2);
+          ctx.strokeStyle = "rgba(255,250,232,.85)";
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+
       // bright meniscus
+      ctx.save();
       ctx.beginPath();
       ctx.moveTo(0, surfaceY(0));
       traceSurface();
@@ -291,24 +497,56 @@
 
     level += (target - level) * 0.075;
 
-    physics();
+    // lacing: as the level recedes, leave rings behind on the glass
+    const base = baseY();
+    if (base > laceAnchor + 24) {
+      laces.push({
+        y: laceAnchor + 2,
+        a: 0.06 + Math.min(0.06, energy * 0.12),
+        seed: Math.random() * 1000
+      });
+      if (laces.length > 12) laces.shift();
+      laceAnchor = base;
+    } else if (base < laceAnchor - 2) {
+      laceAnchor = base;                      // filling again — reset the anchor
+    }
+    for (let i = laces.length - 1; i >= 0; i--) {
+      const l = laces[i];
+      l.a *= 0.997;
+      if (l.a < 0.015 || l.y > baseY() - 2) laces.splice(i, 1);
+    }
 
-    // bubbles rise, pop at the surface, respawn at the bottom
-    for (const b of bubbles) {
+    physics(dt);
+
+    // carbonation streams breathe new bubbles in from their nucleation points
+    for (const s of streams) {
+      s.next -= dt;
+      if (s.next <= 0 && bubbles.length < 90) {
+        bubbles.push(newBubble(false, s.x));
+        s.next = s.rate * (0.5 + Math.random());
+      }
+    }
+    // bubbles accelerate as they rise, pop at the surface, feed the head
+    for (let i = bubbles.length - 1; i >= 0; i--) {
+      const b = bubbles[i];
+      b.sp = Math.min(120, b.sp + (16 + b.r * 22) * dt);   // buoyancy
       b.depth += b.sp * dt;
       const by = H - b.depth;
       const sy = surfaceY(b.x);
       if (by <= sy + b.r) {
-        splash(b.x, -1.1 - b.r * 0.25, 2.2);
+        splash(b.x, -0.9 - b.r * 0.25, 2.2);
+        const fi = Math.round((b.x / Math.max(W, 1)) * (N - 1));
+        if (fi >= 0 && fi < N) foamH[fi] = Math.min(20, foamH[fi] + 1.2 + b.r * 0.6);
+        if (bubbles.length > 60) { bubbles.splice(i, 1); continue; }
         Object.assign(b, newBubble(false));
       } else if (b.depth > H + 60) {
         Object.assign(b, newBubble(false));
       }
     }
-    for (const f of foam) {
-      f.x += f.d * (1 + energy * 5);
-      if (f.x < -0.02) f.x = 1.02;
-      else if (f.x > 1.02) f.x = -0.02;
+
+    for (const fb of foamBits) {
+      fb.x += fb.d * (1 + energy * 4);
+      if (fb.x < -0.02) fb.x = 1.02; else if (fb.x > 1.02) fb.x = -0.02;
     }
 
     draw();
@@ -324,6 +562,7 @@
   // Landing part-way down the page (deep link, restored scroll) should start at
   // that level, not pour up from empty.
   if (target > REST + 0.02) level = target;
+  laceAnchor = baseY();
   sweep();
   draw();                       // paint immediately — never a blank frame
   canvas.classList.add("lit");
