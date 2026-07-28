@@ -3,15 +3,16 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- Hardening: zero JavaScript runs on this page, styles are inline-only,
-     fonts pinned to Google Fonts, nothing else may load or frame us. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<!-- Hardening: one self-hosted script (the pint), styles inline-only, fonts
+     pinned to Google Fonts, nothing else may load or frame us. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
 <title>Sesh — know your night</title>
-<meta name="description" content="Sesh — the social BAC tracker. Log drinks, watch your estimated BAC live, run group seshes with friends, and replay the night. In beta on TestFlight." />
+<meta name="description" content="Sesh — the social BAC tracker. Log drinks, watch your estimated BAC live, run group seshes with friends, find the cheapest pint near you, and replay the night. In beta on TestFlight." />
 <link rel="canonical" href="https://mauit2.github.io/sesh/" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23140f0b'/%3E%3Cpath d='M9 11h14v13a3 3 0 0 1-3 3h-8a3 3 0 0 1-3-3z' fill='%23e8843c'/%3E%3Crect x='9' y='9' width='14' height='4' rx='2' fill='%23f3e9d8'/%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -20,152 +21,383 @@
     --bg:#140f0b; --bg-elev:#1d1610; --cream:#f3e9d8; --cream-dim:#cdbfa8;
     --whiskey:#e8843c; --bronze:#b3895a; --line:rgba(243,233,216,.10);
     --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+    --ease:cubic-bezier(.2,.7,.2,1);
+    --spring:cubic-bezier(.34,1.4,.64,1);
+    --pad:clamp(18px,4.2vw,34px);
   }
   *{box-sizing:border-box;}
-  html,body{height:100%;}
+  html{scroll-behavior:smooth;}
   body{
-    margin:0;
+    margin:0;min-height:100%;
     background:
-      radial-gradient(120% 90% at 85% -10%, rgba(232,132,60,.18), transparent 55%),
-      radial-gradient(90% 70% at -10% 0%, rgba(179,137,90,.10), transparent 50%),
+      radial-gradient(120% 90% at 85% -10%, rgba(232,132,60,.16), transparent 55%),
+      radial-gradient(90% 70% at -10% 0%, rgba(179,137,90,.09), transparent 50%),
       var(--bg);
     color:var(--cream);
     font-family:"Hanken Grotesk",system-ui,sans-serif;
     -webkit-font-smoothing:antialiased;
-    display:flex;align-items:center;justify-content:center;
     overflow-x:hidden;
   }
+
+  /* ---------- the pint ---------- */
+  #beer{
+    position:fixed;inset:0;z-index:0;pointer-events:none;
+    opacity:0;transition:opacity 1.4s ease .2s;
+  }
+  #beer.lit{opacity:1;}
+  /* a whisper of dark over the beer so cream type always holds */
+  .scrim{
+    position:fixed;inset:0;z-index:1;pointer-events:none;
+    background:linear-gradient(180deg,rgba(20,15,11,0) 0%,rgba(20,15,11,.10) 52%,rgba(20,15,11,.22) 100%);
+  }
   /* grain */
-  body::before{
-    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.04;
+  .grain{
+    position:fixed;inset:0;pointer-events:none;z-index:2;opacity:.05;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
-
-  /* ambience — a slow amber orb drifting behind everything */
   .orb{
     position:fixed;z-index:0;pointer-events:none;
     width:52vmax;height:52vmax;border-radius:50%;
-    background:radial-gradient(circle at 40% 40%, rgba(232,132,60,.14), transparent 62%);
+    background:radial-gradient(circle at 40% 40%, rgba(232,132,60,.13), transparent 62%);
     top:-18vmax;right:-14vmax;
-    animation:drift 26s ease-in-out infinite alternate;
-    will-change:transform;
+    animation:drift 26s ease-in-out infinite alternate;will-change:transform;
   }
   @keyframes drift{
     from{transform:translate3d(0,0,0) scale(1);}
     to{transform:translate3d(-9vmax,7vmax,0) scale(1.15);}
   }
 
-  /* carbonation — bubbles rising through the night */
-  .bubbles{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
-  .bubbles i{
-    position:absolute;bottom:-6vh;border-radius:50%;
-    border:1px solid rgba(232,132,60,.35);
-    background:radial-gradient(circle at 32% 30%, rgba(243,233,216,.16), rgba(232,132,60,.05));
-    opacity:0;
-    animation-name:rise;
-    animation-timing-function:cubic-bezier(.25,.4,.45,1);
-    animation-iteration-count:infinite;
-    will-change:transform,opacity;
-  }
-  @keyframes rise{
-    0%  {opacity:0;transform:translate3d(0,0,0) scale(.6);}
-    8%  {opacity:.85;}
-    72% {opacity:.5;}
-    100%{opacity:0;transform:translate3d(var(--sway,2vw),-108vh,0) scale(1.05);}
-  }
-  .bubbles i:nth-child(1){left:8%;  width:10px;height:10px;--sway: 3vw; animation-duration:13s; animation-delay:0s;}
-  .bubbles i:nth-child(2){left:18%; width:6px; height:6px; --sway:-2vw; animation-duration:17s; animation-delay:3.2s;}
-  .bubbles i:nth-child(3){left:29%; width:13px;height:13px;--sway: 4vw; animation-duration:15s; animation-delay:6.4s;}
-  .bubbles i:nth-child(4){left:41%; width:7px; height:7px; --sway:-3vw; animation-duration:19s; animation-delay:1.6s;}
-  .bubbles i:nth-child(5){left:55%; width:9px; height:9px; --sway: 2vw; animation-duration:14s; animation-delay:8.5s;}
-  .bubbles i:nth-child(6){left:66%; width:5px; height:5px; --sway:-4vw; animation-duration:21s; animation-delay:4.8s;}
-  .bubbles i:nth-child(7){left:77%; width:12px;height:12px;--sway: 3vw; animation-duration:16s; animation-delay:10.2s;}
-  .bubbles i:nth-child(8){left:88%; width:8px; height:8px; --sway:-2vw; animation-duration:18s; animation-delay:2.4s;}
+  /* ---------- shell ---------- */
+  .wrap{position:relative;z-index:3;max-width:1040px;margin:0 auto;padding:0 var(--pad);}
 
-  .card{position:relative;z-index:1;text-align:center;padding:40px 28px;max-width:32rem;}
-
-  .reveal{opacity:0;transform:translateY(14px);animation:up .8s cubic-bezier(.2,.7,.2,1) forwards;}
-  .d1{animation-delay:.05s}.d2{animation-delay:.2s}.d3{animation-delay:.38s}.d4{animation-delay:.56s}.d5{animation-delay:.74s}
+  /* ---------- hero ---------- */
+  .hero{
+    position:relative;z-index:3;min-height:100svh;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;padding:76px var(--pad) 96px;
+  }
+  .hero-in{max-width:34rem;}
+  .reveal{opacity:0;transform:translateY(16px);animation:up .9s var(--ease) forwards;}
+  .d1{animation-delay:.06s}.d2{animation-delay:.2s}.d3{animation-delay:.38s}
+  .d4{animation-delay:.54s}.d5{animation-delay:.7s}.d6{animation-delay:.86s}
   @keyframes up{to{opacity:1;transform:none;}}
 
   .eyebrow{
     font-family:var(--mono);font-size:11px;font-weight:700;
-    letter-spacing:.36em;text-transform:uppercase;color:var(--bronze);margin:0 0 18px;
+    letter-spacing:.34em;text-transform:uppercase;color:var(--bronze);margin:0 0 20px;
   }
-  /* live dot with a sonar ring — the app's LIVE pulse */
   .dot{position:relative;display:inline-block;width:7px;height:7px;border-radius:50%;
     background:var(--whiskey);margin-right:11px;vertical-align:middle;}
-  .dot::after{
-    content:"";position:absolute;inset:-3px;border-radius:50%;
-    border:1px solid var(--whiskey);
-    animation:sonar 2.2s ease-out infinite;
-  }
+  .dot::after{content:"";position:absolute;inset:-3px;border-radius:50%;
+    border:1px solid var(--whiskey);animation:sonar 2.2s ease-out infinite;}
   @keyframes sonar{
-    0%  {transform:scale(.6);opacity:.9;}
-    70% {transform:scale(2.4);opacity:0;}
-    100%{transform:scale(2.4);opacity:0;}
+    0%{transform:scale(.6);opacity:.9;}
+    70%,100%{transform:scale(2.4);opacity:0;}
   }
 
   h1{font-family:"Fraunces",Georgia,serif;font-weight:800;
-    font-size:clamp(3rem,14vw,5.4rem);line-height:.98;letter-spacing:-.04em;
-    margin:0;color:var(--cream);}
-  h1 em{
-    font-style:italic;color:var(--whiskey);display:inline-block;
-    animation:tipsy 5.5s ease-in-out infinite;
-    transform-origin:50% 85%;
-  }
+    font-size:clamp(3rem,13.5vw,5.4rem);line-height:.98;letter-spacing:-.04em;
+    margin:0;color:var(--cream);text-wrap:balance;}
+  h1 em{font-style:italic;color:var(--whiskey);display:inline-block;
+    animation:tipsy 5.5s ease-in-out infinite;transform-origin:50% 85%;}
   @keyframes tipsy{
     0%,100%{transform:rotate(0deg) translateY(0);}
-    30%    {transform:rotate(-2.4deg) translateY(-2px);}
-    65%    {transform:rotate(1.8deg) translateY(1px);}
+    30%{transform:rotate(-2.4deg) translateY(-2px);}
+    65%{transform:rotate(1.8deg) translateY(1px);}
+  }
+  .tag{color:var(--cream-dim);font-size:17px;line-height:1.65;margin:22px auto 12px;max-width:30rem;}
+  .beta{font-family:var(--mono);font-size:12px;letter-spacing:.18em;color:var(--whiskey);margin:0;}
+
+  .cue{
+    margin-top:52px;display:inline-flex;flex-direction:column;align-items:center;gap:9px;
+    font-family:var(--mono);font-size:10px;letter-spacing:.24em;text-transform:uppercase;
+    color:rgba(205,191,168,.5);
+  }
+  .cue span{display:block;width:1px;height:38px;
+    background:linear-gradient(180deg,transparent,var(--whiskey),transparent);
+    animation:pour 2.6s ease-in-out infinite;transform-origin:top;}
+  @keyframes pour{
+    0%,100%{transform:scaleY(.35);opacity:.35;}
+    50%{transform:scaleY(1);opacity:1;}
   }
 
-  .tag{color:var(--cream-dim);font-size:17px;line-height:1.6;margin:20px 0 10px;}
-  .beta{
-    font-family:var(--mono);font-size:12px;letter-spacing:.18em;color:var(--whiskey);
-    margin:0 0 34px;
+  /* ---------- sections ---------- */
+  section{position:relative;z-index:3;padding:clamp(48px,9vw,96px) 0;}
+  .label{
+    display:flex;align-items:center;gap:14px;margin:0 0 26px;
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.26em;text-transform:uppercase;
+    color:var(--whiskey);
+  }
+  .label::after{content:"";flex:1;height:1px;
+    background:linear-gradient(90deg,rgba(232,132,60,.45),transparent);}
+  h2{font-family:"Fraunces",Georgia,serif;font-weight:800;letter-spacing:-.025em;
+    font-size:clamp(1.85rem,5vw,2.9rem);line-height:1.06;margin:0 0 14px;text-wrap:balance;}
+  h2 em{font-style:italic;color:var(--whiskey);}
+  .lede{color:var(--cream-dim);font-size:clamp(1rem,2.1vw,1.1rem);line-height:1.7;
+    max-width:46ch;margin:0;}
+  /* type that sits straight on the beer needs a little help holding its edge */
+  .label,h2,.lede{text-shadow:0 1px 16px rgba(18,13,9,.6);}
+
+  /* frosted panels floating on the beer */
+  .glass{
+    background:rgba(22,16,11,.52);
+    -webkit-backdrop-filter:blur(16px) saturate(1.15);
+    backdrop-filter:blur(16px) saturate(1.15);
+    border:1px solid var(--line);border-radius:22px;
+    box-shadow:0 30px 70px -40px rgba(0,0,0,.9),inset 0 1px 0 rgba(243,233,216,.05);
   }
 
-  .links{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
-  a{font-weight:600;font-size:14px;letter-spacing:.02em;text-decoration:none;color:var(--cream);
+  .flow{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:34px;}
+  @media (max-width:760px){.flow{grid-template-columns:1fr;}}
+  .step{
+    position:relative;overflow:hidden;padding:26px 24px 24px;
+    transition:transform .45s var(--spring),border-color .3s ease;
+  }
+  .step::before{
+    content:"";position:absolute;inset:0;pointer-events:none;opacity:0;
+    background:radial-gradient(120% 90% at 12% 0%,rgba(232,132,60,.16),transparent 60%);
+    transition:opacity .4s ease;
+  }
+  .step:hover{transform:translateY(-4px);border-color:rgba(232,132,60,.42);}
+  .step:hover::before{opacity:1;}
+  .step .n{
+    font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--bronze);
+    display:block;margin-bottom:12px;
+  }
+  .step h3{font-family:"Fraunces",serif;font-weight:800;font-size:1.32rem;margin:0 0 8px;
+    letter-spacing:-.01em;}
+  .step p{margin:0;color:var(--cream-dim);font-size:.95rem;line-height:1.62;}
+
+  /* split feature rows */
+  .split{display:grid;grid-template-columns:1.05fr .95fr;gap:clamp(20px,4vw,44px);align-items:center;}
+  @media (max-width:820px){.split{grid-template-columns:1fr;}}
+  .panel{padding:clamp(24px,3.4vw,34px);}
+  .plist{list-style:none;margin:22px 0 0;padding:0;display:flex;flex-direction:column;gap:12px;}
+  .plist li{position:relative;padding-left:26px;color:var(--cream);font-size:.97rem;line-height:1.5;}
+  .plist li::before{content:"";position:absolute;left:3px;top:.48em;width:8px;height:8px;
+    border-radius:50%;background:var(--whiskey);box-shadow:0 0 12px rgba(232,132,60,.7);}
+  .plist li b{color:var(--cream);}
+  .plist li span{color:var(--cream-dim);}
+
+  /* price scale demo — the map's colour logic, live */
+  .scale{display:flex;flex-direction:column;gap:10px;}
+  .scale .row{display:flex;align-items:center;gap:12px;}
+  .scale .pill{
+    font-family:var(--mono);font-size:12px;font-weight:700;color:#1a1108;
+    padding:6px 11px;border-radius:100px;min-width:74px;text-align:center;
+    box-shadow:0 8px 20px -10px rgba(0,0,0,.8);
+  }
+  .scale .who{font-size:.9rem;color:var(--cream-dim);}
+  .scale .cap{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--bronze);margin-top:6px;}
+
+  .btn{
+    display:inline-flex;align-items:center;gap:9px;margin-top:26px;
+    background:var(--whiskey);color:#1a1108;font-weight:700;font-size:15px;text-decoration:none;
+    padding:14px 26px;border-radius:100px;
+    box-shadow:0 16px 38px -14px rgba(232,132,60,.66),inset 0 1px 0 rgba(255,255,255,.25);
+    transition:transform .32s var(--spring),box-shadow .32s ease,filter .2s ease;
+  }
+  .btn:hover{transform:translateY(-3px);filter:brightness(1.06);
+    box-shadow:0 22px 46px -14px rgba(232,132,60,.8),inset 0 1px 0 rgba(255,255,255,.3);}
+  .btn:active{transform:translateY(-1px);}
+  .btn:focus-visible{outline:2px solid var(--cream);outline-offset:3px;}
+  .btn .arw{transition:transform .32s var(--spring);}
+  .btn:hover .arw{transform:translateX(4px);}
+
+  .quiet{
+    display:inline-block;margin-top:18px;font-family:var(--mono);font-size:11px;
+    letter-spacing:.14em;text-transform:uppercase;color:var(--cream-dim);
+    text-decoration:none;border-bottom:1px solid rgba(232,132,60,.35);padding-bottom:3px;
+    transition:color .2s ease,border-color .2s ease;
+  }
+  .quiet:hover{color:var(--whiskey);border-color:var(--whiskey);}
+  .quiet:focus-visible{outline:2px solid var(--whiskey);outline-offset:4px;}
+
+  /* bars strip */
+  .bars{display:flex;gap:22px;align-items:center;flex-wrap:wrap;padding:clamp(22px,3vw,30px);}
+  .bars .txt{flex:1 1 320px;}
+  .bars h3{font-family:"Fraunces",serif;font-weight:800;font-size:1.45rem;margin:0 0 8px;}
+  .bars p{margin:0;color:var(--cream-dim);font-size:.96rem;line-height:1.6;}
+  .tiers{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;}
+  .tiers span{font-family:var(--mono);font-size:.68rem;letter-spacing:.06em;color:var(--cream-dim);
+    border:1px solid var(--line);border-radius:100px;padding:7px 12px;white-space:nowrap;}
+  .tiers b{color:var(--cream);}
+
+  /* ---------- footer ---------- */
+  footer{position:relative;z-index:3;padding:clamp(40px,7vw,72px) 0 46px;}
+  .fpanel{padding:clamp(24px,3.4vw,34px);text-align:center;}
+  .links{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:6px;}
+  .links a{font-weight:600;font-size:14px;letter-spacing:.02em;text-decoration:none;color:var(--cream);
     padding:10px 18px;border-radius:999px;border:1px solid var(--line);
-    transition:border-color .18s ease, color .18s ease, transform .18s ease;}
-  a:hover{border-color:var(--whiskey);color:var(--whiskey);transform:translateY(-2px);}
-  a:focus-visible{outline:2px solid var(--whiskey);outline-offset:3px;}
-  a:active{transform:translateY(0);}
-  a.mail{color:var(--bronze);border-color:transparent;}
-  a.mail:hover{color:var(--whiskey);}
+    transition:border-color .2s ease,color .2s ease,transform .3s var(--spring);}
+  .links a:hover{border-color:var(--whiskey);color:var(--whiskey);transform:translateY(-2px);}
+  .links a:focus-visible{outline:2px solid var(--whiskey);outline-offset:3px;}
+  .links a:active{transform:translateY(0);}
+  .links a.mail{color:var(--bronze);border-color:transparent;}
+  .links a.mail:hover{color:var(--whiskey);}
+  .foot{margin:26px 0 0;font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;
+    text-transform:uppercase;color:rgba(205,191,168,.42);line-height:1.9;}
 
-  .foot{margin-top:44px;font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;
-    text-transform:uppercase;color:rgba(205,191,168,.4);}
+  /* ---------- scroll reveals ---------- */
+  /* only hidden when the script is there to reveal them again */
+  .js .r{opacity:0;transform:translateY(26px);}
+  .r{transition:opacity .85s var(--ease),transform .85s var(--ease);}
+  .r.in{opacity:1;transform:none;}
+  .r.s1{transition-delay:.08s}.r.s2{transition-delay:.16s}
+  .r.s3{transition-delay:.24s}.r.s4{transition-delay:.32s}
 
   @media (prefers-reduced-motion: reduce){
-    .orb,.bubbles i,.dot::after,h1 em{animation:none;}
+    html{scroll-behavior:auto;}
+    .orb,.dot::after,h1 em,.cue span{animation:none;}
     .reveal{animation:none;opacity:1;transform:none;}
-    a{transition:none;}
+    /* must out-specify `.js .r` — show everything up front, no reveal at all */
+    .js .r,.r{transition:none;opacity:1;transform:none;}
+    .step,.btn,.links a,.quiet{transition:none;}
+    #beer{transition:none;opacity:1;}
   }
 </style>
 </head>
 <body>
+  <canvas id="beer" aria-hidden="true"></canvas>
+  <div class="scrim" aria-hidden="true"></div>
   <div class="orb" aria-hidden="true"></div>
-  <div class="bubbles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  <div class="grain" aria-hidden="true"></div>
 
-  <main class="card">
-    <p class="eyebrow reveal d1"><span class="dot"></span>Live now in beta</p>
-    <h1 class="reveal d2">Know your <em>night.</em></h1>
-    <p class="tag reveal d3">Sesh — the social BAC tracker. Log your drinks, watch your estimated
-      BAC live, run group seshes with friends, share the night's schnaps, and replay it all
-      in the morning.</p>
-    <p class="beta reveal d3">TESTFLIGHT BETA · iOS 18+</p>
-    <nav class="links reveal d4" aria-label="Site">
-      <a href="./map/">Beer &amp; deals map</a>
-      <a href="./pricing/">For bars</a>
-      <a href="./calculator/">Try the calculator</a>
-      <a href="./privacy/">Privacy policy</a>
-      <a href="./terms/">Terms of use</a>
-      <a class="mail" href="mailto:contact@seshapp.xyz">contact@seshapp.xyz</a>
-    </nav>
-    <p class="foot reveal d5">Drink responsibly · BAC values are estimates, never a reason to drive</p>
-  </main>
+  <header class="hero">
+    <div class="hero-in">
+      <p class="eyebrow reveal d1"><span class="dot"></span>Live now in beta</p>
+      <h1 class="reveal d2">Know your <em>night.</em></h1>
+      <p class="tag reveal d3">The social BAC tracker. Log your drinks, watch your estimated
+        BAC live, run group seshes with friends, share the night's schnaps, and replay it
+        all in the morning.</p>
+      <p class="beta reveal d4">TESTFLIGHT BETA · iOS 18+</p>
+      <p class="cue reveal d6">Scroll to pour<span></span></p>
+    </div>
+  </header>
+
+  <div class="wrap">
+
+    <section aria-labelledby="flow-h">
+      <p class="label r">The flow</p>
+      <h2 id="flow-h" class="r s1">One app for the <em>whole</em> night.</h2>
+      <p class="lede r s2">Four screens, in the order a night actually happens — from the
+        group chat that starts it to the recap that explains it.</p>
+
+      <div class="flow">
+        <article class="glass step r s1">
+          <span class="n">01 · PLAN</span>
+          <h3>Plan the party</h3>
+          <p>Set up a party or a weekend trip, invite the crew, and let the supply calculator
+            work out exactly how much to buy — from everyone's weight and the level you're
+            aiming for, in bottles and cans.</p>
+        </article>
+        <article class="glass step r s2">
+          <span class="n">02 · LIVE</span>
+          <h3>Track it as it happens</h3>
+          <p>Log a drink in two taps. Your estimated BAC climbs in real time, you can see
+            when you'll be sober again, and the whole group stays in sync at the same table.</p>
+        </article>
+        <article class="glass step r s3">
+          <span class="n">03 · NIGHTLINE</span>
+          <h3>See who's out</h3>
+          <p>Moments from everyone out tonight, in one feed. React, reply, slide into the DMs
+            — the group chat of the night, writing itself.</p>
+        </article>
+        <article class="glass step r s4">
+          <span class="n">04 · THE MORNING</span>
+          <h3>Replay the damage</h3>
+          <p>A full recap: peak BAC, the route you actually walked, every drink and schnaps,
+            who was there — and how it all compared to the plan.</p>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="map-h">
+      <p class="label r">Find the cheap pint</p>
+      <div class="split">
+        <div class="glass panel r s1">
+          <h2 id="map-h">The beer map, <em>everywhere.</em></h2>
+          <p class="lede">Zoom out and the whole world is on it. Every price is coloured
+            against what a beer actually costs in that region and that currency — so cheap
+            reads as cheap in Gothenburg, Lisbon or Tokyo, not just wherever the numbers
+            happen to be smallest.</p>
+          <ul class="plist">
+            <li><b>Any currency, anywhere.</b> <span>Prices follow the region you're in, and you can pick any currency in the world.</span></li>
+            <li><b>Filter by serving.</b> <span>25, 33, 40, 50 cl or a pint — compared like for like.</span></li>
+            <li><b>Live deals from bars.</b> <span>Offers near you tonight, right on the same map.</span></li>
+            <li><b>Add a price yourself.</b> <span>From the app or the web — search the bar, tap the price in.</span></li>
+          </ul>
+          <a class="btn" href="./map/">Open the map <span class="arw" aria-hidden="true">→</span></a>
+        </div>
+
+        <div class="glass panel r s2">
+          <div class="scale">
+            <div class="row">
+              <span class="pill" style="background:#3fbf4a">45 kr</span>
+              <span class="who">Cheapest around here</span>
+            </div>
+            <div class="row">
+              <span class="pill" style="background:#8fc633">58 kr</span>
+              <span class="who">A fair pour</span>
+            </div>
+            <div class="row">
+              <span class="pill" style="background:#d9a52c">72 kr</span>
+              <span class="who">Getting steep</span>
+            </div>
+            <div class="row">
+              <span class="pill" style="background:#e8843c">85 kr</span>
+              <span class="who">Tourist pricing</span>
+            </div>
+            <div class="row">
+              <span class="pill" style="background:#d8452f">110 kr</span>
+              <span class="who">You're paying for the view</span>
+            </div>
+            <p class="cap">Colour is relative to the local cheapest — same logic, any currency</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="bars-h">
+      <p class="label r">Sesh for bars</p>
+      <div class="glass bars r s1">
+        <div class="txt">
+          <h3 id="bars-h">Run a bar? Get on the map.</h3>
+          <p>Sesh users are out, phone in hand, deciding where to go next. Land on the Deals
+            map — from a simple pin to a rotating billboard at the top of the tab.</p>
+          <div class="tiers">
+            <span><b>Pin</b> · $29/mo</span>
+            <span><b>Poster</b> · $89/mo</span>
+            <span><b>Billboard</b> · $199/mo</span>
+          </div>
+        </div>
+        <div>
+          <a class="btn" href="./pricing/">See pricing <span class="arw" aria-hidden="true">→</span></a>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <footer>
+    <div class="wrap">
+      <div class="glass fpanel r">
+        <h2>Know your night.</h2>
+        <p class="lede" style="margin:0 auto 22px;">In beta on TestFlight for iOS 18 and up.</p>
+        <nav class="links" aria-label="Site">
+          <a href="./map/">Beer &amp; deals map</a>
+          <a href="./pricing/">For bars</a>
+          <a href="./calculator/">Try the calculator</a>
+          <a href="./privacy/">Privacy policy</a>
+          <a href="./terms/">Terms of use</a>
+          <a class="mail" href="mailto:contact@seshapp.xyz">contact@seshapp.xyz</a>
+        </nav>
+        <p class="foot">Drink responsibly · BAC values are estimates, never a reason to drive</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="./beer.js" defer></script>
 </body>
 </html>
