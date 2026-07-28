@@ -16,6 +16,7 @@ enum AuthError: LocalizedError {
     case profileMissing
     case emailAlreadyRegistered
     case invalidLogin
+    case profileLoadFailed
 
     var errorDescription: String? {
         switch self {
@@ -27,6 +28,8 @@ enum AuthError: LocalizedError {
             return "This email already has an account. Try signing in instead."
         case .invalidLogin:
             return "Wrong username/email or password."
+        case .profileLoadFailed:
+            return "Signed in, but couldn't load your profile. Check your connection and try again."
         }
     }
 }
@@ -193,7 +196,7 @@ final class AuthService: ObservableObject {
 
     func signIn(email: String, password: String) async throws {
         let session = try await supabase.auth.signIn(email: email, password: password)
-        let profile = try await loadProfile(userId: session.user.id)
+        let profile = try await loadProfileAfterSignIn(userId: session.user.id)
         state = .signedIn(profile)
     }
 
@@ -234,7 +237,7 @@ final class AuthService: ObservableObject {
             throw AuthError.invalidLogin
         }
         let session = try await supabase.auth.setSession(accessToken: at, refreshToken: rt)
-        let profile = try await loadProfile(userId: session.user.id)
+        let profile = try await loadProfileAfterSignIn(userId: session.user.id)
         state = .signedIn(profile)
     }
 
@@ -348,6 +351,32 @@ final class AuthService: ObservableObject {
         let url = try supabase.storage.from("avatars").getPublicURL(path: path)
         // Add a cache-buster so AsyncImage re-fetches after replace.
         return url.absoluteString + "?v=\(Int(Date().timeIntervalSince1970))"
+    }
+
+    /// Load the profile right after a sign-in.
+    ///
+    /// The REST client can still be carrying the pre-sign-in token for a beat
+    /// after the session is installed. A profile read that races it goes out
+    /// unauthenticated, so `auth.uid()` is null, the `profiles_select_own`
+    /// policy matches nothing, and PostgREST answers 406/PGRST116 — which
+    /// surfaced to the user as the raw "Cannot coerce the result to a single
+    /// JSON object". Settle the session first, then retry briefly before
+    /// giving up with a message that means something.
+    private func loadProfileAfterSignIn(userId: UUID) async throws -> Profile {
+        _ = try? await supabase.auth.session      // ensure the new token is applied
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do {
+                return try await loadProfile(userId: userId)
+            } catch {
+                lastError = error
+                if attempt < 2 {
+                    try? await Task.sleep(nanoseconds: 150_000_000 * UInt64(attempt + 1))
+                }
+            }
+        }
+        // Never leak raw PostgREST text to the login screen.
+        throw (lastError as? AuthError) ?? AuthError.profileLoadFailed
     }
 
     private func loadProfile(userId: UUID) async throws -> Profile {
