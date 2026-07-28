@@ -176,7 +176,11 @@
     box-shadow:0 30px 70px -40px rgba(0,0,0,.9),inset 0 1px 0 rgba(243,233,216,.05);
   }
 
-  /* ---------- the five tabs + recap ---------- */
+  /* ---------- the five tabs + recap ----------
+     Four cards are real screenshots straight out of the app. The other three
+     are rebuilt here in CSS against the app's own tokens, taken from
+     DesignSystem.swift: ink #0B0A08, inkElev #131110, whiskey #E8A84A,
+     cream #F5EDE0, bronze #8A7F6E — and SF Pro Rounded, the app's UI face. */
   .screens{display:grid;grid-template-columns:repeat(auto-fit,minmax(286px,1fr));gap:16px;margin-top:36px;}
   .tabcard{
     position:relative;overflow:hidden;padding:24px 22px 26px;
@@ -196,270 +200,220 @@
   .tabcard h3{font-family:"Fraunces",serif;font-weight:800;font-size:1.28rem;margin:0 0 8px;
     letter-spacing:-.01em;}
   .tabcard p{margin:0;color:var(--cream-dim);font-size:.94rem;line-height:1.6;}
+  .shotnote{
+    display:inline-block;margin:12px 0 0;font-family:var(--mono);font-size:8.5px;
+    letter-spacing:.14em;text-transform:uppercase;color:rgba(179,137,90,.75);
+  }
 
-  /* ---------- phone mockups ---------- */
+  /* ---------- the phone ---------- */
+  :root{
+    --a-ink:#0B0A08; --a-elev:#131110; --a-whiskey:#E8A84A;
+    --a-cream:#F5EDE0; --a-bronze:#8A7F6E;
+    --a-font:ui-rounded,"SF Pro Rounded",-apple-system,"Segoe UI",system-ui,sans-serif;
+    --a-mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+  }
   .phone{
-    position:relative;width:100%;max-width:196px;margin:0 auto;aspect-ratio:9/17.4;
-    border-radius:26px;padding:6px;
-    background:linear-gradient(160deg,#2c2118,#15100a);
-    border:1px solid rgba(243,233,216,.15);
-    box-shadow:0 26px 48px -26px rgba(0,0,0,.95),inset 0 1px 0 rgba(243,233,216,.08);
+    position:relative;width:100%;max-width:200px;margin:0 auto;
+    border-radius:30px;padding:5px;
+    background:linear-gradient(160deg,#332619,#14100a);
+    border:1px solid rgba(243,233,216,.16);
+    box-shadow:0 26px 48px -26px rgba(0,0,0,.95),inset 0 1px 0 rgba(243,233,216,.09);
   }
   .screen{
-    position:relative;height:100%;border-radius:21px;overflow:hidden;
-    background:radial-gradient(120% 70% at 50% -12%,rgba(232,132,60,.16),transparent 60%),#16100a;
+    position:relative;aspect-ratio:402/874;border-radius:26px;overflow:hidden;
+    background:var(--a-ink);
     display:flex;flex-direction:column;
+    font-family:var(--a-font);
   }
-  .notch{position:absolute;top:5px;left:50%;transform:translateX(-50%);width:32px;height:3px;
-    border-radius:3px;background:rgba(243,233,216,.2);z-index:6;}
-  .sHead{padding:15px 10px 6px;flex:none;}
-  .sKick{font-family:var(--mono);font-size:6.5px;letter-spacing:.22em;color:var(--bronze);
-    text-transform:uppercase;display:block;}
-  .sTitle{font-family:"Fraunces",serif;font-weight:800;font-size:11px;margin-top:2px;
-    letter-spacing:-.01em;}
-  .sBody{flex:1;padding:4px 10px 0;display:flex;flex-direction:column;gap:5px;overflow:hidden;}
-  /* mini tab bar — the app's five tabs */
-  .sTabs{flex:none;display:flex;gap:5px;justify-content:center;align-items:center;
-    padding:9px 0 11px;border-top:1px solid rgba(243,233,216,.07);margin-top:6px;}
-  .sTabs i{width:5px;height:5px;border-radius:50%;background:rgba(243,233,216,.2);
-    transition:none;flex:none;}
-  .sTabs i.on{width:17px;border-radius:3px;background:var(--whiskey);
-    box-shadow:0 0 9px rgba(232,132,60,.75);}
+  /* real captures — two frames cross-fading where the state changes */
+  .shot{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;}
+  .shot.b{opacity:0;animation:swap 8s ease-in-out infinite;}
+  /* quick cut rather than a long dissolve — two map views blended mid-way
+     reads as a glitch, not a transition */
+  @keyframes swap{
+    0%,46%{opacity:0;}
+    50%,94%{opacity:1;}
+    98%,100%{opacity:0;}
+  }
 
-  /* shared mini bits */
-  .mrow{background:rgba(243,233,216,.055);border:1px solid rgba(243,233,216,.08);
-    border-radius:8px;padding:6px 7px;display:flex;align-items:center;gap:6px;}
-  .mlab{font-size:7.5px;color:var(--cream);line-height:1.25;}
-  .mdim{font-family:var(--mono);font-size:6.5px;color:var(--bronze);letter-spacing:.06em;}
-  .av{width:15px;height:15px;border-radius:50%;flex:none;display:grid;place-items:center;
-    font-family:var(--mono);font-size:6px;font-weight:700;color:#1a1108;
-    background:linear-gradient(150deg,var(--whiskey),#c96a24);}
-  .av.b{background:linear-gradient(150deg,#8fc633,#5a9b28);}
-  .av.c{background:linear-gradient(150deg,#d9a52c,#b3801a);}
-  .av.d{background:linear-gradient(150deg,#b3895a,#8a6236);}
-  .mbtn{margin-top:auto;margin-bottom:2px;text-align:center;font-family:var(--mono);
-    font-size:7px;font-weight:700;letter-spacing:.14em;color:#1a1108;background:var(--whiskey);
-    border-radius:100px;padding:6px 0;box-shadow:0 6px 14px -6px rgba(232,132,60,.8);}
+  /* ---------- shared chrome for the rebuilt screens ---------- */
+  /* iOS status bar, so these sit level with the real captures */
+  .aBar{position:relative;flex:none;height:18px;display:flex;align-items:center;
+    justify-content:space-between;padding:2px 10px 0;}
+  .aBar .t{font-size:6.5px;font-weight:700;color:#fff;letter-spacing:-.02em;}
+  .aBar .isl{position:absolute;left:50%;top:3px;transform:translateX(-50%);
+    width:36px;height:12px;border-radius:7px;background:#000;}
+  .aBar .ic{display:flex;align-items:center;gap:2.5px;}
+  .aBar .wf{width:0;height:0;border-left:3px solid transparent;border-right:3px solid transparent;
+    border-bottom:4.5px solid rgba(255,255,255,.85);}
+  .aBar .bat{position:relative;width:10px;height:5px;border-radius:1.5px;
+    border:.8px solid rgba(255,255,255,.7);}
+  .aBar .bat::after{content:"";position:absolute;inset:1px;border-radius:.5px;background:#fff;}
+  .aHead{flex:none;display:flex;align-items:center;gap:5px;padding:5px 11px 7px;}
+  .aTitle{font-size:15px;font-weight:800;color:var(--a-cream);letter-spacing:-.02em;margin-right:auto;}
+  .aEnd{font-family:var(--a-mono);font-size:6px;font-weight:700;letter-spacing:.14em;
+    color:var(--a-cream);border:1px solid rgba(245,237,224,.28);border-radius:100px;padding:3px 6px;}
+  .aDot{width:13px;height:13px;border-radius:50%;border:1px solid rgba(245,237,224,.22);}
+  .aMe{width:15px;height:15px;border-radius:50%;
+    background:linear-gradient(150deg,#6b5a44,#3a2f22);border:1px solid rgba(232,168,74,.5);}
+  .aBody{flex:1;padding:2px 11px 0;display:flex;flex-direction:column;gap:6px;overflow:hidden;}
+  .aKick{font-family:var(--a-mono);font-size:6px;letter-spacing:.2em;color:var(--a-bronze);
+    text-transform:uppercase;}
+
+  /* the app's tab bar */
+  .aTabs{flex:none;display:flex;justify-content:space-around;align-items:flex-end;
+    padding:7px 4px 9px;border-top:1px solid rgba(245,237,224,.07);background:#0a0906;}
+  .aTab{display:flex;flex-direction:column;align-items:center;gap:2px;}
+  .aTab svg{width:13px;height:13px;display:block;}
+  .aTab span{font-family:var(--a-mono);font-size:5px;letter-spacing:.06em;color:#6f6759;}
+  .aTab.on span{color:var(--a-whiskey);}
+  .aTab path,.aTab circle,.aTab rect{stroke:#6f6759;fill:none;stroke-width:1.6;}
+  .aTab.on path,.aTab.on circle,.aTab.on rect{stroke:var(--a-whiskey);}
+  .aTab.on .fill{fill:var(--a-whiskey);stroke:none;}
 
   /* animation gate: nothing moves until the card is on screen */
   .screens .r:not(.in) *{animation-play-state:paused!important;}
 
-  /* — PLAN: invites land, tier set, shopping list computes — */
-  .p-goers{display:flex;gap:3px;align-items:center;}
-  .p-goers .av{opacity:0;animation:pop 9s var(--spring) infinite;}
-  .p-goers .av:nth-child(1){animation-delay:.2s}
-  .p-goers .av:nth-child(2){animation-delay:.6s}
-  .p-goers .av:nth-child(3){animation-delay:1s}
-  .p-goers .av:nth-child(4){animation-delay:1.4s}
-  @keyframes pop{
-    0%{opacity:0;transform:scale(.4);}
-    6%{opacity:1;transform:scale(1.14);}
-    9%,92%{opacity:1;transform:scale(1);}
-    100%{opacity:1;transform:scale(1);}
-  }
-  .p-track{position:relative;height:3px;border-radius:3px;background:rgba(243,233,216,.13);
-    margin:5px 2px 2px;}
-  .p-track b{position:absolute;top:-3px;left:0;width:9px;height:9px;border-radius:50%;
-    background:var(--whiskey);box-shadow:0 0 10px rgba(232,132,60,.9);
-    animation:slide 9s var(--ease) infinite;}
-  @keyframes slide{
-    0%,14%{left:4%;} 30%,100%{left:66%;}
-  }
-  .p-list{display:flex;flex-direction:column;gap:4px;}
-  .p-list .mrow{opacity:0;animation:riseIn 9s var(--ease) infinite;}
-  .p-list .mrow:nth-child(1){animation-delay:2.1s}
-  .p-list .mrow:nth-child(2){animation-delay:2.45s}
-  .p-list .mrow:nth-child(3){animation-delay:2.8s}
-  .p-list .mrow:nth-child(4){animation-delay:3.15s}
+  /* — NIGHTLINE — */
+  .nStrip{display:flex;gap:9px;padding:1px 0 3px;}
+  .nRing{display:flex;flex-direction:column;align-items:center;gap:3px;}
+  .nRing i{position:relative;width:30px;height:30px;border-radius:50%;
+    background:linear-gradient(150deg,#6b5a44,#3a2f22);
+    box-shadow:0 0 0 1.5px var(--a-whiskey),0 0 0 3px var(--a-ink);}
+  .nRing.map i{background:radial-gradient(circle at 40% 35%,#2c4a5e,#16232e);
+    box-shadow:0 0 0 1.5px rgba(245,237,224,.22),0 0 0 3px var(--a-ink);}
+  .nRing i b{position:absolute;right:-2px;bottom:-2px;width:12px;height:12px;border-radius:50%;
+    background:var(--a-whiskey);color:#1a1108;font-size:9px;font-weight:800;line-height:11px;
+    text-align:center;border:1.5px solid var(--a-ink);}
+  .nRing span{font-size:6px;color:var(--a-bronze);}
+  .nPost{background:#100e0a;border:1px solid rgba(245,237,224,.07);border-radius:12px;
+    overflow:hidden;opacity:0;animation:riseIn 8s var(--ease) infinite;}
+  .nPost.p2{animation-delay:1.6s}
   @keyframes riseIn{
-    0%{opacity:0;transform:translateY(7px);}
-    5%,94%{opacity:1;transform:none;}
+    0%{opacity:0;transform:translateY(8px);}
+    6%,94%{opacity:1;transform:none;}
     100%{opacity:1;transform:none;}
   }
-  .p-qty{margin-left:auto;font-family:var(--mono);font-size:8px;font-weight:700;
-    color:var(--whiskey);}
+  .nWho{display:flex;align-items:center;gap:5px;padding:6px 7px 5px;}
+  .nWho i{width:14px;height:14px;border-radius:50%;flex:none;
+    background:linear-gradient(150deg,#6b5a44,#3a2f22);}
+  .nWho b{font-size:7.5px;font-weight:700;color:var(--a-cream);}
+  .nWho em{font-style:normal;font-size:6px;color:var(--a-bronze);}
+  .nWho u{margin-left:auto;text-decoration:none;font-size:6px;color:var(--a-bronze);}
+  .nMedia{position:relative;height:62px;overflow:hidden;
+    background:linear-gradient(150deg,#5b4630,#241b12 72%),
+               radial-gradient(70% 55% at 28% 18%,rgba(232,168,74,.34),transparent);}
+  /* suggests a lit room behind people, without being anyone's photo */
+  .nMedia::before{content:"";position:absolute;inset:0;
+    background:radial-gradient(38% 60% at 32% 74%,rgba(20,14,8,.75),transparent 70%),
+               radial-gradient(30% 52% at 62% 82%,rgba(20,14,8,.7),transparent 70%),
+               radial-gradient(22% 30% at 82% 26%,rgba(255,214,140,.28),transparent 70%);}
+  .nMedia::after{content:"";position:absolute;inset:0;opacity:.5;
+    background:linear-gradient(115deg,transparent 42%,rgba(255,236,200,.14) 50%,transparent 58%);}
+  .nChip{position:absolute;left:6px;bottom:6px;display:flex;align-items:center;gap:3px;
+    background:rgba(10,9,6,.72);border-radius:100px;padding:2.5px 6px;
+    font-size:6px;color:var(--a-cream);}
+  .nChip i{width:4px;height:4px;border-radius:50%;background:var(--a-whiskey);}
+  .nPips{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);display:flex;gap:3px;}
+  .nPips i{width:3px;height:3px;border-radius:50%;background:rgba(245,237,224,.35);}
+  .nPips i.on{background:var(--a-cream);}
+  .nActs{display:flex;gap:9px;padding:5px 7px 2px;}
+  .nActs svg{width:11px;height:11px;}
+  .nActs path{stroke:var(--a-cream);fill:none;stroke-width:1.6;}
+  .nActs .heart{animation:beat 8s var(--spring) infinite;transform-origin:50% 60%;}
+  .nActs .heart path{fill:#e0503a;stroke:#e0503a;}
+  @keyframes beat{
+    0%,18%{transform:scale(0);opacity:0;}
+    24%{transform:scale(1.3);opacity:1;}
+    30%,92%{transform:scale(1);opacity:1;}
+    100%{transform:scale(1);opacity:1;}
+  }
+  .nCap{padding:0 7px 4px;font-size:7.5px;color:var(--a-cream);line-height:1.3;}
+  .nStats{display:flex;align-items:center;gap:7px;padding:0 7px 7px;}
+  .nStats b{display:flex;align-items:center;gap:2.5px;font-family:var(--a-mono);font-size:6px;
+    font-weight:400;color:var(--a-cream);}
+  .nStats b svg{width:7px;height:7px;flex:none;}
+  .nStats b path,.nStats b circle{stroke:var(--a-bronze);fill:none;stroke-width:2;}
+  .nStats u{margin-left:auto;text-decoration:none;color:var(--a-bronze);font-size:8px;}
 
-  /* — LIVE: tap a drink, BAC climbs — */
-  .l-bacwrap{text-align:center;padding:2px 0 0;}
-  .l-bac{height:1em;overflow:hidden;font-size:27px;line-height:1;
-    font-family:"Fraunces",serif;font-weight:800;letter-spacing:-.03em;}
-  .l-bac div{animation:bacTick 9s var(--ease) infinite;}
-  .l-bac b{display:block;height:1em;font-weight:800;}
-  @keyframes bacTick{
-    0%,20%{transform:translateY(0);}
-    26%,44%{transform:translateY(-1em);}
-    50%,68%{transform:translateY(-2em);}
-    74%,94%{transform:translateY(-3em);}
-    100%{transform:translateY(-3em);}
+  /* — CHATS — */
+  .cTop{display:flex;align-items:center;gap:6px;padding:2px 0 4px;}
+  .cBack{font-size:11px;color:var(--a-cream);}
+  .cName{font-size:9px;font-weight:800;color:var(--a-cream);}
+  .cAv{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;
+    background:var(--a-whiskey);color:#1a1108;font-size:7px;font-weight:800;}
+  .cReply{display:flex;align-items:center;gap:5px;opacity:0;
+    animation:riseIn 8s var(--ease) infinite;animation-delay:.4s;}
+  .cReply i{width:15px;height:22px;border-radius:3px;flex:none;
+    background:linear-gradient(150deg,#5a4a6e,#2a2033);}
+  .cReply span{font-size:6.5px;color:var(--a-bronze);}
+  .cBub{align-self:flex-start;max-width:78%;padding:5px 8px;border-radius:11px;
+    border-bottom-left-radius:4px;background:#1e1b16;color:var(--a-cream);
+    font-size:7.5px;line-height:1.35;opacity:0;
+    animation:riseIn 8s var(--ease) infinite;animation-delay:.9s;}
+  .cBub.b2{animation-delay:1.5s;}
+  .cWhen{font-family:var(--a-mono);font-size:5.5px;color:#5f584c;opacity:0;
+    animation:riseIn 8s var(--ease) infinite;animation-delay:1.1s;}
+  /* the composer, with a message being typed into it */
+  .cBar{margin-top:auto;margin-bottom:4px;display:flex;align-items:center;gap:5px;}
+  .cField{flex:1;height:22px;border-radius:100px;background:#191612;
+    display:flex;align-items:center;padding:0 8px;overflow:hidden;}
+  .cType{font-size:7px;color:var(--a-cream);white-space:nowrap;overflow:hidden;
+    border-right:1px solid var(--a-whiskey);
+    animation:typeIn 8s steps(38,end) infinite;}
+  @keyframes typeIn{
+    0%,16%{max-width:0;}
+    46%,92%{max-width:100%;}
+    100%{max-width:100%;}
   }
-  .l-state{height:1em;overflow:hidden;font-family:var(--mono);font-size:7px;line-height:1;
-    letter-spacing:.2em;text-transform:uppercase;color:var(--whiskey);margin-top:4px;}
-  .l-state div{animation:stateTick 9s var(--ease) infinite;}
-  .l-state b{display:block;height:1em;font-weight:700;}
-  @keyframes stateTick{
-    0%,20%{transform:translateY(0);}
-    26%,68%{transform:translateY(-1em);}
-    74%,100%{transform:translateY(-2em);}
-  }
-  .l-meter{height:3px;border-radius:3px;background:rgba(243,233,216,.13);margin:8px 2px;
-    overflow:hidden;}
-  .l-meter i{display:block;height:100%;border-radius:3px;transform-origin:left;
-    background:linear-gradient(90deg,#8fc633,var(--whiskey));
-    animation:meter 9s var(--ease) infinite;}
-  @keyframes meter{
-    0%,20%{transform:scaleX(.06);}
-    26%,44%{transform:scaleX(.3);}
-    50%,68%{transform:scaleX(.56);}
-    74%,100%{transform:scaleX(.82);}
-  }
-  .l-tiles{display:flex;gap:4px;}
-  .l-tiles .mrow{flex:1;justify-content:center;padding:6px 2px;font-size:11px;opacity:0;
-    animation:pop 9s var(--spring) infinite;}
-  .l-tiles .mrow:nth-child(1){animation-delay:.3s}
-  .l-tiles .mrow:nth-child(2){animation-delay:2.6s}
-  .l-tiles .mrow:nth-child(3){animation-delay:5s}
-  .l-tap{margin-top:auto;margin-bottom:2px;position:relative;}
-  .l-tap .mbtn{margin:0;animation:press 9s var(--ease) infinite;}
-  @keyframes press{
-    0%,17%{transform:scale(1);}
-    20%{transform:scale(.93);}
-    23%,41%{transform:scale(1);}
-    44%{transform:scale(.93);}
-    47%,65%{transform:scale(1);}
-    68%{transform:scale(.93);}
-    71%,100%{transform:scale(1);}
+  .cSend{width:22px;height:22px;border-radius:50%;flex:none;display:grid;place-items:center;
+    background:#3a2f1c;animation:arm 8s ease-in-out infinite;}
+  .cSend svg{width:10px;height:10px;}
+  .cSend path{stroke:#8a7a55;stroke-width:1.8;fill:none;}
+  @keyframes arm{
+    0%,46%{background:#3a2f1c;}
+    54%,92%{background:var(--a-whiskey);}
+    100%{background:#3a2f1c;}
   }
 
-  /* — NIGHTLINE: who's out, stories landing — */
-  .n-out{display:flex;align-items:center;gap:4px;}
-  .n-out .av{position:relative;}
-  .n-out .av::after{content:"";position:absolute;right:-1px;bottom:-1px;width:5px;height:5px;
-    border-radius:50%;background:#8fc633;border:1.5px solid #16100a;
-    animation:blink 2.4s ease-in-out infinite;}
-  .n-out .av:nth-child(2)::after{animation-delay:.5s}
-  .n-out .av:nth-child(3)::after{animation-delay:1s}
-  @keyframes blink{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.45;transform:scale(.82);}}
-  .n-story{position:relative;border-radius:9px;overflow:hidden;padding:8px 8px 9px;
-    border:1px solid rgba(243,233,216,.09);
-    background:linear-gradient(150deg,rgba(232,132,60,.2),rgba(243,233,216,.05));
-    opacity:0;animation:riseIn 9s var(--ease) infinite;}
-  .n-story.t1{animation-delay:.5s}
-  .n-story.t2{animation-delay:2.3s}
-  .n-story.t3{animation-delay:4.1s}
-  .n-story .cap{font-size:7.5px;color:var(--cream);margin-top:5px;line-height:1.3;}
-  .n-fire{position:absolute;right:7px;bottom:7px;font-size:10px;opacity:0;
-    animation:react 9s var(--spring) infinite;}
-  .n-fire.two{animation-delay:2.3s}
-  .n-fire.three{animation-delay:4.1s}
-  @keyframes react{
-    0%,14%{opacity:0;transform:scale(.4) translateY(4px);}
-    20%{opacity:1;transform:scale(1.25) translateY(0);}
-    24%,92%{opacity:1;transform:scale(1);}
-    100%{opacity:1;transform:scale(1);}
-  }
-
-  /* — CHATS: the conversation — */
-  .c-thread{display:flex;flex-direction:column;gap:5px;}
-  .c-b{max-width:82%;padding:5px 7px;border-radius:9px;font-size:7.5px;line-height:1.35;
-    opacity:0;animation:riseIn 9s var(--ease) infinite;}
-  .c-in{align-self:flex-start;background:rgba(243,233,216,.08);
-    border:1px solid rgba(243,233,216,.08);border-bottom-left-radius:3px;color:var(--cream);}
-  .c-out{align-self:flex-end;background:rgba(232,132,60,.9);color:#1a1108;font-weight:600;
-    border-bottom-right-radius:3px;}
-  .c-b.b1{animation-delay:.4s}
-  .c-b.b2{animation-delay:1.4s}
-  .c-b.b3{animation-delay:2.6s}
-  .c-b.b4{animation-delay:3.8s}
-  /* the typing bubble lands last and stays — no phantom gap mid-thread */
-  .c-type{align-self:flex-start;display:flex;gap:3px;padding:6px 8px;border-radius:9px;
-    background:rgba(243,233,216,.08);border:1px solid rgba(243,233,216,.08);
-    border-bottom-left-radius:3px;
-    opacity:0;animation:riseIn 9s var(--ease) infinite;animation-delay:4.9s;}
-  .c-type i{width:3.5px;height:3.5px;border-radius:50%;background:var(--bronze);
-    animation:bounce 1.1s ease-in-out infinite;}
-  .c-type i:nth-child(2){animation-delay:.15s}
-  .c-type i:nth-child(3){animation-delay:.3s}
-  @keyframes bounce{0%,100%{transform:translateY(0);opacity:.5;}50%{transform:translateY(-3px);opacity:1;}}
-
-  /* — DEALS: the map, then an offer — */
-  .d-map{position:relative;flex:1;border-radius:9px;overflow:hidden;
-    border:1px solid rgba(243,233,216,.08);
-    background:
-      linear-gradient(90deg,rgba(243,233,216,.055) 1px,transparent 1px) 0 0/26px 26px,
-      linear-gradient(180deg,rgba(243,233,216,.055) 1px,transparent 1px) 0 0/26px 26px,
-      radial-gradient(90% 70% at 30% 20%,rgba(232,132,60,.12),transparent 60%),
-      #120d08;}
-  .d-road{position:absolute;background:rgba(243,233,216,.07);}
-  .d-road.a{left:0;right:0;top:38%;height:5px;transform:rotate(-6deg);}
-  .d-road.b{top:0;bottom:0;left:56%;width:5px;transform:rotate(4deg);}
-  .d-pin{position:absolute;font-family:var(--mono);font-size:6.5px;font-weight:700;
-    color:#1a1108;padding:2.5px 4px;border-radius:100px;opacity:0;
-    box-shadow:0 4px 9px -4px rgba(0,0,0,.9);animation:pop 9s var(--spring) infinite;}
-  .d-pin.one{left:11%;top:22%;background:#3fbf4a;animation-delay:.3s;}
-  .d-pin.two{left:53%;top:47%;background:#d9a52c;animation-delay:.65s;}
-  .d-pin.three{left:22%;top:69%;background:#e8843c;animation-delay:1s;}
-  .d-ring{position:absolute;left:11%;top:22%;width:20px;height:20px;margin:-5px 0 0 -2px;
-    border-radius:50%;border:1px solid rgba(63,191,74,.9);opacity:0;
-    animation:ring 9s ease-out infinite;animation-delay:1.6s;}
-  @keyframes ring{
-    0%,16%{opacity:0;transform:scale(.3);}
-    20%{opacity:.9;transform:scale(.5);}
-    34%{opacity:0;transform:scale(1.5);}
-    100%{opacity:0;transform:scale(1.5);}
-  }
-  .d-offer{position:absolute;left:5px;right:5px;bottom:5px;border-radius:8px;padding:6px 7px;
-    background:rgba(24,17,11,.94);border:1px solid rgba(232,132,60,.4);
-    box-shadow:0 10px 20px -10px rgba(0,0,0,.95);
-    opacity:0;animation:offerUp 9s var(--spring) infinite;animation-delay:2s;}
-  @keyframes offerUp{
-    0%{opacity:0;transform:translateY(16px);}
-    5%,92%{opacity:1;transform:none;}
-    100%{opacity:1;transform:none;}
-  }
-  .d-offer .t{font-family:"Fraunces",serif;font-weight:800;font-size:9px;}
-  .d-offer .s{font-family:var(--mono);font-size:6px;color:var(--whiskey);letter-spacing:.1em;
-    margin-top:2px;}
-
-  /* — RECAP: the morning report — */
-  .r-peak{text-align:center;padding:2px 0 4px;}
-  .r-peak .v{font-family:"Fraunces",serif;font-weight:800;font-size:24px;line-height:1;
-    letter-spacing:-.03em;}
-  .r-peak .k{font-family:var(--mono);font-size:6.5px;letter-spacing:.2em;color:var(--bronze);
-    text-transform:uppercase;}
-  .r-route{position:relative;height:56px;border-radius:9px;overflow:hidden;
-    border:1px solid rgba(243,233,216,.08);background:#120d08;}
-  .r-route svg{position:absolute;inset:0;width:100%;height:100%;}
-  .r-route path{fill:none;stroke:var(--whiskey);stroke-width:1.6;stroke-linecap:round;
-    stroke-linejoin:round;stroke-dasharray:150;stroke-dashoffset:150;
-    animation:draw 9s var(--ease) infinite;}
-  @keyframes draw{
-    0%,6%{stroke-dashoffset:150;}
-    38%,92%{stroke-dashoffset:0;}
-    100%{stroke-dashoffset:0;}
-  }
-  .r-route i{position:absolute;width:4px;height:4px;border-radius:50%;background:var(--cream);
-    box-shadow:0 0 6px rgba(243,233,216,.8);opacity:0;animation:pop 9s var(--spring) infinite;}
-  .r-route i:nth-of-type(1){left:10%;top:70%;animation-delay:.7s}
-  .r-route i:nth-of-type(2){left:45%;top:26%;animation-delay:2s}
-  .r-route i:nth-of-type(3){left:83%;top:52%;animation-delay:3.2s}
-  .r-stats{display:flex;gap:4px;}
-  .r-stats div{flex:1;text-align:center;border-radius:8px;padding:5px 2px;
-    background:rgba(243,233,216,.055);border:1px solid rgba(243,233,216,.08);
-    opacity:0;animation:riseIn 9s var(--ease) infinite;}
-  .r-stats div:nth-child(1){animation-delay:3.4s}
-  .r-stats div:nth-child(2){animation-delay:3.65s}
-  .r-stats div:nth-child(3){animation-delay:3.9s}
-  .r-who{display:flex;gap:3px;align-items:center;}
-  .r-who .av{opacity:0;animation:pop 9s var(--spring) infinite;}
-  .r-who .av:nth-child(1){animation-delay:4.2s}
-  .r-who .av:nth-child(2){animation-delay:4.4s}
-  .r-who .av:nth-child(3){animation-delay:4.6s}
-  .r-who .av:nth-child(4){animation-delay:4.8s}
-  .r-stats b{display:block;font-family:"Fraunces",serif;font-weight:800;font-size:12px;
-    line-height:1;}
-  .r-stats span{font-family:var(--mono);font-size:5.5px;letter-spacing:.12em;color:var(--bronze);
-    text-transform:uppercase;}
-
+  /* — RECAP — */
+  .kStats{display:flex;gap:4px;}
+  .kStats{flex:none;}
+  .kStats div{flex:1;text-align:center;border-radius:9px;padding:4px 1px;
+    background:#100e0a;border:1px solid rgba(245,237,224,.07);
+    opacity:0;animation:riseIn 8s var(--ease) infinite;}
+  .kStats div:nth-child(1){animation-delay:.15s}
+  .kStats div:nth-child(2){animation-delay:.3s}
+  .kStats div:nth-child(3){animation-delay:.45s}
+  .kStats div:nth-child(4){animation-delay:.6s}
+  .kStats b{display:block;font-size:11px;font-weight:800;color:var(--a-cream);line-height:1.1;}
+  .kStats b i{font-style:normal;font-size:6px;font-weight:600;margin-left:1px;}
+  .kStats span{font-family:var(--a-mono);font-size:4.6px;letter-spacing:.1em;
+    color:var(--a-bronze);text-transform:uppercase;}
+  /* flex:none so the column can't squash the map and clip its pins */
+  .kMap{position:relative;flex:none;aspect-ratio:1082/480;border-radius:10px;overflow:hidden;
+    border:1px solid rgba(245,237,224,.09);opacity:0;
+    animation:riseIn 8s var(--ease) infinite;animation-delay:.75s;}
+  .kShot{display:block;width:100%;height:100%;object-fit:cover;}
+  .kStop{flex:none;display:flex;align-items:center;gap:5px;background:#100e0a;
+    border:1px solid rgba(245,237,224,.07);border-radius:9px;padding:4.5px 7px;
+    opacity:0;animation:riseIn 8s var(--ease) infinite;}
+  .kStop.s1{animation-delay:1.8s}
+  .kStop.s2{animation-delay:2.1s}
+  .kStop.s3{animation-delay:2.4s}
+  .kStop.s4{animation-delay:2.7s}
+  .kWho{display:flex;align-items:center;gap:6px;padding-top:1px;opacity:0;
+    animation:riseIn 8s var(--ease) infinite;animation-delay:3.1s;}
+  .kFaces{display:flex;gap:2px;}
+  .kFaces i{width:14px;height:14px;border-radius:50%;font-style:normal;
+    background:linear-gradient(150deg,#6b5a44,#3a2f22);
+    font-family:var(--a-mono);font-size:5px;color:var(--a-cream);
+    display:grid;place-items:center;}
+  .kStop em{font-style:normal;font-size:9px;}
+  .kStop b{font-size:7.5px;font-weight:700;color:var(--a-cream);display:block;line-height:1.2;}
+  .kStop i{font-style:normal;font-family:var(--a-mono);font-size:5.5px;color:var(--a-bronze);}
+  .kStop u{margin-left:auto;text-decoration:none;font-family:var(--a-mono);font-size:6px;
+    color:var(--a-cream);white-space:nowrap;}
   /* ---------- split feature rows ---------- */
   .split{display:grid;grid-template-columns:1.05fr .95fr;gap:clamp(20px,4vw,44px);align-items:center;}
   @media (max-width:820px){.split{grid-template-columns:1fr;}}
@@ -583,210 +537,195 @@
       <div class="screens">
 
         <article class="glass tabcard r s1">
-          <div class="phone" aria-hidden="true">
-            <div class="notch"></div>
+          <div class="phone">
             <div class="screen">
-              <div class="sHead">
-                <span class="sKick">Plan · Fri 22 Aug</span>
-                <div class="sTitle">Weekend trip</div>
-              </div>
-              <div class="sBody">
-                <div class="p-goers">
-                  <span class="av">M</span><span class="av b">J</span>
-                  <span class="av c">A</span><span class="av d">+3</span>
-                  <span class="mdim" style="margin-left:auto">6 going</span>
-                </div>
-                <span class="mdim" style="margin-top:4px">Target · lit</span>
-                <div class="p-track"><b></b></div>
-                <span class="mdim" style="margin-top:4px">Buy for the trip</span>
-                <div class="p-list">
-                  <div class="mrow"><span class="mlab">Vodka 70cl</span><span class="p-qty">×2</span></div>
-                  <div class="mrow"><span class="mlab">Beer 33cl</span><span class="p-qty">×18</span></div>
-                  <div class="mrow"><span class="mlab">Wine 75cl</span><span class="p-qty">×3</span></div>
-                  <div class="mrow"><span class="mlab">Cider 33cl</span><span class="p-qty">×6</span></div>
-                </div>
-                <div class="mbtn">INVITE FRIENDS</div>
-              </div>
-              <div class="sTabs"><i class="on"></i><i></i><i></i><i></i><i></i></div>
+              <img class="shot" src="./screens/plan.jpg" width="402" height="874"
+                   loading="lazy" decoding="async"
+                   alt="The PLAN tab: the supply calculator working out 11 cans of beer and a bottle of wine for a crew of two, landing everyone at about 0.95 per mille." />
             </div>
           </div>
           <span class="n">01 · PLAN</span>
           <h3>Plan the party</h3>
           <p>Create a party or a trip, invite the crew, pick the level you're after — and the
             calculator works out exactly how much to buy, in bottles and cans.</p>
+          <span class="shotnote">Real screen · from the app</span>
         </article>
 
         <article class="glass tabcard r s2">
-          <div class="phone" aria-hidden="true">
-            <div class="notch"></div>
+          <div class="phone">
             <div class="screen">
-              <div class="sHead">
-                <span class="sKick">Live · O'Learys</span>
-              </div>
-              <div class="sBody">
-                <div class="l-bacwrap">
-                  <div class="l-bac"><div><b>0.00</b><b>0.03</b><b>0.06</b><b>0.09</b></div></div>
-                  <div class="l-state"><div><b>Clear</b><b>Warming</b><b>Feeling it</b></div></div>
-                </div>
-                <div class="l-meter"><i></i></div>
-                <span class="mdim">Tonight</span>
-                <div class="l-tiles">
-                  <div class="mrow">🍺</div><div class="mrow">🍺</div><div class="mrow">🥃</div>
-                </div>
-                <span class="mdim" style="margin-top:3px">Your table</span>
-                <div class="mrow">
-                  <span class="av b">J</span><span class="mlab">Johan</span>
-                  <span class="p-qty" style="margin-left:auto;font-size:7px">0.05</span>
-                </div>
-                <div class="mrow">
-                  <span class="av c">A</span><span class="mlab">Alva</span>
-                  <span class="p-qty" style="margin-left:auto;font-size:7px">0.03</span>
-                </div>
-                <div class="l-tap"><div class="mbtn">+ LOG A DRINK</div></div>
-              </div>
-              <div class="sTabs"><i></i><i class="on"></i><i></i><i></i><i></i></div>
+              <img class="shot" src="./screens/live-a.jpg" width="402" height="874"
+                   loading="lazy" decoding="async"
+                   alt="The LIVE tab showing an estimated 0.72 per mille, marked impaired, checked in at John Scott's Pub." />
+              <img class="shot b" src="./screens/live-b.jpg" width="402" height="874"
+                   loading="lazy" decoding="async" aria-hidden="true" alt="" />
             </div>
           </div>
           <span class="n">02 · LIVE</span>
           <h3>Log as you go</h3>
-          <p>One tap per drink and your estimated BAC climbs in real time. Check in to bars,
-            bring the crew, and watch everyone's numbers at the same table.</p>
+          <p>One tap per drink and your estimated BAC climbs in real time — with how long
+            until you're clear, and until you're under the limit. Check in to bars and bring
+            the crew.</p>
+          <span class="shotnote">Real screens · two taps apart</span>
         </article>
 
         <article class="glass tabcard r s3">
-          <div class="phone" aria-hidden="true">
-            <div class="notch"></div>
-            <div class="screen">
-              <div class="sHead">
-                <span class="sKick">Nightline</span>
-                <div class="sTitle">Out right now</div>
+          <div class="phone">
+            <div class="screen" aria-hidden="true">
+              <div class="aBar"><span class="t">11:08</span><span class="isl"></span><span class="ic"><span class="wf"></span><span class="bat"></span></span></div>
+              <div class="aHead">
+                <span class="aTitle">Nightline</span>
+                <span class="aEnd">END</span><span class="aDot"></span><span class="aDot"></span><span class="aMe"></span>
               </div>
-              <div class="sBody">
-                <div class="n-out">
-                  <span class="av">M</span><span class="av b">J</span><span class="av c">A</span>
-                  <span class="mdim" style="margin-left:auto">3 out</span>
+              <div class="aBody">
+                <span class="aKick">Tonight</span>
+                <div class="nStrip">
+                  <span class="nRing"><i><b>+</b></i><span>Your story</span></span>
+                  <span class="nRing map"><i></i><span>Map</span></span>
                 </div>
-                <div class="n-story t1">
-                  <span class="mdim">Johan · 23:14</span>
-                  <div class="cap">Second round at Bar Centro 🍻</div>
-                  <span class="n-fire">🔥</span>
+                <div class="nPost">
+                  <div class="nWho"><i></i><b>Johan</b><em>@johan</em><u>2h ago</u></div>
+                  <div class="nMedia">
+                    <span class="nChip"><i></i>John Scott's Pub</span>
+                    <span class="nPips"><i class="on"></i><i></i><i></i></span>
+                  </div>
+                  <div class="nActs">
+                    <svg class="heart" viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-9.4A4.1 4.1 0 0 1 12 8a4.1 4.1 0 0 1 7 2.6C19 15.4 12 20 12 20z"/></svg>
+                    <svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg>
+                  </div>
+                  <div class="nCap">Second round. Still standing.</div>
+                  <div class="nStats">
+                    <b><svg viewBox="0 0 24 24"><path d="M12 21s6-6.2 6-10a6 6 0 1 0-12 0c0 3.8 6 10 6 10z"/><circle cx="12" cy="11" r="2"/></svg>3 stops</b><b><svg viewBox="0 0 24 24"><path d="M7 4h10l-1 6a4 4 0 0 1-8 0zM12 14v6M9 20h6"/></svg>5</b><b><svg viewBox="0 0 24 24"><path d="M13 4v5l3 3-1 8M13 9l-4 2-2 5"/></svg>1.2 km</b><b><svg viewBox="0 0 24 24"><path d="M12 3s5 5 5 9a5 5 0 0 1-10 0c0-2 2-4 2-4s1 2 2 2 1-7 1-7z"/></svg>0.58‰</b>
+                    <u>›</u>
+                  </div>
                 </div>
-                <div class="n-story t2">
-                  <span class="mdim">Alva · 00:02</span>
-                  <div class="cap">Dancing. Peak 0.09.</div>
-                  <span class="n-fire two">🔥</span>
-                </div>
-                <div class="n-story t3">
-                  <span class="mdim">Milla · 00:41</span>
-                  <div class="cap">Kebab run. Night made.</div>
-                  <span class="n-fire three">🔥</span>
+                <div class="nPost p2">
+                  <div class="nWho"><i></i><b>Alva</b><em>@alva</em><u>3h ago</u></div>
+                  <div class="nCap" style="padding-top:5px">Dancing. Peak 0.71‰.</div>
+                  <div class="nStats"><b><svg viewBox="0 0 24 24"><path d="M12 21s6-6.2 6-10a6 6 0 1 0-12 0c0 3.8 6 10 6 10z"/><circle cx="12" cy="11" r="2"/></svg>4 stops</b><b><svg viewBox="0 0 24 24"><path d="M7 4h10l-1 6a4 4 0 0 1-8 0zM12 14v6M9 20h6"/></svg>7</b><b><svg viewBox="0 0 24 24"><path d="M12 3s5 5 5 9a5 5 0 0 1-10 0c0-2 2-4 2-4s1 2 2 2 1-7 1-7z"/></svg>0.71‰</b><u>›</u></div>
                 </div>
               </div>
-              <div class="sTabs"><i></i><i></i><i class="on"></i><i></i><i></i></div>
+              <div class="aTabs">
+                <span class="aTab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 12l4-3"/></svg><span>PLAN</span></span>
+                <span class="aTab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2" class="fill"/><path d="M7 8a7 7 0 0 0 0 8M17 8a7 7 0 0 1 0 8"/></svg><span>LIVE</span></span>
+                <span class="aTab on"><svg viewBox="0 0 24 24"><rect x="6" y="5" width="12" height="14" rx="3" class="fill"/></svg><span>NIGHTLINE</span></span>
+                <span class="aTab"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="9" rx="3"/><rect x="9" y="11" width="12" height="9" rx="3"/></svg><span>CHATS</span></span>
+                <span class="aTab"><svg viewBox="0 0 24 24"><path d="M4 6l5-2v16l-5 2zM9 4l6 2v16l-6-2zM15 6l5-2v16l-5 2z"/></svg><span>DEALS</span></span>
+              </div>
             </div>
           </div>
           <span class="n">03 · NIGHTLINE</span>
           <h3>See who's out</h3>
-          <p>Stories and recaps from your friends land here, and you can see who's actually
-            out right now — react and reply straight from the feed.</p>
+          <p>Stories and recaps from your friends land here — where they are, how many
+            they've had and where their night is at. React and reply straight from the feed.</p>
+          <span class="shotnote">Rebuilt to match · real screen has friends in it</span>
         </article>
 
         <article class="glass tabcard r s1">
-          <div class="phone" aria-hidden="true">
-            <div class="notch"></div>
-            <div class="screen">
-              <div class="sHead">
-                <span class="sKick">Chats</span>
-                <div class="sTitle">Johan</div>
+          <div class="phone">
+            <div class="screen" aria-hidden="true">
+              <div class="aBar"><span class="t">11:08</span><span class="isl"></span><span class="ic"><span class="wf"></span><span class="bat"></span></span></div>
+              <div class="aHead">
+                <span class="aTitle">Chats</span>
+                <span class="aEnd">END</span><span class="aDot"></span><span class="aDot"></span><span class="aMe"></span>
               </div>
-              <div class="sBody">
-                <div class="c-thread">
-                  <div class="c-b c-in b1">Bar Centro at 22? 🍻</div>
-                  <div class="c-b c-out b2">On my way — 0.04 already</div>
-                  <div class="c-b c-in b3">Alva's coming too</div>
-                  <div class="c-b c-out b4">Save me a seat 🍺</div>
-                  <div class="c-type"><i></i><i></i><i></i></div>
+              <div class="aBody">
+                <div class="cTop">
+                  <span class="cBack">‹</span><span class="cAv">J</span><span class="cName">Johan</span>
+                </div>
+                <div class="cReply"><i></i><span>Replied to your story</span></div>
+                <div class="cBub">Tjo! Are we going out tonight?</div>
+                <div class="cBub b2">Alva's in. Where we starting?</div>
+                <span class="cWhen">11:04</span>
+                <div class="cBar">
+                  <span class="cField"><span class="cType">John Scott's at 22? First round on me</span></span>
+                  <span class="cSend"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></span>
                 </div>
               </div>
-              <div class="sTabs"><i></i><i></i><i></i><i class="on"></i><i></i></div>
+              <div class="aTabs">
+                <span class="aTab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 12l4-3"/></svg><span>PLAN</span></span>
+                <span class="aTab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2" class="fill"/><path d="M7 8a7 7 0 0 0 0 8M17 8a7 7 0 0 1 0 8"/></svg><span>LIVE</span></span>
+                <span class="aTab"><svg viewBox="0 0 24 24"><rect x="6" y="5" width="12" height="14" rx="3"/></svg><span>NIGHTLINE</span></span>
+                <span class="aTab on"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="9" rx="3" class="fill"/><rect x="9" y="11" width="12" height="9" rx="3" class="fill"/></svg><span>CHATS</span></span>
+                <span class="aTab"><svg viewBox="0 0 24 24"><path d="M4 6l5-2v16l-5 2zM9 4l6 2v16l-6-2zM15 6l5-2v16l-5 2z"/></svg><span>DEALS</span></span>
+              </div>
             </div>
           </div>
           <span class="n">04 · CHATS</span>
           <h3>Keep it going</h3>
           <p>Where the plans actually happen. DM friends one-to-one, and replies to your
             stories land right here in the same thread.</p>
+          <span class="shotnote">Rebuilt to match · real screen is private</span>
         </article>
 
         <article class="glass tabcard r s2">
-          <div class="phone" aria-hidden="true">
-            <div class="notch"></div>
+          <div class="phone">
             <div class="screen">
-              <div class="sHead">
-                <span class="sKick">Deals · near you</span>
-              </div>
-              <div class="sBody" style="padding-bottom:6px">
-                <div class="d-map">
-                  <span class="d-road a"></span><span class="d-road b"></span>
-                  <span class="d-pin one">45 kr</span>
-                  <span class="d-pin two">72 kr</span>
-                  <span class="d-pin three">2-for-1</span>
-                  <span class="d-ring"></span>
-                  <div class="d-offer">
-                    <div class="t">Bar Centro</div>
-                    <div class="s">2-FOR-1 · UNTIL 22:00</div>
-                  </div>
-                </div>
-              </div>
-              <div class="sTabs"><i></i><i></i><i></i><i></i><i class="on"></i></div>
+              <img class="shot" src="./screens/deals.jpg" width="402" height="874"
+                   loading="lazy" decoding="async"
+                   alt="The DEALS tab: a map of Gothenburg with a sponsored bar campaign card at the bottom." />
+              <img class="shot b" src="./screens/beer.jpg" width="402" height="874"
+                   loading="lazy" decoding="async" aria-hidden="true" alt="" />
             </div>
           </div>
           <span class="n">05 · DEALS</span>
           <h3>Drink smarter, pay less</h3>
-          <p>Tonight's specials around you, on the map — next to what a beer actually costs
-            at each bar. Check in and the menu already knows the deals.</p>
+          <p>Tonight's specials around you on the map — then flip to beer prices and see what
+            a pint actually costs at each bar, filtered by serving size.</p>
+          <span class="shotnote">Real screens · deals, then beer prices</span>
         </article>
 
         <article class="glass tabcard r s3">
-          <div class="phone" aria-hidden="true">
-            <div class="notch"></div>
-            <div class="screen">
-              <div class="sHead">
-                <span class="sKick">The morning after</span>
-                <div class="sTitle">Night report</div>
+          <div class="phone">
+            <div class="screen" aria-hidden="true">
+              <div class="aBar"><span class="t">11:08</span><span class="isl"></span><span class="ic"><span class="wf"></span><span class="bat"></span></span></div>
+              <div class="aHead">
+                <span class="aTitle">Night report</span>
+                <span class="aEnd">✕</span>
               </div>
-              <div class="sBody">
-                <div class="r-peak">
-                  <div class="v">0.11</div>
-                  <span class="k">Peak · lit</span>
+              <div class="aBody">
+                <span class="aKick">Saturday · 6 days ago</span>
+                <div class="kStats">
+                  <div><b>4</b><span>Stops</span></div>
+                  <div><b>8</b><span>Drinks</span></div>
+                  <div><b>1.5<i>km</i></b><span>Crawled</span></div>
+                  <div><b>0.67<i>‰</i></b><span>Peak</span></div>
                 </div>
-                <div class="r-route">
-                  <svg viewBox="0 0 100 50" preserveAspectRatio="none" aria-hidden="true">
-                    <path d="M10 36 L26 36 L30 14 L46 14 L50 27 L70 27 L74 26 L84 26" />
-                  </svg>
-                  <i></i><i></i><i></i>
+                <div class="kMap">
+                  <img class="kShot" src="./screens/route.jpg" width="620" height="275"
+                       loading="lazy" decoding="async" alt="" />
                 </div>
-                <div class="r-stats">
-                  <div><b>7</b><span>Drinks</span></div>
-                  <div><b>3</b><span>Bars</span></div>
-                  <div><b>2</b><span>Schnaps</span></div>
+                <div class="kStop s1">
+                  <em>🍺</em><span><b>Werners Bistro</b><i>18:19</i></span>
+                  <u>0.00 → 0.17‰</u>
                 </div>
-                <div class="mrow" style="margin-top:2px">
-                  <span class="mlab">Sober by</span>
-                  <span class="p-qty" style="margin-left:auto;font-size:7.5px">07:40</span>
+                <div class="kStop s2">
+                  <em>🍺</em><span><b>John Scott's Pub</b><i>19:48</i></span>
+                  <u>0.17 → 0.41‰</u>
                 </div>
-                <span class="mdim" style="margin-top:3px">Who was out</span>
-                <div class="r-who">
-                  <span class="av">M</span><span class="av b">J</span>
-                  <span class="av c">A</span><span class="av d">+2</span>
+                <div class="kStop s3">
+                  <em>🍔</em><span><b>MAX</b><i>21:04</i></span>
+                  <u>0.41 → 0.36‰</u>
+                </div>
+                <div class="kStop s4">
+                  <em>🥃</em><span><b>Nefertiti</b><i>23:12</i></span>
+                  <u>0.36 → 0.67‰</u>
                 </div>
               </div>
-              <div class="sTabs"><i></i><i></i><i class="on"></i><i></i><i></i></div>
+              <div class="aTabs">
+                <span class="aTab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 12l4-3"/></svg><span>PLAN</span></span>
+                <span class="aTab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2" class="fill"/><path d="M7 8a7 7 0 0 0 0 8M17 8a7 7 0 0 1 0 8"/></svg><span>LIVE</span></span>
+                <span class="aTab on"><svg viewBox="0 0 24 24"><rect x="6" y="5" width="12" height="14" rx="3" class="fill"/></svg><span>NIGHTLINE</span></span>
+                <span class="aTab"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="9" rx="3"/><rect x="9" y="11" width="12" height="9" rx="3"/></svg><span>CHATS</span></span>
+                <span class="aTab"><svg viewBox="0 0 24 24"><path d="M4 6l5-2v16l-5 2zM9 4l6 2v16l-6-2zM15 6l5-2v16l-5 2z"/></svg><span>DEALS</span></span>
+              </div>
             </div>
           </div>
           <span class="n">AFTER · THE RECAP</span>
           <h3>Replay the damage</h3>
-          <p>Peak BAC, the route you actually walked, every drink and schnaps, who was there
-            — and how it all compared to the plan.</p>
+          <p>Peak BAC, the route you actually walked, every stop with what it did to your
+            number, and who was there — waiting for you in the morning.</p>
+          <span class="shotnote">Rebuilt to match · real recap has photos in it</span>
         </article>
 
       </div>
