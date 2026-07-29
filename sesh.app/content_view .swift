@@ -3086,6 +3086,9 @@ struct FriendsMapView: View {
     /// The friend the camera is parked on (chip row highlight). nil when the
     /// view is framing everyone at once.
     @State private var focused: UUID?
+    /// Anonymous "where's it hot" layer (venue_heat RPC — bands, never counts).
+    @StateObject private var heat = HeatService()
+    @State private var selectedHeatID: String?
 
     /// City-level zoom used both for a lone friend and when flying to one.
     private static let citySpan = MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)
@@ -3159,6 +3162,15 @@ struct FriendsMapView: View {
             Color.ink.ignoresSafeArea()
             Map(position: $camera) {
                 UserAnnotation()
+                // Heat first, so friend pins draw over the glows.
+                ForEach(heat.spots) { spot in
+                    Annotation("", coordinate: spot.coordinate, anchor: .center) {
+                        HeatGlow(spot: spot, selected: selectedHeatID == spot.id) {
+                            selectedHeatID = selectedHeatID == spot.id ? nil : spot.id
+                        }
+                    }
+                    .annotationTitles(.hidden)
+                }
                 ForEach(pulses) { p in
                     if let coord = p.venueCoordinate {
                         Annotation("", coordinate: coord, anchor: .bottom) {
@@ -3181,24 +3193,33 @@ struct FriendsMapView: View {
 
             // No blocking overlay — the map stays interactive. A floating,
             // non-interactive pill just explains the empty state.
-            if pulses.isEmpty {
-                VStack {
-                    Spacer()
+            // Bottom furniture in ONE stack so the empty-state pill and the
+            // heat legend can never overlap each other.
+            VStack(spacing: 10) {
+                Spacer()
+                if pulses.isEmpty {
                     Text("No friends checked in yet — pan around the map 🌍")
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.9))
                         .padding(.horizontal, 14).padding(.vertical, 9)
                         .background(Capsule().fill(Color.ink.opacity(0.85)))
                         .overlay(Capsule().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
-                        .padding(.bottom, 44)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(false)
+                if !heat.spots.isEmpty {
+                    HStack {
+                        HeatLegend()
+                        Spacer()
+                    }
+                }
             }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 42)
+            .allowsHitTesting(false)
 
             header
         }
         .preferredColorScheme(.dark)
+        .task { await heat.refresh(near: pulses.first?.venueCoordinate) }
         .sheet(item: $selected) { p in
             FriendPulseSheet(pulse: p, feed: feed, dm: dm, me: me)
                 .presentationDetents([.medium, .large])
@@ -6216,6 +6237,7 @@ private struct SessionView: View {
         }
         .modifier(profileSheets)
         .modifier(WalkthroughModifier(tab: $tab, active: $walkthroughActive))
+        .modifier(BirthdatePromptModifier(auth: auth))
         .sheet(isPresented: $friendsSheetOpen) {
             FriendsView(friends: friends, auth: auth, feed: feed)
                 .presentationBackground(Color.ink)
@@ -8393,7 +8415,8 @@ private struct ProfileSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var name: String
-    @State private var age: Double
+    @State private var birthdate: Date
+    private let initialBirthdate: Date
     @State private var sex: Sex
     @State private var weightKg: Double
 
@@ -8404,6 +8427,8 @@ private struct ProfileSheet: View {
     @State private var errorMessage: String?
     @State private var adminPanelOpen = false
     @State private var offersAdminOpen = false
+    @State private var deleteConfirmOpen = false
+    @State private var deleteError: String?
     @State private var friendsOpen = false
 
     /// Friends roster + incoming requests — shared with SessionView so the
@@ -8454,7 +8479,11 @@ private struct ProfileSheet: View {
         self.feed = feed
         self.onReplayTour = onReplayTour
         _name = State(initialValue: profile.name)
-        _age = State(initialValue: Double(profile.age))
+        let startBirthdate = profile.birthdate.flatMap(BirthdateMath.date(fromISO:))
+            ?? Calendar.current.date(byAdding: .year, value: -profile.age, to: .now)
+            ?? .now
+        initialBirthdate = startBirthdate
+        _birthdate = State(initialValue: startBirthdate)
         _sex = State(initialValue: profile.sex)
         _weightKg = State(initialValue: profile.weightKg)
     }
@@ -8484,7 +8513,7 @@ private struct ProfileSheet: View {
 
     private var dirty: Bool {
         name != profile.name
-            || Int(age) != profile.age
+            || birthdate != initialBirthdate
             || sex != profile.sex
             || weightKg != profile.weightKg
             || newAvatarData != nil
@@ -8548,7 +8577,22 @@ private struct ProfileSheet: View {
 
                     VStack(spacing: 10) {
                         LoungeField(label: "NAME", text: $name, placeholder: "Your name")
-                        LoungeNumberField(label: "AGE", value: $age, range: 18...100, step: 1, unit: "years")
+                        LoungePickerField(label: "BIRTHDATE") {
+                            HStack(spacing: 10) {
+                                DatePicker("", selection: $birthdate,
+                                           in: BirthdateMath.range,
+                                           displayedComponents: .date)
+                                    .datePickerStyle(.compact)
+                                    .labelsHidden()
+                                    .tint(Color.whiskey)
+                                    .colorScheme(.dark)
+                                Spacer(minLength: 0)
+                                Text("\(BirthdateMath.age(on: birthdate)) YRS")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .tracking(1.5)
+                                    .foregroundStyle(Color.bronze)
+                            }
+                        }
                         LoungePickerField(label: "SEX") {
                             SexToggle(sex: $sex, accent: .whiskey)
                         }
@@ -8690,10 +8734,12 @@ private struct ProfileSheet: View {
                                 let updated = Profile(
                                     id: profile.id,
                                     name: name.trimmingCharacters(in: .whitespaces),
-                                    age: Int(age),
+                                    age: BirthdateMath.age(on: birthdate),
                                     sex: sex,
                                     weightKg: weightKg,
-                                    avatarURL: profile.avatarURL
+                                    avatarURL: profile.avatarURL,
+                                    username: profile.username,
+                                    birthdate: BirthdateMath.iso(birthdate)
                                 )
                                 try await auth.updateProfile(
                                     updated,
@@ -8987,6 +9033,53 @@ private struct ProfileSheet: View {
                         )
                     }
                     .buttonStyle(PressScaleStyle())
+
+                    // App Store 5.1.1(v): deletion must be reachable in-app.
+                    Button { deleteConfirmOpen = true } label: {
+                        HStack {
+                            Image(systemName: "trash")
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                            Text("DELETE ACCOUNT")
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .tracking(2.4)
+                            Spacer()
+                        }
+                        .foregroundStyle(Status.danger.color)
+                        .padding(.vertical, 14)
+                        .padding(.horizontal, 18)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Status.danger.color.opacity(0.06))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(Status.danger.color.opacity(0.25), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(PressScaleStyle())
+                    .alert("Delete your account?", isPresented: $deleteConfirmOpen) {
+                        Button("Cancel", role: .cancel) {}
+                        Button("Delete forever", role: .destructive) {
+                            Task {
+                                do {
+                                    try await auth.deleteAccount()
+                                    dismiss()
+                                } catch {
+                                    deleteError = (error as? LocalizedError)?.errorDescription
+                                        ?? "Something went wrong."
+                                }
+                            }
+                        }
+                    } message: {
+                        Text("Your profile, nights, stories, messages and photos are permanently deleted. Beer prices you've added stay on the map without your name. This can't be undone.")
+                    }
+                    .alert("Couldn't delete account",
+                           isPresented: .init(get: { deleteError != nil },
+                                              set: { if !$0 { deleteError = nil } })) {
+                        Button("OK", role: .cancel) {}
+                    } message: {
+                        Text(deleteError ?? "")
+                    }
 
                     Spacer(minLength: 20)
                 }

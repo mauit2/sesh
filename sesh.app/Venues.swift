@@ -2201,6 +2201,7 @@ struct VenueSheet: View {
     @StateObject private var search = MapKitVenueSearch()
     @State private var query: String = ""
     @State private var checkInInFlight: String? = nil
+    @State private var qrOpen = false
     /// "Move the whole group" vs "just me" for this check-in. Defaults to
     /// the group when one is active.
     @State private var applyToGroup = true
@@ -2323,6 +2324,8 @@ struct VenueSheet: View {
                     }
 
                     searchField
+
+                    qrCheckInRow
 
                     venueMapSection
 
@@ -2534,6 +2537,69 @@ struct VenueSheet: View {
     private func distanceTo(_ coordinate: CLLocationCoordinate2D) -> CLLocationDistance? {
         guard let origin = location.location else { return nil }
         return CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude).distance(from: origin)
+    }
+
+    /// QR fast-path: scan the table code (or type it) and skip the search.
+    private var qrCheckInRow: some View {
+        Button { qrOpen = true } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "qrcode.viewfinder")
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.whiskey)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("SCAN THE TABLE CODE")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(1.8)
+                        .foregroundStyle(Color.cream)
+                    Text("Bars with a sesh QR check you in instantly.")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.55))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.bronze)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.whiskey.opacity(0.07))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.whiskey.opacity(0.28), lineWidth: 1)
+            )
+        }
+        .buttonStyle(PressScaleStyle())
+        .sheet(isPresented: $qrOpen) {
+            QRCheckInSheet { resolved in
+                Task { await checkIn(qrVenue: resolved) }
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.ink)
+        }
+    }
+
+    /// A QR-resolved bar is a curated venues-table row: prefer the loaded
+    /// Venue (keeps ids consistent), else fall back to the MapKit pipeline
+    /// with a synthetic result.
+    @MainActor
+    private func checkIn(qrVenue resolved: QRVenue) async {
+        if let known = venues.venues.first(where: { $0.id == resolved.id }) {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                venues.currentVenue = known
+            }
+            await broadcastCheckIn()
+            dismiss()
+        } else {
+            await performCheckIn(MapKitVenueResult(
+                name: resolved.name,
+                coordinate: CLLocationCoordinate2D(latitude: resolved.lat, longitude: resolved.lon),
+                origin: location.location
+            ))
+        }
     }
 
     /// Check in from a map tap — known search result / curated venue go
