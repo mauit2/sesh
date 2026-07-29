@@ -17,6 +17,7 @@ enum AuthError: LocalizedError {
     case emailAlreadyRegistered
     case invalidLogin
     case profileLoadFailed
+    case accountDeletionFailed
 
     var errorDescription: String? {
         switch self {
@@ -30,6 +31,8 @@ enum AuthError: LocalizedError {
             return "Wrong username/email or password."
         case .profileLoadFailed:
             return "Signed in, but couldn't load your profile. Check your connection and try again."
+        case .accountDeletionFailed:
+            return "Couldn't delete the account. Check your connection and try again."
         }
     }
 }
@@ -54,6 +57,7 @@ final class AuthService: ObservableObject {
         let name: String
         let username: String
         let age: Int
+        let birthdate: String?
         let sex: Sex
         let weightKg: Double
         let avatarData: Data?
@@ -119,12 +123,13 @@ final class AuthService: ObservableObject {
     /// confirmSignUp finishes the job once the code is verified. If
     /// confirmation is off, the profile is created immediately.
     @discardableResult
-    func signUp(email: String, password: String, name: String, username: String, age: Int, sex: Sex, weightKg: Double, avatarData: Data? = nil) async throws -> SignUpOutcome {
+    func signUp(email: String, password: String, name: String, username: String, age: Int, birthdate: String?, sex: Sex, weightKg: Double, avatarData: Data? = nil) async throws -> SignUpOutcome {
         let cleanEmail = email.trimmingCharacters(in: .whitespaces).lowercased()
         let response = try await supabase.auth.signUp(email: cleanEmail, password: password)
         let pending = PendingSignUp(email: cleanEmail, password: password, name: name,
                                     username: username.trimmingCharacters(in: .whitespaces).lowercased(),
-                                    age: age, sex: sex, weightKg: weightKg, avatarData: avatarData)
+                                    age: age, birthdate: birthdate, sex: sex, weightKg: weightKg,
+                                    avatarData: avatarData)
         if response.session != nil {
             try await createProfile(userId: response.user.id, from: pending)
             return .completed
@@ -174,6 +179,7 @@ final class AuthService: ObservableObject {
             let name: String
             let username: String?
             let age: Int
+            let birthdate: String?
             let sex: String
             let weight_kg: Double
             let avatar_url: String?
@@ -184,6 +190,7 @@ final class AuthService: ObservableObject {
             name: p.name,
             username: p.username.isEmpty ? nil : p.username,
             age: p.age,
+            birthdate: p.birthdate,
             sex: p.sex.rawValue,
             weight_kg: p.weightKg,
             avatar_url: avatarURL
@@ -288,6 +295,35 @@ final class AuthService: ObservableObject {
         }
     }
 
+    /// Permanently delete the account (App Store 5.1.1(v)). The delete-account
+    /// Edge Function verifies the caller's JWT, removes their files via the
+    /// Storage API, then cascades every row from auth.users down. The local
+    /// session is torn down afterwards regardless — the server-side user no
+    /// longer exists, so a failed signOut just means an orphaned token.
+    func deleteAccount() async throws {
+        do {
+            try await supabase.functions.invoke("delete-account")
+        } catch {
+            throw AuthError.accountDeletionFailed
+        }
+        try? await supabase.auth.signOut()
+        state = .signedOut
+    }
+
+    /// Save the user's birthdate ("yyyy-MM-dd") and the age derived from it.
+    /// Existing users are prompted once per launch until it's filled in.
+    func setBirthdate(iso: String, age: Int) async {
+        guard case .signedIn(var p) = state else { return }
+        struct U: Encodable { let birthdate: String; let age: Int }
+        _ = try? await supabase.from("profiles")
+            .update(U(birthdate: iso, age: age))
+            .eq("id", value: p.id.uuidString.lowercased())
+            .execute()
+        p.birthdate = iso
+        p.age = age
+        state = .signedIn(p)
+    }
+
     func signOut() async throws {
         try await supabase.auth.signOut()
         // Tear down any in-flight lock-screen activity AND wipe the
@@ -315,6 +351,7 @@ final class AuthService: ObservableObject {
         struct UpdatePayload: Encodable {
             let name: String
             let age: Int
+            let birthdate: String?
             let sex: String
             let weight_kg: Double
             let avatar_url: String?
@@ -322,6 +359,7 @@ final class AuthService: ObservableObject {
         let payload = UpdatePayload(
             name: profile.name,
             age: profile.age,
+            birthdate: profile.birthdate,
             sex: profile.sex.rawValue,
             weight_kg: profile.weightKg,
             avatar_url: finalURL
@@ -430,7 +468,8 @@ struct AuthView: View {
 
     @State private var name = ""
     @State private var username = ""
-    @State private var age: Double = 25
+    @State private var birthdate: Date =
+        Calendar.current.date(byAdding: .year, value: -25, to: .now) ?? .now
     @State private var sex: Sex = .male
     @State private var weightKg: Double = 75
     @State private var avatarData: Data?
@@ -640,13 +679,22 @@ struct AuthView: View {
                 .focused($focus, equals: .username)
                 usernameStatus
 
-                LoungeNumberField(
-                    label: "AGE",
-                    value: $age,
-                    range: 18...100,
-                    step: 1,
-                    unit: "years"
-                )
+                LoungePickerField(label: "BIRTHDATE") {
+                    HStack(spacing: 10) {
+                        DatePicker("", selection: $birthdate,
+                                   in: BirthdateMath.range,
+                                   displayedComponents: .date)
+                            .datePickerStyle(.compact)
+                            .labelsHidden()
+                            .tint(Color.whiskey)
+                            .colorScheme(.dark)
+                        Spacer(minLength: 0)
+                        Text("\(BirthdateMath.age(on: birthdate)) YRS")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .tracking(1.5)
+                            .foregroundStyle(Color.bronze)
+                    }
+                }
 
                 LoungePickerField(label: "SEX") {
                     SexToggle(sex: $sex, accent: .whiskey)
@@ -812,7 +860,8 @@ struct AuthView: View {
                         password: password,
                         name: name.trimmingCharacters(in: .whitespaces),
                         username: cleanUsername,
-                        age: Int(age),
+                        age: BirthdateMath.age(on: birthdate),
+                        birthdate: BirthdateMath.iso(birthdate),
                         sex: sex,
                         weightKg: weightKg,
                         avatarData: avatarData
@@ -1170,3 +1219,142 @@ private struct SignUpConfirmView: View {
     }
 }
 
+
+
+// MARK: - Birthdate
+
+/// Shared birthdate helpers: ISO formatting, derived age, and the pickable
+/// range (18–100 — sesh is an alcohol app, sign-up is adults only).
+enum BirthdateMath {
+    static let iso: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.dateFormat = "yyyy-MM-dd"
+        return df
+    }()
+
+    static var range: ClosedRange<Date> {
+        let cal = Calendar.current
+        let oldest = cal.date(byAdding: .year, value: -100, to: .now) ?? .now
+        let youngest = cal.date(byAdding: .year, value: -18, to: .now) ?? .now
+        return oldest...youngest
+    }
+
+    static func iso(_ date: Date) -> String { iso.string(from: date) }
+
+    static func age(on birthdate: Date) -> Int {
+        max(18, Calendar.current.dateComponents([.year], from: birthdate, to: .now).year ?? 18)
+    }
+
+    static func date(fromISO s: String) -> Date? { iso.date(from: s) }
+}
+
+/// One-per-launch nudge for accounts that predate the birthdate column
+/// (migration 069): their age is a static number that drifts every year.
+/// Skippable — it re-asks on the next launch until saved.
+struct BirthdatePromptModifier: ViewModifier {
+    @ObservedObject var auth: AuthService
+    @State private var open = false
+    @State private var askedThisLaunch = false
+
+    private var missing: Bool {
+        if case .signedIn(let p) = auth.state { return p.birthdate == nil }
+        return false
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { maybeAsk() }
+            .onChange(of: missing) { _, nowMissing in if nowMissing { maybeAsk() } }
+            .sheet(isPresented: $open) {
+                BirthdatePromptSheet(auth: auth)
+                    .presentationDetents([.medium])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(Color.ink)
+            }
+    }
+
+    private func maybeAsk() {
+        guard missing, !askedThisLaunch else { return }
+        askedThisLaunch = true
+        open = true
+    }
+}
+
+struct BirthdatePromptSheet: View {
+    @ObservedObject var auth: AuthService
+    @Environment(\.dismiss) private var dismiss
+    @State private var birthdate: Date =
+        Calendar.current.date(byAdding: .year, value: -25, to: .now) ?? .now
+    @State private var saving = false
+
+    var body: some View {
+        VStack(spacing: 18) {
+            VStack(spacing: 6) {
+                Text("ONE QUICK THING")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(3)
+                    .foregroundStyle(Color.bronze)
+                Text("When's your birthday?")
+                    .font(.system(size: 22, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                Text("Sesh only knows the age you typed in, and it drifts every birthday. Set it once and it stays right on its own. It never shows on your profile.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.6))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
+            .padding(.top, 26)
+
+            DatePicker("", selection: $birthdate,
+                       in: BirthdateMath.range,
+                       displayedComponents: .date)
+                .datePickerStyle(.wheel)
+                .labelsHidden()
+                .colorScheme(.dark)
+                .frame(maxHeight: 150)
+
+            Button {
+                guard !saving else { return }
+                saving = true
+                Task {
+                    await auth.setBirthdate(
+                        iso: BirthdateMath.iso(birthdate),
+                        age: BirthdateMath.age(on: birthdate)
+                    )
+                    dismiss()
+                }
+            } label: {
+                Text(saving ? "SAVING…" : "SAVE")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.ink)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                    .background(Capsule().fill(Color.whiskey))
+            }
+            .buttonStyle(PressScaleStyle())
+            .padding(.horizontal, 24)
+
+            Button { dismiss() } label: {
+                Text("NOT NOW")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .tracking(2)
+                    .foregroundStyle(Color.bronze)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 8)
+        }
+        .onAppear {
+            if case .signedIn(let p) = auth.state {
+                if let saved = p.birthdate, let d = BirthdateMath.date(fromISO: saved) {
+                    birthdate = d
+                } else if let guess = Calendar.current.date(byAdding: .year, value: -p.age, to: .now) {
+                    birthdate = guess
+                }
+            }
+        }
+    }
+}

@@ -46,8 +46,12 @@ struct Profile: Codable, Equatable, Hashable {
     /// the user picks one. Added in migration 018.
     var username: String?
 
+    /// ISO date "yyyy-MM-dd". Nil until the user sets it (migration 069);
+    /// when present, `age` is derived from it rather than edited directly.
+    var birthdate: String?
+
     enum CodingKeys: String, CodingKey {
-        case id, name, age, sex, username
+        case id, name, age, sex, username, birthdate
         case weightKg = "weight_kg"
         case avatarURL = "avatar_url"
     }
@@ -62,12 +66,13 @@ struct Profile: Codable, Equatable, Hashable {
         weightKg = try c.decode(Double.self, forKey: .weightKg)
         avatarURL = try c.decodeIfPresent(String.self, forKey: .avatarURL)
         username = try c.decodeIfPresent(String.self, forKey: .username)
+        birthdate = try c.decodeIfPresent(String.self, forKey: .birthdate)
     }
 
     /// Explicit memberwise init (the custom decoder init suppresses the
     /// synthesized one). username defaults to nil for existing call sites.
     init(id: UUID, name: String, age: Int, sex: Sex, weightKg: Double,
-         avatarURL: String? = nil, username: String? = nil) {
+         avatarURL: String? = nil, username: String? = nil, birthdate: String? = nil) {
         self.id = id
         self.name = name
         self.age = age
@@ -75,6 +80,7 @@ struct Profile: Codable, Equatable, Hashable {
         self.weightKg = weightKg
         self.avatarURL = avatarURL
         self.username = username
+        self.birthdate = birthdate
     }
 }
 
