@@ -294,6 +294,7 @@ function computeHorizon(lat: number, lon: number, prints: Footprint[]) {
 
   const walls: Wall[] = [];
   let used = 0;
+  let usedWithHeight = 0;
   for (const p of projected) {
     const h = p.height ?? median;
     let contributed = false;
@@ -308,7 +309,10 @@ function computeHorizon(lat: number, lon: number, prints: Footprint[]) {
         contributed = true;
       }
     }
-    if (contributed) used++;
+    if (contributed) {
+      used++;
+      if (p.height !== null) usedWithHeight++;
+    }
   }
 
   const hosts = projected.filter((p) => containsOrigin(p.ringsXY));
@@ -326,11 +330,22 @@ function computeHorizon(lat: number, lon: number, prints: Footprint[]) {
   }
   const horizon = bestHz ?? new Array(BINS).fill(0);
 
-  const confidence = used === 0 ? 0 : Math.min(1, known.length / used);
+  // CONFIDENCE = of the buildings that actually shape THIS horizon, how many
+  // had a real height rather than the median fallback.
+  //
+  // It used to be min(1, known.length / used), which divided every
+  // height-bearing building across all nine z16 tiles (~1.8 km square, often
+  // hundreds) by the handful within RADIUS_M that contribute walls (tens).
+  // Two different populations, so the ratio was almost always well above 1 and
+  // clamped to exactly 1 — every venue in the table came out at confidence 1.0,
+  // min and max alike. That silently disabled the client's `isEstimate`
+  // (confidence < 0.75), so a horizon built entirely from guessed heights
+  // presented as measured fact.
+  const confidence = used === 0 ? 0 : usedWithHeight / used;
   const packed = horizon.map((d) => Math.round(Math.min(89.9, Math.max(0, d)) * 10));
   return {
     horizon: packed, confidence, buildings: used,
-    withHeight: known.length, hostSkipped: hosts.length, walls: walls.length,
+    withHeight: usedWithHeight, heightsInTiles: known.length, hostSkipped: hosts.length, walls: walls.length,
     movedM: Math.round(Math.hypot(bestAt[0], bestAt[1]) * 10) / 10,
     facades: candidates.length,
   };
