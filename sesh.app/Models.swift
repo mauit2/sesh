@@ -587,6 +587,8 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
     /// Paid Deals placement — 'none' | 'pin' | 'poster' | 'billboard'
     /// (migration 053). 'none' venues never appear on Deals surfaces.
     var tier: String = "none"
+    /// Printable check-in code (migration 070). Nil until an admin mints one.
+    var qrToken: String? = nil
     let createdAt: Date
 
     enum CodingKeys: String, CodingKey {
@@ -595,6 +597,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         case source
         case externalId = "external_id"
         case tier
+        case qrToken    = "qr_token"
         case createdAt  = "created_at"
     }
 
@@ -609,6 +612,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         source: VenueSource = .curated,
         externalId: String? = nil,
         tier: String = "none",
+        qrToken: String? = nil,
         createdAt: Date
     ) {
         self.id = id
@@ -621,6 +625,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         self.source = source
         self.externalId = externalId
         self.tier = tier
+        self.qrToken = qrToken
         self.createdAt = createdAt
     }
 
@@ -636,6 +641,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         source     = (try c.decodeIfPresent(VenueSource.self, forKey: .source)) ?? .curated
         externalId = try c.decodeIfPresent(String.self, forKey: .externalId)
         tier       = (try c.decodeIfPresent(String.self, forKey: .tier)) ?? "none"
+        qrToken    = try c.decodeIfPresent(String.self, forKey: .qrToken)
         createdAt  = try c.decode(Date.self,   forKey: .createdAt)
     }
 

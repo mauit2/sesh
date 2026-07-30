@@ -431,29 +431,28 @@ struct QRCameraView: UIViewControllerRepresentable {
 
 // MARK: - Admin: printable check-in QR
 
-/// Admin-side half of QR check-in: pick a bar, get its table QR. The token is
-/// minted once per venue (ensure_qr_token) and encoded as
-/// https://seshapp.xyz/qr/<CODE> so the printed code also works as a plain
-/// web link for people without the app.
+/// Admin-side half of QR check-in: find any bar on Earth via Apple Maps, get
+/// its table QR. Uses the same MapKitVenueSearch the check-in sheet and the
+/// campaign composer use — unbiased by the admin's own location, so a bar in
+/// Singapore is as reachable as one down the street — and the same
+/// resolveOrCreateMapKitVenue path, so a QR never mints a duplicate venue.
 struct QRAdminSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var search = MapKitVenueSearch()
+    @StateObject private var venues = VenueService()
 
-    private struct VenueLite: Decodable, Identifiable {
-        let id: UUID
-        let name: String
-        let city: String?
-    }
-
-    @State private var venues: [VenueLite] = []
-    @State private var search = ""
-    @State private var picked: VenueLite?
+    @State private var query = ""
+    @State private var picked: Venue?
     @State private var token: String?
-    @State private var loading = false
+    @State private var working = false
+    @State private var errorText: String?
+    @State private var searchTask: Task<Void, Never>?
+    @FocusState private var queryFocused: Bool
 
-    private var filtered: [VenueLite] {
-        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return venues }
-        return venues.filter { $0.name.lowercased().contains(q) }
+    /// Venues that already have a code — the common "reprint it" case.
+    private var coded: [Venue] {
+        venues.venues.filter { $0.qrToken != nil }
+            .sorted { $0.name.lowercased() < $1.name.lowercased() }
     }
 
     var body: some View {
@@ -462,69 +461,90 @@ struct QRAdminSheet: View {
             if let picked, let token {
                 qrDetail(venue: picked, token: token)
             } else {
-                venueList
+                finder
             }
         }
         .preferredColorScheme(.dark)
-        .task {
-            venues = (try? await supabase
-                .from("venues")
-                .select("id, name, city")
-                .order("name")
-                .execute().value) ?? []
-        }
+        .task { await venues.refresh() }
     }
 
-    private var venueList: some View {
+    private var finder: some View {
         VStack(spacing: 12) {
             VStack(spacing: 4) {
                 Text("CHECK-IN QR")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(3)
                     .foregroundStyle(Color.bronze)
-                Text("Pick a bar to print its code")
-                    .font(.system(size: 18, weight: .heavy, design: .rounded))
+                Text("Find any bar, anywhere")
+                    .font(.system(size: 19, weight: .heavy, design: .rounded))
                     .foregroundStyle(Color.cream)
+                Text("Apple Maps search — try a name and a city.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.5))
             }
-            .padding(.top, 22)
+            .padding(.top, 20)
 
-            TextField("Search bars", text: $search)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.cream)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.cream.opacity(0.06)))
-                .padding(.horizontal, 20)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.bronze)
+                TextField("e.g. Atlas Bar Singapore", text: $query)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .autocorrectionDisabled()
+                    .focused($queryFocused)
+                    .submitLabel(.search)
+                    .onSubmit { runSearch(now: true) }
+                    .onChange(of: query) { _, _ in runSearch(now: false) }
+                if search.isSearching {
+                    ProgressView().controlSize(.small).tint(Color.bronze)
+                } else if !query.isEmpty {
+                    Button { query = ""; search.clear() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(Color.cream.opacity(0.35))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.cream.opacity(0.06)))
+            .padding(.horizontal, 20)
+
+            if let errorText {
+                Text(errorText)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Status.danger.color)
+                    .padding(.horizontal, 24)
+            }
 
             ScrollView(showsIndicators: false) {
                 LazyVStack(spacing: 8) {
-                    ForEach(filtered) { v in
-                        Button {
-                            fetchToken(for: v)
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(v.name)
-                                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                                        .foregroundStyle(Color.cream)
-                                    if let city = v.city, !city.isEmpty {
-                                        Text(city)
-                                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                                            .foregroundStyle(Color.cream.opacity(0.5))
-                                    }
-                                }
-                                Spacer()
-                                Image(systemName: "qrcode")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(Color.whiskey)
+                    if !search.results.isEmpty {
+                        sectionLabel("APPLE MAPS")
+                        ForEach(search.results) { r in
+                            row(name: r.name,
+                                sub: [r.address, r.city].compactMap { $0 }.first,
+                                glyph: "mappin.and.ellipse") {
+                                mint(from: r)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.cream.opacity(0.04)))
                         }
-                        .buttonStyle(PressScaleStyle())
+                    } else if query.trimmingCharacters(in: .whitespaces).isEmpty,
+                              !coded.isEmpty {
+                        sectionLabel("ALREADY HAS A CODE")
+                        ForEach(coded) { v in
+                            row(name: v.name, sub: v.city, glyph: "qrcode") {
+                                picked = v
+                                token = v.qrToken
+                            }
+                        }
+                    } else if !search.isSearching,
+                              !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text("No bars found. Try adding the city.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.5))
+                            .padding(.top, 18)
                     }
                 }
                 .padding(.horizontal, 20)
@@ -533,7 +553,89 @@ struct QRAdminSheet: View {
         }
     }
 
-    private func qrDetail(venue: VenueLite, token: String) -> some View {
+    private func sectionLabel(_ text: String) -> some View {
+        HStack {
+            Text(text)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .tracking(2)
+                .foregroundStyle(Color.bronze)
+            Spacer()
+        }
+        .padding(.top, 6)
+    }
+
+    private func row(name: String, sub: String?, glyph: String,
+                     action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .lineLimit(1)
+                    if let sub, !sub.isEmpty {
+                        Text(sub)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.5))
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                if working {
+                    ProgressView().controlSize(.small).tint(Color.whiskey)
+                } else {
+                    Image(systemName: glyph)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.whiskey)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.cream.opacity(0.04)))
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(working)
+    }
+
+    /// Debounced so a fast typist doesn't fire a request per keystroke.
+    private func runSearch(now: Bool) {
+        searchTask?.cancel()
+        let q = query
+        searchTask = Task { @MainActor in
+            if !now { try? await Task.sleep(nanoseconds: 320_000_000) }
+            guard !Task.isCancelled else { return }
+            // biasToOrigin: false — this is a global finder, not "near me".
+            search.search(query: q, origin: nil, biasToOrigin: false)
+        }
+    }
+
+    /// Turn an Apple Maps hit into a real venue row, then mint its token.
+    private func mint(from result: MapKitVenueResult) {
+        guard !working else { return }
+        working = true
+        errorText = nil
+        Task { @MainActor in
+            guard let venue = await venues.resolveOrCreateMapKitVenue(result) else {
+                working = false
+                errorText = "Couldn't save that bar. Check your connection and try again."
+                return
+            }
+            struct P: Encodable { let p_venue: UUID }
+            let t: String? = try? await supabase
+                .rpc("ensure_qr_token", params: P(p_venue: venue.id))
+                .execute().value
+            working = false
+            if let t {
+                picked = venue
+                token = t
+            } else {
+                errorText = "Couldn't create a code for that bar."
+            }
+        }
+    }
+
+    private func qrDetail(venue: Venue, token: String) -> some View {
         VStack(spacing: 16) {
             VStack(spacing: 4) {
                 Text("TABLE QR")
@@ -543,30 +645,36 @@ struct QRAdminSheet: View {
                 Text(venue.name)
                     .font(.system(size: 20, weight: .heavy, design: .rounded))
                     .foregroundStyle(Color.cream)
+                    .multilineTextAlignment(.center)
+                if let city = venue.city, !city.isEmpty {
+                    Text(city)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                }
             }
-            .padding(.top, 24)
+            .padding(.top, 22)
 
             if let img = Self.qrImage(for: token) {
                 Image(uiImage: img)
                     .interpolation(.none)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 240, height: 240)
+                    .frame(width: 230, height: 230)
                     .padding(14)
                     .background(RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .fill(Color.cream))
             }
 
             Text(token)
-                .font(.system(size: 20, weight: .black, design: .monospaced))
+                .font(.system(size: 19, weight: .black, design: .monospaced))
                 .tracking(5)
                 .foregroundStyle(Color.whiskey)
 
-            Text("Print this for the tables. Scanning checks guests in at \(venue.name) — the code under it works if the camera won't.")
+            Text("Print this for the tables. Scanning checks guests in here — the code under it works if the camera won't.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(0.6))
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 36)
+                .padding(.horizontal, 34)
 
             if let img = Self.qrImage(for: token) {
                 ShareLink(
@@ -595,22 +703,6 @@ struct QRAdminSheet: View {
             .buttonStyle(.plain)
 
             Spacer(minLength: 10)
-        }
-    }
-
-    private func fetchToken(for venue: VenueLite) {
-        guard !loading else { return }
-        loading = true
-        Task { @MainActor in
-            struct P: Encodable { let p_venue: UUID }
-            let t: String? = try? await supabase
-                .rpc("ensure_qr_token", params: P(p_venue: venue.id))
-                .execute().value
-            loading = false
-            if let t {
-                picked = venue
-                token = t
-            }
         }
     }
 

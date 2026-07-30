@@ -201,7 +201,7 @@ final class MapKitVenueSearch: ObservableObject {
     /// is used to bias the region and compute distances. We restrict
     /// to bar/restaurant POI categories so a search for "vasa" doesn't
     /// pollute the list with bus stops.
-    func search(query: String, origin: CLLocation?) {
+    func search(query: String, origin: CLLocation?, biasToOrigin: Bool = true) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         // Cancel any in-flight search first — typing a new char shouldn't
         // race the previous one.
@@ -227,7 +227,7 @@ final class MapKitVenueSearch: ObservableObject {
         // otherwise let MapKit pick a default. The radius is a soft
         // bias, not a hard filter, so we still get hits if the user
         // wandered slightly outside it.
-        if let origin {
+        if let origin, biasToOrigin {
             request.region = MKCoordinateRegion(
                 center: origin.coordinate,
                 latitudinalMeters: 20_000,
@@ -710,39 +710,52 @@ final class VenueService: ObservableObject {
     /// even if this method's source value were wrong the moderation
     /// guarantee would still hold.
     func checkIn(mapKitResult result: MapKitVenueResult) async {
+        if let venue = await resolveOrCreateMapKitVenue(result) {
+            currentVenue = venue
+            return
+        }
+        // Last resort: local-only stub, so the user's check-in still works
+        // this session even if it never persisted. Stable id from
+        // external_id so a later real insert dedupes via reconcileCurrent().
+        let stub = Venue(
+            id: UUID(),
+            name: result.name,
+            address: result.address,
+            city: result.city,
+            lat: result.lat,
+            lon: result.lon,
+            isFeatured: false,
+            source: .mapkit,
+            externalId: result.id,
+            createdAt: Date()
+        )
+        venues.append(stub)
+        currentVenue = stub
+    }
+
+    /// Get the `venues` row for an Apple Maps result, creating it if this is
+    /// the first time anyone picked that place. Shared by check-in and the
+    /// admin QR sheet so there is exactly one way a mapkit venue comes into
+    /// existence. Returns nil only if the row could be neither found nor
+    /// written. No side effects on `currentVenue` — callers decide that.
+    @discardableResult
+    func resolveOrCreateMapKitVenue(_ result: MapKitVenueResult) async -> Venue? {
         // 1. Fast path: already in our local list.
         if let existing = venues.first(where: {
             $0.externalId == result.id && $0.source == .mapkit
-        }) {
-            currentVenue = existing
-            return
-        }
+        }) { return existing }
 
         // 2. Re-check the DB in case another device beat us to the insert
         //    (or our local list is stale). Look up by (source, external_id),
         //    which is the same shape as the unique index.
-        do {
-            let matches: [Venue] = try await supabase
-                .from("venues")
-                .select()
-                .eq("source", value: "mapkit")
-                .eq("external_id", value: result.id)
-                .limit(1)
-                .execute()
-                .value
-            if let hit = matches.first {
-                if !venues.contains(where: { $0.id == hit.id }) {
-                    venues.append(hit)
-                }
-                currentVenue = hit
-                return
-            }
-        } catch {
-            // Read failure is non-fatal — fall through and try insert.
-            // Worst case the unique index rejects us and we surface that.
+        if let hit = await fetchMapKitVenue(externalId: result.id) {
+            if !venues.contains(where: { $0.id == hit.id }) { venues.append(hit) }
+            return hit
         }
 
         // 3. Insert a new mapkit row. RLS allows it because source != 'curated'.
+        //    The DB enforces the curated-only rule on specials via trigger, so
+        //    the moderation guarantee holds regardless of this source value.
         struct NewMapKitVenue: Encodable {
             let name: String
             let address: String?
@@ -772,51 +785,28 @@ final class VenueService: ObservableObject {
                 .value
             if let row = inserted.first {
                 venues.append(row)
-                currentVenue = row
-                return
+                return row
             }
         } catch {
-            // Insert lost a race with another device — re-read by external_id
-            // and use the winner. If that also fails we fall through to a
-            // local-only stub so the user's check-in still works for this
-            // session even if it doesn't get persisted.
-            do {
-                let matches: [Venue] = try await supabase
-                    .from("venues")
-                    .select()
-                    .eq("source", value: "mapkit")
-                    .eq("external_id", value: result.id)
-                    .limit(1)
-                    .execute()
-                    .value
-                if let hit = matches.first {
-                    if !venues.contains(where: { $0.id == hit.id }) {
-                        venues.append(hit)
-                    }
-                    currentVenue = hit
-                    return
-                }
-            } catch {
-                // fall through
+            // Lost a race with another device — re-read and use the winner.
+            if let hit = await fetchMapKitVenue(externalId: result.id) {
+                if !venues.contains(where: { $0.id == hit.id }) { venues.append(hit) }
+                return hit
             }
         }
+        return nil
+    }
 
-        // 4. Last resort: local-only stub. Stable id from external_id so
-        //    a later real insert dedupes cleanly via reconcileCurrent().
-        let stub = Venue(
-            id: UUID(),
-            name: result.name,
-            address: result.address,
-            city: result.city,
-            lat: result.lat,
-            lon: result.lon,
-            isFeatured: false,
-            source: .mapkit,
-            externalId: result.id,
-            createdAt: Date()
-        )
-        venues.append(stub)
-        currentVenue = stub
+    private func fetchMapKitVenue(externalId: String) async -> Venue? {
+        let matches: [Venue]? = try? await supabase
+            .from("venues")
+            .select()
+            .eq("source", value: "mapkit")
+            .eq("external_id", value: externalId)
+            .limit(1)
+            .execute()
+            .value
+        return matches?.first
     }
 
     /// Walk every known venue and, for each, look up locally-defined
