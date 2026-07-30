@@ -29,6 +29,10 @@ struct SunMapboxView: View {
     /// Bumped by the locate button. Watched instead of the coordinate so
     /// tapping locate twice from the same spot still recentres.
     var locateTick: Int = 0
+    /// False while this map is parked off-screen. The view stays alive so
+    /// switching back doesn't reload the style; this stops it drawing frames
+    /// meanwhile. See MapRenderGate.
+    var rendering: Bool = true
 
     @State private var viewport: Viewport
 
@@ -36,7 +40,8 @@ struct SunMapboxView: View {
          selectedId: Binding<UUID?>, centre: CLLocationCoordinate2D,
          focus: CLLocationCoordinate2D? = nil,
          pagingLocked: Binding<Bool> = .constant(false),
-         locateTick: Int = 0) {
+         locateTick: Int = 0,
+         rendering: Bool = true) {
         self.readings = readings
         self.previewAt = previewAt
         self._selectedId = selectedId
@@ -44,6 +49,7 @@ struct SunMapboxView: View {
         self.focus = focus
         self._pagingLocked = pagingLocked
         self.locateTick = locateTick
+        self.rendering = rendering
         // Pitched in so the extrusions read as buildings, not footprints.
         _viewport = State(initialValue: .camera(center: centre, zoom: 15.2,
                                                 bearing: 0, pitch: 55))
@@ -97,6 +103,9 @@ struct SunMapboxView: View {
                                            bearing: 0, pitch: 55)
                     }
                 }
+                // Behind the map, so the gate lands in the same UIKit container
+                // and can find the MapView by walking the hierarchy.
+                .background(MapRenderGate(rendering: rendering))
         }
     }
 
@@ -204,5 +213,84 @@ struct SunMapboxView: View {
         case ..<12:    return morning ? .dawn : .dusk
         default:       return .day
         }
+    }
+}
+
+/// Stops a parked Mapbox map from drawing frames, without tearing it down.
+///
+/// WHY THIS EXISTS. Switching map modes used to destroy the Mapbox view and
+/// build a new one on the way back, which means re-reading and re-applying the
+/// Standard style every time — the remaining "not instant" part of switching to
+/// Sun. Keeping the view alive fixes that, but a hidden MapView is not free:
+/// MapView gates its display link purely on window membership and scene
+/// activation state (MapView.shouldRunDisplayLink), and never looks at
+/// isHidden or alpha, so parked behind another view it keeps ticking.
+///
+/// MEASURED, on iPhone 17 Pro Max sim, mean %CPU over 15s after a 12s warmup:
+///   visible                5.6%   (14.1% peak)
+///   parked, gated          0.0%
+///   parked, NOT gated      0.9%   (1.1% peak)
+/// So the naive keep-it-alive costs about 0.9 points of CPU continuously — a
+/// real cost but a modest one, because Mapbox skips redraws when the scene is
+/// static; it is nowhere near the 5.6% of a live map. Gating removes it
+/// outright. Simulator CPU is only a proxy for device battery — on device a
+/// firing display link also keeps the GPU out of its idle states — so treat
+/// 0.9 points as the floor of what this saves, not the whole of it.
+///
+/// `displayState` is the SDK's own answer — documented as controlling "when the
+/// map's display link should be active, which directly affects rendering
+/// performance and battery usage". Setting it to the empty set leaves no
+/// permissible activation state, so shouldRunDisplayLink() always returns false
+/// and the CADisplayLink is paused. The map keeps its style, its tiles and its
+/// GPU resources, and costs no frames.
+///
+/// WHY IT HUNTS THROUGH THE VIEW HIERARCHY. SwiftUI's `Map` owns the underlying
+/// MapView privately: MapProxy exposes `camera`, `map`, `location` and
+/// `viewport`, but not the view itself, so there is no supported way to reach
+/// `displayState` from the declarative API. This sits in the map's `background`
+/// — same UIKit container — and walks up a few levels looking for it.
+struct MapRenderGate: UIViewRepresentable {
+    let rendering: Bool
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView(frame: .zero)
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        // Deferred: on the first pass SwiftUI may not have inserted the MapView
+        // yet, and we would find nothing.
+        DispatchQueue.main.async {
+            guard let map = Self.mapView(near: uiView) else { return }
+            let wanted: MapView.DisplayState =
+                rendering ? [.foregroundActive, .foregroundInactive] : []
+            if map.displayState.rawValue != wanted.rawValue {
+                map.displayState = wanted
+            }
+        }
+    }
+
+    /// Nearest MapView reachable by climbing a few levels and searching down.
+    /// Bounded on both axes so this can never walk the whole window.
+    private static func mapView(near view: UIView) -> MapView? {
+        var node: UIView? = view
+        var hops = 0
+        while let n = node, hops < 6 {
+            if let found = search(n, depth: 0) { return found }
+            node = n.superview
+            hops += 1
+        }
+        return nil
+    }
+
+    private static func search(_ v: UIView, depth: Int) -> MapView? {
+        if let m = v as? MapView { return m }
+        guard depth < 6 else { return nil }
+        for sub in v.subviews {
+            if let m = search(sub, depth: depth + 1) { return m }
+        }
+        return nil
     }
 }

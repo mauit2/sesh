@@ -375,10 +375,36 @@ final class VenueService: ObservableObject {
     // MARK: - Crowdsourced beer prices (migration 061)
 
     /// Pull the median-recent price per venue+serving for the beer-price map.
+    ///
+    /// PAGED, for the same reason `refresh()` is: PostgREST caps EVERY response
+    /// at 1000 rows, and that cap applies to RPC results too — it is not a
+    /// property of `from()`. This call was unpaged, so once the table passed
+    /// 1000 rows the tail was dropped silently: 180 of 1180 prices, 145 of them
+    /// 40 cl, which is the most-reported serving and so the one that looked
+    /// broken. A truncated response is indistinguishable from a complete one,
+    /// which is exactly why this keeps recurring — page until short.
+    ///
+    /// PAGING VIA FUNCTION ARGUMENTS, not `.range()`. `.range()` sets a Range
+    /// header, and this PostgREST IGNORES Range on POST /rpc/ — asking for rows
+    /// 1000-1999 hands back rows 0-999 again, so a loop would spin on the first
+    /// page forever and double-count it. Migration 084 makes the slice part of
+    /// the function's contract instead of a transport detail.
     func loadBeerPrices() async {
         do {
-            let rows: [VenueBeerPrice] = try await supabase
-                .rpc("venue_beer_prices").execute().value
+            var rows: [VenueBeerPrice] = []
+            let pageSize = 1000
+            var offset = 0
+            while true {
+                let page: [VenueBeerPrice] = try await supabase
+                    .rpc("venue_beer_prices",
+                         params: ["p_limit": pageSize, "p_offset": offset])
+                    .execute()
+                    .value
+                rows.append(contentsOf: page)
+                if page.count < pageSize { break }
+                offset += pageSize
+                if offset > 50_000 { break }   // sanity stop
+            }
             var map: [UUID: [VenueBeerPrice]] = [:]
             for r in rows { map[r.venueId, default: []].append(r) }
             beerPricesByVenue = map
@@ -1087,6 +1113,9 @@ private struct OffersMapView: View {
     /// browse another city), but handing MapKit venues on another continent
     /// made it clamp them into the corner of the screen.
     @State private var visibleRegion: MKCoordinateRegion?
+    /// Latches true the first time Sun mode is opened. Gates whether the Mapbox
+    /// map exists at all, so users who never open Sun never pay to build it.
+    @State private var sunEverShown = false
     /// Where search asked the camera to go.
     @State private var sunFocus: CLLocationCoordinate2D?
     /// The serving size the price map is filtered to.
@@ -1126,6 +1155,23 @@ private struct OffersMapView: View {
     /// no location fix yet. Shared with the list + billboards.
     private let radiusMeters = VenueService.dealsRadiusMeters
 
+    /// Live billboard campaigns for this city. Computed once and reused: the
+    /// carousel draws them, and the locate button has to know whether to sit
+    /// above them.
+    private var billboards: [(offer: VenueOffer, venue: Venue)] {
+        guard mapMode == .deals, selectedVenue == nil else { return [] }
+        return venues.billboardEntries(near: location.location)
+    }
+
+    /// How far up the locate button has to float to clear the mode's own bottom
+    /// furniture. The billboard carousel is 200pt tall on a 40pt inset, and the
+    /// button was landing behind it.
+    private var locateBottomInset: CGFloat {
+        if mapMode == .sun { return 132 }
+        if !billboards.isEmpty { return 248 }
+        return 24
+    }
+
     private var pins: [Venue] {
         // Still global — zoom out and another city's deals appear — but only
         // the ones actually in view are handed to MapKit. Passing it venues
@@ -1142,8 +1188,19 @@ private struct OffersMapView: View {
     /// built in one pass, which is what made switching into Beer mode hang for
     /// several seconds. The Sun map already caps at 80 for the same reason.
     /// A cheap bounding-box pre-filter keeps this from doing trig 1115 times.
+    /// Priced bars for this serving that are in view, BEFORE the draw cap.
+    private var pricedOnScreen: [Venue] {
+        venues.venuesWithBeerPrice(serving: selectedServing).filter(onScreen)
+    }
+
+    /// How many priced bars in view the cap is holding back. Drives the zoom
+    /// hint — without it the map silently claims a dense city has 120 bars.
+    private var hiddenPriceCount: Int {
+        max(0, pricedOnScreen.count - pricePins.count)
+    }
+
     private var pricePins: [Venue] {
-        let all = venues.venuesWithBeerPrice(serving: selectedServing).filter(onScreen)
+        let all = pricedOnScreen
         guard let here = location.location, all.count > Self.maxPricePins else { return all }
         let lat = here.coordinate.latitude, lon = here.coordinate.longitude
         let box = 0.75   // degrees; generous, just to avoid sorting the world
@@ -1181,9 +1238,19 @@ private struct OffersMapView: View {
         ZStack(alignment: .top) {
             Color.ink.ignoresSafeArea()
 
-            if mapMode == .sun {
+            // The Mapbox map is built the FIRST time Sun is opened and then kept
+            // in the hierarchy, because destroying it meant re-applying the
+            // Standard style on every switch back — the last visibly slow part
+            // of changing modes. Parked, it draws nothing: MapRenderGate pauses
+            // its display link (a hidden MapView otherwise keeps rendering at
+            // full frame rate, since Mapbox gates only on window membership).
+            if sunEverShown {
                 sunLayer
-            } else {
+                    .opacity(mapMode == .sun ? 1 : 0)
+                    .allowsHitTesting(mapMode == .sun)
+            }
+
+            if mapMode != .sun {
             Map(position: $camera) {
                 UserAnnotation()
                 if mapMode == .deals {
@@ -1232,7 +1299,7 @@ private struct OffersMapView: View {
                     Spacer()
                     LocateMeButton(enabled: location.location != nil) { locateMe() }
                         .padding(.trailing, 16)
-                        .padding(.bottom, mapMode == .sun ? 132 : 24)
+                        .padding(.bottom, locateBottomInset)
                 }
             }
 
@@ -1267,15 +1334,36 @@ private struct OffersMapView: View {
             }
 
             // Billboard carousel — deals mode only, hidden while a card is up.
-            if mapMode == .deals, selectedVenue == nil {
-                let billboards = venues.billboardEntries(near: location.location)
-                if !billboards.isEmpty {
-                    VStack {
-                        Spacer()
-                        BillboardCarousel(entries: billboards) { venue in focus(venue) }
-                            .padding(.bottom, 40)   // clears Apple's attribution
-                    }
+            if !billboards.isEmpty {
+                VStack {
+                    Spacer()
+                    BillboardCarousel(entries: billboards) { venue in focus(venue) }
+                        .padding(.bottom, 40)   // clears Apple's attribution
                 }
+            }
+
+            // Zoom nudge — the map draws at most maxPricePins bars, nearest
+            // first, so zoomed out over a city it silently hides most of them
+            // and the header count looks like the whole truth. Say so.
+            if mapMode == .prices, selectedVenue == nil, hiddenPriceCount > 0 {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus.magnifyingglass")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("\(hiddenPriceCount) MORE HERE · ZOOM IN")
+                            .font(.system(size: 10, weight: .black, design: .monospaced))
+                            .tracking(1.1)
+                    }
+                    .foregroundStyle(Color.cream.opacity(0.9))
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Capsule().fill(Color.ink.opacity(0.78)))
+                    .padding(.bottom, 26)
+                    // Clears the locate button, which sits trailing at 24.
+                    .padding(.trailing, 56)
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
             }
 
             // Contribute nudge — the price map is only as good as the crowd, so
@@ -1346,6 +1434,15 @@ private struct OffersMapView: View {
         // Horizons load lazily — the Sun mode is opt-in, so nobody pays for it
         // unless they ask, and once loaded a whole day scrubs offline.
         .onChange(of: mapMode) { _, mode in
+            if mode == .sun { sunEverShown = true }
+            // DROP THE STALE VIEWPORT. onScreen() filters pins against
+            // visibleRegion, which only MapKit's onMapCameraChange refreshes —
+            // and the MapKit map is torn down while Sun is showing. Coming back,
+            // the old region is still in there until the camera next settles, so
+            // if the map has moved since (located to another city, followed a
+            // search), every pin tests as off-screen and the map looks empty.
+            // nil means "don't filter yet", so it fails open instead.
+            visibleRegion = nil
             guard mode == .sun, sun.venues.isEmpty else { return }
             Task {
                 await sun.load(near: location.location?.coordinate
@@ -1461,10 +1558,28 @@ private struct OffersMapView: View {
             let lit = sunNearbyReadings.filter(\.isSunlit).count
             return lit == 0 ? "all in shade" : "\(lit) in the sun"
         }
-        if mapMode == .deals { return "\(pins.count) \(pins.count == 1 ? "spot" : "spots")" }
+        if mapMode == .deals {
+            // COUNTED OVER THE CITY, NOT THE VIEWPORT. `pins` is deliberately
+            // filtered to what's on screen, because MapKit clamps far-off
+            // annotations into the corner — but counting the same way made the
+            // header read "0 spots" while a billboard for a bar 2 km away was
+            // sitting on top of the map. The billboard and the deals list are
+            // both city-scoped, so the count is too; panning around no longer
+            // changes how many deals you're told exist.
+            let n = withinRadius(venues.venuesWithOffers).count
+            return "\(n) \(n == 1 ? "spot" : "spots")"
+        }
         // Global map now, mixed currencies — a single "cheapest" is meaningless,
         // so just count the priced bars.
-        return pricePins.isEmpty ? "tap ＋ to add" : "\(pricePins.count) \(pricePins.count == 1 ? "bar" : "bars")"
+        //
+        // "120+" WHEN THE CAP IS BITING. The map draws at most maxPricePins, so
+        // a flat "120 bars" over a city read as the complete answer when it was
+        // really the first 120 of 206 — the header stating the limit as if it
+        // were the total. The plus says there are more without pretending to
+        // have drawn them.
+        if pricePins.isEmpty { return "tap ＋ to add" }
+        let more = hiddenPriceCount > 0
+        return "\(pricePins.count)\(more ? "+" : "") \(pricePins.count == 1 && !more ? "bar" : "bars")"
     }
 
     // Cached in the service. Calling a recomputing function here meant
@@ -1532,7 +1647,10 @@ private struct OffersMapView: View {
             centre: sunReference.coord,
             focus: sunFocus,
             pagingLocked: $pagingLocked,
-            locateTick: locateTick
+            locateTick: locateTick,
+            // Parked behind the MapKit map in the other modes: stays loaded,
+            // stops drawing.
+            rendering: mapMode == .sun
         )
     }
 

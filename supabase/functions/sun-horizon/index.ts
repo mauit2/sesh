@@ -1,41 +1,36 @@
 // sun-horizon — compute a venue's shading horizon from building heights.
 //
-// For one venue we work out, for every compass direction, the highest elevation
-// angle blocked by a building. The result is 72 numbers ("anything below this
-// angle, in this direction, is behind a building") which the app evaluates
-// against the sun's position locally — so scrubbing a whole day of sun/shade
-// costs no network at all.
+// GEOMETRY — exact ray casting, not point sampling. The first version walked
+// each footprint edge in ~3 m steps and binned the sampled points, which leaves
+// GAPS: a bin only got a value if a sample happened to land in it, so profiles
+// came out as isolated 60-70 deg spikes between 11 deg lows. Two visible bugs
+// fell out of that — venues read sunnier than they are, and the sun flickered
+// on/off every few minutes as its azimuth crossed in and out of the spikes.
+// Now we cast a ray every RAY_STEP degrees and intersect it with every wall
+// segment: gap-free by construction, and exact.
 //
-// GEOMETRY — exact ray casting, not point sampling.
-//   The first version walked each footprint edge in ~3 m steps and binned the
-//   sampled points. That leaves GAPS: a bin only got a value if a sample
-//   happened to land in it, so profiles came out as isolated 60-70 deg spikes
-//   between 11 deg lows. Two visible bugs fell out of that — venues read
-//   sunnier than they are, and the sun flickered on/off every few minutes as
-//   its azimuth crossed in and out of the spikes. Now we cast a ray every
-//   RAY_STEP degrees and intersect it with every wall segment: gap-free by
-//   construction, and exact.
+// WHERE WE STAND — the sunniest facade. A venue's pin normally sits INSIDE its
+// building, and a point inside a building sees no sky at all, so the pin itself
+// is not a usable vantage point. But standing 2.5 m from a long wall blocks
+// half the sky, so the answer depends entirely on WHICH facade you pick — and
+// picking the nearest one is a coin flip. It made a courtyard venue read as "no
+// sun at all" purely because its pin sat closest to the north wall. So we try
+// candidate points spread around the host footprint and keep the one most open
+// toward the equator: a venue with a terrace puts it where the sun is, so this
+// is both the physically meaningful answer and the useful one ("can I sit in
+// the sun here?"). The host building is kept in the geometry throughout, so it
+// blocks the sky behind you — and for a venue on an inner courtyard the
+// enclosing walls stay in the model.
 //
-// WHERE WE STAND — the sunniest facade.
-//   A venue's pin normally sits INSIDE its building, and a point inside a
-//   building sees no sky at all, so the pin itself is not a usable vantage
-//   point. But standing 2.5 m from a long wall blocks half the sky, which means
-//   the answer depends entirely on WHICH facade you pick — and picking the
-//   nearest one is a coin flip. It made a courtyard venue read as "no sun at
-//   all" purely because its pin sat closest to the north wall.
-//   So we try candidate points spread around the host footprint and keep the
-//   one most open toward the equator. A venue with a terrace puts it where the
-//   sun is, so this is both the physically meaningful answer and the useful one
-//   ("can I sit in the sun here?"). The host building is kept in the geometry
-//   throughout, so it blocks the sky behind you — and for a venue on an inner
-//   courtyard the enclosing walls stay in the model.
+// HEIGHT SOURCE — Mapbox vector tiles, OSM as fallback. We read the raw .mvt
+// rather than the Tilequery API because Tilequery only returns a representative
+// POINT per building; the horizon needs whole outlines or sun leaks through
+// walls. `confidence` and `source` record what backed the profile.
 //
-// HEIGHT SOURCE — Mapbox vector tiles, OSM as fallback.
-//   mapbox-streets-v8's `building` layer carries a populated `height`
-//   worldwide. We read the raw .mvt rather than the Tilequery API because
-//   Tilequery only returns a representative POINT per building; the horizon
-//   needs whole outlines or sun leaks through walls. `confidence` and `source`
-//   record what backed the profile so the UI can be honest about it.
+// RATE LIMITING — metered in VENUES, not requests. See migration 083: a batch
+// request may carry 1 venue or 120, and it is the venue count that spends
+// Mapbox quota (nine vector tiles apiece), so counting requests both throttled
+// legitimate backfills and failed to bound actual spend.
 //
 // Attribution: (c) Mapbox, (c) OpenStreetMap contributors.
 
@@ -60,6 +55,9 @@ const PER_IP_HOUR = 120;
 const GLOBAL_DAY = 4000;
 const BATCH_MAX = 120;          // venues per batch request
 const BACKFILL_PER_HOUR = 40;   // batch requests per hour, all callers
+// Venue budgets — the limits that actually bound Mapbox spend — live entirely
+// in the database (rate_limit_ceiling, migrations 083/085), so the hourly and
+// daily ceilings can be retuned without redeploying this function.
 
 const OVERPASS = [
   "https://overpass-api.de/api/interpreter",
@@ -89,8 +87,6 @@ function metres(v: unknown): number | null {
   return n;
 }
 
-/* ---------------- Mapbox vector tiles ---------------- */
-
 function lonLatToTile(lon: number, lat: number, z: number) {
   const n = Math.pow(2, z);
   const latRad = (lat * Math.PI) / 180;
@@ -114,8 +110,6 @@ function tileToLonLat(
 
 async function fromMapbox(lat: number, lon: number, token: string): Promise<Footprint[]> {
   const centre = lonLatToTile(lon, lat, TILE_Z);
-  // A 160 m radius straddles tile borders (a z16 tile is ~320 m across here),
-  // so take the 3x3 block around the venue.
   const jobs: Promise<Footprint[]>[] = [];
   for (let dx = -1; dx <= 1; dx++) {
     for (let dy = -1; dy <= 1; dy++) {
@@ -129,7 +123,7 @@ async function oneTile(tx: number, ty: number, token: string): Promise<Footprint
   const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/${TILE_Z}/${tx}/${ty}.mvt`
     + `?access_token=${encodeURIComponent(token)}`;
   const res = await fetch(url);
-  if (res.status === 404) return [];   // empty tile (water, no coverage)
+  if (res.status === 404) return [];
   if (!res.ok) throw new Error("tiles_" + res.status);
   const buf = new Uint8Array(await res.arrayBuffer());
   if (buf.length === 0) return [];
@@ -143,9 +137,8 @@ async function oneTile(tx: number, ty: number, token: string): Promise<Footprint
     const f = layer.feature(i);
     const p = f.properties ?? {};
     const h = metres(p.height) ?? levelsToMetres(p["levels"]);
-    // Keep a feature's rings TOGETHER: outer ring plus any holes. The even-odd
-    // containment test needs all of them to tell "inside the building" from
-    // "in its courtyard".
+    // Keep a feature's rings TOGETHER: outer ring plus any holes, so the
+    // even-odd test can tell "inside the building" from "in its courtyard".
     const rings = f.loadGeometry()
       .filter((r: { x: number; y: number }[]) => r.length >= 3)
       .map((r: { x: number; y: number }[]) =>
@@ -154,8 +147,6 @@ async function oneTile(tx: number, ty: number, token: string): Promise<Footprint
   }
   return out;
 }
-
-/* ---------------- Overpass / OSM fallback ---------------- */
 
 async function fromOSM(lat: number, lon: number): Promise<Footprint[]> {
   const q = `[out:json][timeout:25];way["building"](around:${RADIUS_M},${lat},${lon});out geom;`;
@@ -185,8 +176,6 @@ async function fromOSM(lat: number, lon: number): Promise<Footprint[]> {
   throw new Error("overpass_unavailable");
 }
 
-/* ---------------- the horizon ---------------- */
-
 /** Even-odd containment of the ORIGIN across every ring of one feature. */
 function containsOrigin(ringsXY: [number, number][][]): boolean {
   let inside = false;
@@ -194,7 +183,6 @@ function containsOrigin(ringsXY: [number, number][][]): boolean {
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
       const [xi, yi] = ring[i];
       const [xj, yj] = ring[j];
-      // Ray along +x from the origin.
       if ((yi > 0) !== (yj > 0)) {
         const x = xi + ((0 - yi) / (yj - yi)) * (xj - xi);
         if (x > 0) inside = !inside;
@@ -225,7 +213,6 @@ function facadeCandidates(
         const ex = bx - ax, ey = by - ay;
         const len = Math.hypot(ex, ey);
         if (len < 0.01) continue;
-        // Walk the perimeter, emitting a candidate every FACADE_SPAN metres.
         for (let d = FACADE_SPAN - carried; d < len; d += FACADE_SPAN) {
           const t = d / len;
           const px = ax + ex * t, py = ay + ey * t;
@@ -280,7 +267,6 @@ function equatorFacingBlock(hz: number[], lat: number): number {
   let sum = 0, n = 0;
   for (let b = 0; b < BINS; b++) {
     const az = b * 5 + 2.5;
-    // Northern hemisphere: the sun tracks through the south (90..270).
     const facing = lat >= 0 ? (az >= 90 && az <= 270) : (az <= 90 || az >= 270);
     if (facing) { sum += hz[b]; n++; }
   }
@@ -292,7 +278,6 @@ function computeHorizon(lat: number, lon: number, prints: Footprint[]) {
     .map((p) => p.height)
     .filter((h): h is number => h !== null)
     .sort((a, b) => a - b);
-  // Neighbourhood median - the self-calibrating fallback for untagged ones.
   const median = known.length
     ? known[Math.floor(known.length / 2)]
     : FALLBACK_LEVELS * LEVEL_M;
@@ -307,7 +292,6 @@ function computeHorizon(lat: number, lon: number, prints: Footprint[]) {
         [(plon - lon) * mLon, (plat - lat) * mLat] as [number, number])),
   }));
 
-  // Every wall in the neighbourhood, in venue-pin-relative metres.
   const walls: Wall[] = [];
   let used = 0;
   for (const p of projected) {
@@ -318,7 +302,6 @@ function computeHorizon(lat: number, lon: number, prints: Footprint[]) {
         const [ax, ay] = ring[i];
         const j = (i + 1) % ring.length;
         const [bx, by] = ring[j];
-        // Cheap reject: both ends well outside the working radius.
         const lim = RADIUS_M + FACADE_SPAN * 2;
         if (Math.hypot(ax, ay) > lim && Math.hypot(bx, by) > lim) continue;
         walls.push({ ax, ay, bx, by, h });
@@ -333,7 +316,6 @@ function computeHorizon(lat: number, lon: number, prints: Footprint[]) {
     ? facadeCandidates(hosts)
     : [[0, 0]];
 
-  // Keep the sunniest vantage point (see header).
   let bestHz: number[] | null = null;
   let bestScore = Infinity;
   let bestAt: [number, number] = [0, 0];
@@ -354,8 +336,6 @@ function computeHorizon(lat: number, lon: number, prints: Footprint[]) {
   };
 }
 
-/* ---------------- rate limiting ---------------- */
-
 /** Read the JWT payload Supabase already verified for us. */
 function jwtClaims(auth: string | null): { sub?: string; role?: string } {
   if (!auth?.startsWith("Bearer ")) return {};
@@ -372,8 +352,6 @@ function clientIp(req: Request): string {
   if (xff) return xff.split(",")[0].trim();
   return req.headers.get("cf-connecting-ip") ?? "unknown";
 }
-
-/* ---------------- request handling ---------------- */
 
 /** Compute and store one venue's profile. Shared by single and batch modes. */
 async function processVenue(
@@ -441,9 +419,6 @@ Deno.serve(async (req: Request) => {
     return json({ error: "bad_request" }, 400);
   }
   const venueId = String(body.venue_id ?? "");
-  // Batch mode: recompute many venues in one request. Used for backfills after
-  // a geometry change, so the caller never needs a privileged key of its own —
-  // this function already has the service key in its env.
   const batch = Math.min(Number(body.batch ?? 0) || 0, BATCH_MAX);
   const recompute = body.recompute === true;
   if (!venueId && !batch) return json({ error: "venue_id_required" }, 400);
@@ -457,7 +432,6 @@ Deno.serve(async (req: Request) => {
   const ip = clientIp(req);
   const token = Deno.env.get("MAPBOX_TOKEN");
 
-  /** Charge one unit against every cap. Returns the bucket that refused. */
   async function charge(): Promise<string | null> {
     if (claims.role === "service_role") return null;
     const checks: [string, string, number, string][] = [
@@ -477,6 +451,14 @@ Deno.serve(async (req: Request) => {
     return null;
   }
 
+  /** Take up to n venue-units against the hour AND day budgets, in one atomic
+   *  step (migration 085). null means the limiter failed -> refuse. */
+  async function takeBudget(n: number): Promise<number | null> {
+    const { data, error } = await admin.rpc("sun_venue_budget_take", { p_n: n });
+    if (error) return null;   // fail closed
+    return Number(data ?? 0);
+  }
+
   if (batch) {
     const gate = await charge();
     if (gate) return json({ error: "rate_limited", bucket: gate }, 429);
@@ -488,17 +470,53 @@ Deno.serve(async (req: Request) => {
       if (ok === false) return json({ error: "rate_limited", bucket: "sun_backfill" }, 429);
     }
 
-    const { data: all, error } = await admin.from("venues").select("id, lat, lon");
-    if (error) return json({ error: "venues_query_failed" }, 500);
-    let todo = all ?? [];
-    if (!recompute) {
-      const { data: done } = await admin.from("venue_sun").select("venue_id");
-      const have = new Set((done ?? []).map((d: { venue_id: string }) => d.venue_id));
-      todo = todo.filter((v: { id: string }) => !have.has(v.id));
+    // WHICH VENUES STILL NEED WORK — decided in SQL. The previous version read
+    // the whole venues table and the whole venue_sun table through PostgREST
+    // and diffed them here, and BOTH reads were silently capped at 1000 rows.
+    // With 2149 venues and 1067 done, that meant venues past the first 1000
+    // were unreachable and finished ones kept being reconsidered. A set
+    // difference in the database has no such cap, and can also put priced bars
+    // first — those are the ones the app promises a sun/shade icon for.
+    let todo: { id: string; lat: number; lon: number }[] = [];
+    if (recompute) {
+      const { data, error } = await admin
+        .from("venues").select("id, lat, lon")
+        .not("lat", "is", null)
+        .order("id")
+        .limit(batch);
+      if (error) return json({ error: "venues_query_failed" }, 500);
+      todo = (data ?? []) as typeof todo;
+    } else {
+      const { data, error } = await admin.rpc("venues_needing_sun", { p_limit: batch });
+      if (error) return json({ error: "venues_query_failed", detail: error.message }, 500);
+      todo = (data ?? []) as typeof todo;
     }
-    todo = todo.slice(0, batch);
+
+    // CHARGE PER VENUE. This is the limit that means anything: one venue is
+    // nine Mapbox tile fetches, so a request-count limit could not bound spend.
+    // A partial grant TRIMS the batch rather than refusing it, so a caller with
+    // 30 venues of budget left does 30 rather than nothing.
+    let allowed = todo.length;
+    if (claims.role !== "service_role" && allowed > 0) {
+      // ONE atomic reservation against both windows. Taking from them in two
+      // steps leaked budget: once the hourly allowance ran out, every retry
+      // still charged the daily bucket its full request before the hourly check
+      // refused it, so a client backing off and retrying burned the day's
+      // allowance without computing anything. A refused call now costs nothing.
+      const grant = await takeBudget(allowed);
+      if (grant === null) return json({ error: "rate_limit_unavailable" }, 503);
+      allowed = grant;
+      if (allowed === 0) {
+        return json({ error: "rate_limited", bucket: "sun_horizon_venues" }, 429);
+      }
+    }
+    todo = todo.slice(0, allowed);
+
     const res = await runBatch(admin, todo, token);
-    return json({ ok: true, mode: recompute ? "recompute" : "fill", ...res }, 200);
+    return json({
+      ok: true, mode: recompute ? "recompute" : "fill",
+      granted: allowed, ...res,
+    }, 200);
   }
 
   const gate = await charge();
