@@ -108,12 +108,35 @@ function tileToLonLat(
   return [lon, lat] as [number, number];
 }
 
-async function fromMapbox(lat: number, lon: number, token: string): Promise<Footprint[]> {
+/// Tiles already fetched during THIS invocation, keyed "x/y".
+///
+/// Neighbouring venues share tiles: a z16 tile is ~600 m across, and a batch is
+/// venues from the same city, so without this a 120-venue batch issues 1080 tile
+/// requests to re-read the same few dozen tiles. Holding the promise (not the
+/// result) also collapses concurrent requests for the same tile, which matters
+/// because runBatch works four venues at a time.
+type TileCache = Map<string, Promise<Footprint[]>>;
+
+async function fromMapbox(
+  lat: number, lon: number, token: string, cache: TileCache,
+): Promise<Footprint[]> {
   const centre = lonLatToTile(lon, lat, TILE_Z);
   const jobs: Promise<Footprint[]>[] = [];
   for (let dx = -1; dx <= 1; dx++) {
     for (let dy = -1; dy <= 1; dy++) {
-      jobs.push(oneTile(centre.x + dx, centre.y + dy, token));
+      const tx = centre.x + dx, ty = centre.y + dy;
+      const key = `${tx}/${ty}`;
+      let job = cache.get(key);
+      if (!job) {
+        // Bound it. A geographically ordered batch touches a few dozen tiles,
+        // but nothing guarantees that, and each tile holds hundreds of
+        // footprints with their coordinate arrays — an unbounded map could
+        // outgrow the function's memory on a scattered batch.
+        if (cache.size > 300) cache.clear();
+        job = oneTile(tx, ty, token);
+        cache.set(key, job);
+      }
+      jobs.push(job);
     }
   }
   return (await Promise.all(jobs)).flat();
@@ -373,13 +396,14 @@ async function processVenue(
   admin: ReturnType<typeof createClient>,
   venue: { id: string; lat: number; lon: number },
   token: string | undefined,
+  cache: TileCache = new Map(),
 ) {
   let prints: Footprint[] = [];
   let source = "osm";
   let note: string | undefined;
   if (token) {
     try {
-      prints = await fromMapbox(venue.lat, venue.lon, token);
+      prints = await fromMapbox(venue.lat, venue.lon, token, cache);
       source = "mapbox";
     } catch (e) {
       note = String(e);
@@ -411,17 +435,19 @@ async function runBatch(
   let ok = 0, failed = 0;
   const errors: string[] = [];
   const CONCURRENCY = 4;
+  // Shared across the whole batch — see TileCache.
+  const cache: TileCache = new Map();
   for (let i = 0; i < venues.length; i += CONCURRENCY) {
     const slice = venues.slice(i, i + CONCURRENCY);
     const out = await Promise.allSettled(
-      slice.map((v) => processVenue(admin, v, token)),
+      slice.map((v) => processVenue(admin, v, token, cache)),
     );
     for (const r of out) {
       if (r.status === "fulfilled") ok++;
       else { failed++; if (errors.length < 5) errors.push(String(r.reason)); }
     }
   }
-  return { processed: venues.length, ok, failed, errors };
+  return { processed: venues.length, ok, failed, errors, tilesFetched: cache.size };
 }
 
 Deno.serve(async (req: Request) => {
@@ -436,6 +462,9 @@ Deno.serve(async (req: Request) => {
   const venueId = String(body.venue_id ?? "");
   const batch = Math.min(Number(body.batch ?? 0) || 0, BATCH_MAX);
   const recompute = body.recompute === true;
+  // Recompute rewrites rows that already exist, so unlike the fill path it
+  // cannot find its place by "what's missing" — the caller pages it.
+  const recomputeFrom = Math.max(0, Number(body.from ?? 0) || 0);
   if (!venueId && !batch) return json({ error: "venue_id_required" }, 400);
 
   const admin = createClient(
@@ -494,11 +523,15 @@ Deno.serve(async (req: Request) => {
     // first — those are the ones the app promises a sun/shade icon for.
     let todo: { id: string; lat: number; lon: number }[] = [];
     if (recompute) {
+      // ORDERED GEOGRAPHICALLY, not by id. Ordering by a random uuid scatters
+      // each batch across the country, so consecutive venues share no tiles and
+      // the cache both misses every time and grows large. Sorting by position
+      // keeps a batch inside a city.
       const { data, error } = await admin
         .from("venues").select("id, lat, lon")
         .not("lat", "is", null)
-        .order("id")
-        .limit(batch);
+        .order("lat").order("lon")
+        .range(recomputeFrom, recomputeFrom + batch - 1);
       if (error) return json({ error: "venues_query_failed" }, 500);
       todo = (data ?? []) as typeof todo;
     } else {
@@ -530,7 +563,7 @@ Deno.serve(async (req: Request) => {
     const res = await runBatch(admin, todo, token);
     return json({
       ok: true, mode: recompute ? "recompute" : "fill",
-      granted: allowed, ...res,
+      granted: allowed, from: recompute ? recomputeFrom : undefined, ...res,
     }, 200);
   }
 
