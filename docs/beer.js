@@ -37,15 +37,15 @@
   const vel = new Float32Array(N);  // velocity
   const acc = new Float32Array(N);  // scratch: neighbour pull
   const K = 0.02;                   // stiffness back to rest
-  const DAMP = 0.988;
-  const SPREAD = 0.18;              // wave speed — must stay under .5 to be stable
-  const CLAMP = 34;
-  const BLUR = 0.06;                // viscosity: bleed into neighbours per frame
+  const DAMP = 0.986;
+  const SPREAD = 0.24;              // wave speed — must stay under .5 to be stable
+  const CLAMP = 24;
+  const BLUR = 0.12;                // surface tension: short chop dies, round waves live
 
   /* ---------- the slosh mode ---------- */
   // First mode of a rocked container: surface shape cos(πx/W), one damped
   // oscillator for the whole glass. ω² = SLOSH_K → ~2.3 s period.
-  const SLOSH_K = 7.5, SLOSH_C = 0.6;
+  const SLOSH_K = 7.5, SLOSH_C = 0.85;
   let sloshP = 0, sloshV = 0;
 
   const REST = 0.055;               // level with the page at the very top
@@ -55,6 +55,8 @@
   let t = 0;
 
   let W = 0, H = 0;
+  let mobile = false;
+  let SEGS = 56;                    // surface samples per paint, set in resize()
   let bubbles = [], streams = [], laces = [], foamBits = [];
   let grain = null;                 // pre-rendered speckle for the liquid
   const FOAM_BASE = 7.2;
@@ -63,9 +65,11 @@
 
   /* ---------- setup ---------- */
   function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     W = window.innerWidth;
     H = window.innerHeight;
+    mobile = W < 720;
+    SEGS = mobile ? 40 : 56;
+    const dpr = Math.min(window.devicePixelRatio || 1, mobile ? 1.25 : 1.5);
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);
     canvas.style.width = W + "px";
@@ -92,11 +96,11 @@
   }
 
   function seed() {
-    const nb = Math.round(Math.max(16, Math.min(44, W / 30)));
+    const nb = Math.round(Math.max(14, Math.min(40, W / (mobile ? 40 : 30))));
     bubbles = [];
     for (let i = 0; i < nb; i++) bubbles.push(newBubble(true));
     // nucleation sites — the spots a real glass streams from
-    const ns = Math.round(Math.max(4, Math.min(9, W / 170)));
+    const ns = Math.round(Math.max(3, Math.min(9, W / (mobile ? 230 : 170))));
     streams = [];
     for (let i = 0; i < ns; i++) {
       streams.push({
@@ -109,7 +113,7 @@
     }
     foamH.fill(FOAM_BASE);
     foamBits = [];
-    const nfb = Math.round(Math.max(40, Math.min(110, W / 12)));
+    const nfb = Math.round(Math.max(30, Math.min(100, W / (mobile ? 17 : 12))));
     for (let i = 0; i < nfb; i++) {
       foamBits.push({
         x: Math.random(),
@@ -146,7 +150,7 @@
     const lean = (x / Math.max(W, 1) - 0.5) * tilt;
     const rock = sloshP * Math.cos(Math.PI * x / Math.max(W, 1));
     const amb = (Math.sin(x * 0.0085 + t * 0.0011) * 2.1
-               + Math.sin(x * 0.019 - t * 0.0017) * 1.15) * (1 + energy * 2.2)
+               + Math.sin(x * 0.019 - t * 0.0017) * 1.15) * (1 + energy * 1.6)
                + Math.sin(x * 0.0031 + t * 0.00042) * 2.4;
     // meniscus: a wetting liquid climbs a little at the walls
     const climb = 3.0 * (Math.exp(-x / 30) + Math.exp(-(W - x) / 30));
@@ -181,6 +185,7 @@
     for (let i = 0; i < N; i++) {
       vel[i] += acc[i] - K * h[i];
       vel[i] *= DAMP;
+      if (vel[i] > 3.2) vel[i] = 3.2; else if (vel[i] < -3.2) vel[i] = -3.2;
       h[i] += vel[i];
       if (h[i] > CLAMP) { h[i] = CLAMP; vel[i] *= -0.4; }
       else if (h[i] < -CLAMP) { h[i] = -CLAMP; vel[i] *= -0.4; }
@@ -195,7 +200,7 @@
     // the rocking mode
     sloshV += (-SLOSH_K * sloshP - SLOSH_C * sloshV) * dt;
     sloshP += sloshV * dt;
-    if (sloshP > 26) sloshP = 26; else if (sloshP < -26) sloshP = -26;
+    if (sloshP > 18) sloshP = 18; else if (sloshP < -18) sloshP = -18;
 
     // the head: fatten over agitated water, diffuse, relax
     for (let i = 0; i < N; i++) {
@@ -246,12 +251,12 @@
     lastP = target;
     if (!reduce && Math.abs(d) > 0.0002) {
       // pouring in / tipping out: some ripple, mostly a rock of the whole glass
-      const imp = Math.max(-5, Math.min(5, -d * 240));
+      const imp = Math.max(-3.5, Math.min(3.5, -d * 180));
       for (let i = 0; i < N; i++) {
         vel[i] += imp * (0.55 + 0.45 * Math.sin((i / (N - 1)) * Math.PI));
       }
-      sloshV += Math.max(-70, Math.min(70, -d * 2400));
-      energy = Math.min(1, energy + Math.abs(d) * 6);
+      sloshV += Math.max(-45, Math.min(45, -d * 1600));
+      energy = Math.min(1, energy + Math.abs(d) * 4);
     }
   }
 
@@ -262,33 +267,32 @@
     if (px !== null) {
       const dx = x - px, dy = y - py;
       const speed = Math.hypot(dx, dy);
-      tiltTarget = Math.max(-30, Math.min(30, tiltTarget + dx * 0.5));
+      tiltTarget = Math.max(-22, Math.min(22, tiltTarget + dx * 0.3));
       const sy = surfaceY(x);
       const near = y > sy - 190;                    // in or just above the beer
-      const amp = Math.min(8, speed * 0.42) * (near ? 1 : 0.22);
+      const amp = Math.min(4.5, speed * 0.2) * (near ? 1 : 0.18);
       if (amp > 0.05) {
         // a wake: liquid piles up ahead of the drag and dips behind it
         splash(x + dx * 2.4, amp * (dy > 0 ? 1 : 0.6), 3.2);
         if (Math.abs(dx) > 2) splash(x - dx * 2.4, -amp * 0.45, 2.6);
       }
       // fast horizontal drags rock the whole glass
-      sloshV += dx * (near ? 0.5 : 0.1);
-      if (sloshV > 60) sloshV = 60; else if (sloshV < -60) sloshV = -60;
-      energy = Math.min(1, energy + speed * 0.0035);
+      sloshV += dx * (near ? 0.22 : 0.06);
+      if (sloshV > 40) sloshV = 40; else if (sloshV < -40) sloshV = -40;
+      energy = Math.min(1, energy + speed * 0.002);
     }
     px = x; py = y;
   }
 
   function onDown(e) {
     if (e.clientX == null) return;
-    splash(e.clientX, 13, 5.5);
-    sloshV += (e.clientX < W / 2 ? 1 : -1) * 9;
-    energy = Math.min(1, energy + 0.4);
+    splash(e.clientX, 8, 5);
+    sloshV += (e.clientX < W / 2 ? 1 : -1) * 5;
+    energy = Math.min(1, energy + 0.25);
   }
 
   /* ---------- paint ---------- */
   // one smoothed pass along the surface, left → right
-  const SEGS = 64;
   function traceSurface() {
     const dx = W / SEGS;
     let xp = 0, yp = surfaceY(0);
@@ -391,7 +395,7 @@
         ctx.strokeStyle = "rgba(255,246,214,.45)";
         ctx.stroke();
         // a glint on the shoulder of the bigger bubbles
-        if (b.r > 1.6) {
+        if (!mobile && b.r > 1.6) {
           ctx.beginPath();
           ctx.arc(bx - b.r * 0.35, by - b.r * 0.35, b.r * 0.3, 0, Math.PI * 2);
           ctx.fillStyle = "rgba(255,250,235,.5)";
@@ -458,6 +462,7 @@
       ctx.stroke();
 
       // specular glints where the surface tilts toward the light
+      if (!mobile) {
       ctx.lineWidth = 1.1;
       for (let i = 1; i <= SEGS; i++) {
         const x0 = (i - 1) * dx, x1 = i * dx;
@@ -472,19 +477,20 @@
           ctx.stroke();
         }
       }
+      }
       ctx.globalAlpha = 1;
 
-      // bright meniscus
-      ctx.save();
+      // bright meniscus — glow faked with a wide soft under-stroke
+      // (shadowBlur was the most expensive call in the whole frame)
       ctx.beginPath();
       ctx.moveTo(0, surfaceY(0));
       traceSurface();
+      ctx.strokeStyle = "rgba(255,206,130,.16)";
+      ctx.lineWidth = 7;
+      ctx.stroke();
       ctx.strokeStyle = "rgba(255,240,206,.5)";
       ctx.lineWidth = 1.6;
-      ctx.shadowColor = "rgba(255,206,130,.55)";
-      ctx.shadowBlur = 14;
       ctx.stroke();
-      ctx.restore();
     }
   }
 
@@ -521,7 +527,7 @@
     // carbonation streams breathe new bubbles in from their nucleation points
     for (const s of streams) {
       s.next -= dt;
-      if (s.next <= 0 && bubbles.length < 90) {
+      if (s.next <= 0 && bubbles.length < (mobile ? 60 : 90)) {
         bubbles.push(newBubble(false, s.x));
         s.next = s.rate * (0.5 + Math.random());
       }
