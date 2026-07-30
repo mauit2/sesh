@@ -201,7 +201,14 @@ final class SunService: ObservableObject {
             rebuildReadings()
         }
         lastFetchCentre = centre
-        await warmMissing(near: centre, radiusMeters: radiusMeters)
+        // NOT awaited. warmMissing invokes the sun-horizon function for venues
+        // that have no profile yet, and each call fetches nine Mapbox tiles and
+        // ray-casts twelve facades — 1-3 seconds apiece. Awaiting six of those
+        // held `loading` true and made switching into Sun mode take 5-10
+        // seconds. They fill themselves in and appear on the next pass.
+        Task { [weak self] in
+            await self?.warmMissing(near: centre, radiusMeters: radiusMeters)
+        }
     }
 
     /// Ask for up to a handful of uncomputed venues and kick off their
@@ -221,12 +228,19 @@ final class SunService: ObservableObject {
                            p_radius_m: radiusMeters, p_limit: 6))
             .execute().value, !rows.isEmpty else { return }
 
-        for row in rows {
-            struct Body: Encodable { let venue_id: String }
-            _ = try? await supabase.functions.invoke(
-                "sun-horizon",
-                options: FunctionInvokeOptions(body: Body(venue_id: row.venue_id.uuidString))
-            ) as Data?
+        // In parallel, not one after another: these are independent and each
+        // takes a second or more.
+        await withTaskGroup(of: Void.self) { group in
+            for row in rows {
+                group.addTask {
+                    struct Body: Encodable { let venue_id: String }
+                    _ = try? await supabase.functions.invoke(
+                        "sun-horizon",
+                        options: FunctionInvokeOptions(
+                            body: Body(venue_id: row.venue_id.uuidString))
+                    ) as Data?
+                }
+            }
         }
         // Pick up whatever landed.
         if let refreshed: [SunVenue] = try? await supabase

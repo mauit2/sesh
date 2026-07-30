@@ -952,10 +952,49 @@ final class VenueService: ObservableObject {
 /// cheap ink placeholder) and unmounts a beat after leaving, keeping the
 /// transition itself at full frame rate. The memory gating survives: the
 /// map is still torn down whenever the user is off the tab.
+/// Shared "take me back to where I am" affordance.
+///
+/// Every interactive map in the app uses this one button and this one zoom, so
+/// tapping locate feels identical whether you are on Deals, Beer, Sun or the
+/// Nightline map — landing at the same scale each time rather than wherever the
+/// map happened to be.
+enum MapLocate {
+    /// MapKit span. ~1.2 km shows a few blocks: near enough to read bar names,
+    /// wide enough that your own dot isn't the only thing on screen.
+    static let spanMeters: CLLocationDistance = 1200
+    /// The Mapbox equivalent of the same scale, for the Sun map.
+    static let mapboxZoom: Double = 15.4
+    static let animation: Animation = .easeInOut(duration: 0.5)
+}
+
+/// The locate button itself. Dimmed and non-tappable until Core Location has
+/// actually produced a fix, so it can't silently do nothing.
+struct LocateMeButton: View {
+    let enabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "location.fill")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(enabled ? Color.cream : Color.cream.opacity(0.3))
+                .frame(width: 38, height: 38)
+                .background(Circle().fill(Color.ink.opacity(0.85)))
+                .overlay(Circle().strokeBorder(Color.cream.opacity(0.18), lineWidth: 1))
+                .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(!enabled)
+        .accessibilityLabel("Centre on my location")
+    }
+}
+
 struct DeferredOffersPage: View {
     let active: Bool
     @ObservedObject var venues: VenueService
     @ObservedObject var location: LocationService
+    /// Forwarded to the map so it can stop the tab pager stealing a pinch.
+    @Binding var pagingLocked: Bool
     let onBack: () -> Void
 
     @State private var mounted = false
@@ -967,7 +1006,8 @@ struct DeferredOffersPage: View {
         ZStack {
             Color.ink.ignoresSafeArea()
             if mounted {
-                OffersMapView(venues: venues, location: location)
+                OffersMapView(venues: venues, location: location,
+                              pagingLocked: $pagingLocked)
                     // The interactive map swallows the TabView's horizontal
                     // page swipe, so a thin left-edge strip provides the
                     // "grab the edge to go back" gesture → back to Nightline.
@@ -1036,6 +1076,17 @@ private struct OffersMapView: View {
     @StateObject private var sun = SunService()
     @State private var selectedSunId: UUID?
     @State private var sunListOpen = false
+    /// Raised while a finger is on the Sun map, so the tab pager stops
+    /// competing for the horizontal part of a pinch.
+    @Binding var pagingLocked: Bool
+    /// Bumped on every locate tap. The Sun map watches this rather than the
+    /// coordinate, so tapping twice from the same spot still re-centres.
+    @State private var locateTick = 0
+    /// What the map is actually showing. Pins are filtered to this rather than
+    /// to a radius around YOU: the maps are deliberately global (zoom out to
+    /// browse another city), but handing MapKit venues on another continent
+    /// made it clamp them into the corner of the screen.
+    @State private var visibleRegion: MKCoordinateRegion?
     /// Where search asked the camera to go.
     @State private var sunFocus: CLLocationCoordinate2D?
     /// The serving size the price map is filtered to.
@@ -1076,16 +1127,46 @@ private struct OffersMapView: View {
     private let radiusMeters = VenueService.dealsRadiusMeters
 
     private var pins: [Venue] {
-        // Every venue with a live campaign, shown EVERYWHERE (like the beer
-        // map) — zoom out to see deals in other cities. Targeting for who gets
-        // pushed/promoted still uses the tight radius; this is just discovery.
-        venues.venuesWithOffers
+        // Still global — zoom out and another city's deals appear — but only
+        // the ones actually in view are handed to MapKit. Passing it venues
+        // thousands of km off-screen made it pile them into the corner.
+        venues.venuesWithOffers.filter(onScreen)
     }
 
     /// Bars with a price for the selected serving — shown EVERYWHERE, not just
     /// near you. Zoom out to see prices across the whole world.
+    /// Priced bars to draw, NEAREST FIRST AND CAPPED.
+    ///
+    /// Every priced venue used to be handed to the map at once. At 40-odd bars
+    /// that was fine; after the OSM import it is 217 live MapKit annotations
+    /// built in one pass, which is what made switching into Beer mode hang for
+    /// several seconds. The Sun map already caps at 80 for the same reason.
+    /// A cheap bounding-box pre-filter keeps this from doing trig 1115 times.
     private var pricePins: [Venue] {
-        venues.venuesWithBeerPrice(serving: selectedServing)
+        let all = venues.venuesWithBeerPrice(serving: selectedServing).filter(onScreen)
+        guard let here = location.location, all.count > Self.maxPricePins else { return all }
+        let lat = here.coordinate.latitude, lon = here.coordinate.longitude
+        let box = 0.75   // degrees; generous, just to avoid sorting the world
+        let near = all.filter { abs($0.lat - lat) < box && abs($0.lon - lon) < box }
+        let pool = near.count >= Self.maxPricePins ? near : all
+        return pool
+            .map { ($0, ($0.lat - lat) * ($0.lat - lat) + ($0.lon - lon) * ($0.lon - lon)) }
+            .sorted { $0.1 < $1.1 }
+            .prefix(Self.maxPricePins)
+            .map(\.0)
+    }
+
+    /// Enough to fill a city, few enough that the map builds them quickly.
+    private static let maxPricePins = 120
+
+    /// Is this venue inside (a padded version of) what's on screen?
+    /// Padding means panning reveals pins that are already there rather than
+    /// popping them in at the edge.
+    private func onScreen(_ v: Venue) -> Bool {
+        guard let r = visibleRegion else { return true }
+        let padLat = r.span.latitudeDelta, padLon = r.span.longitudeDelta
+        return abs(v.lat - r.center.latitude) <= padLat
+            && abs(v.lon - r.center.longitude) <= padLon
     }
 
     private func withinRadius(_ list: [Venue]) -> [Venue] {
@@ -1136,9 +1217,24 @@ private struct OffersMapView: View {
                 }
             }
             .mapStyle(.standard(elevation: .flat, pointsOfInterest: .including([.nightlife, .restaurant, .brewery, .winery])))
+            .onMapCameraChange(frequency: .onEnd) { ctx in
+                visibleRegion = ctx.region
+            }
             }
 
             header
+
+            // Floating locate button, same place and same resulting zoom on
+            // every mode. Sits above the mode's own bottom controls.
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    LocateMeButton(enabled: location.location != nil) { locateMe() }
+                        .padding(.trailing, 16)
+                        .padding(.bottom, mapMode == .sun ? 132 : 24)
+                }
+            }
 
             if mapMode == .sun {
                 VStack(spacing: 8) {
@@ -1434,7 +1530,9 @@ private struct OffersMapView: View {
             selectedId: $selectedSunId,
             // The lighting reference: whatever you're looking at.
             centre: sunReference.coord,
-            focus: sunFocus
+            focus: sunFocus,
+            pagingLocked: $pagingLocked,
+            locateTick: locateTick
         )
     }
 
@@ -1508,6 +1606,24 @@ private struct OffersMapView: View {
                 .overlay(Circle().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
         }
         .buttonStyle(PressScaleStyle())
+    }
+
+    /// Centre on the user, at the same scale on every map.
+    private func locateMe() {
+        guard let loc = location.location else { return }
+        if mapMode == .sun {
+            // The Sun map is Mapbox and owns its own viewport, so it recentres
+            // itself when the tick changes.
+            sunFocus = loc.coordinate
+            locateTick += 1
+        } else {
+            withAnimation(MapLocate.animation) {
+                camera = .region(MKCoordinateRegion(
+                    center: loc.coordinate,
+                    latitudinalMeters: MapLocate.spanMeters,
+                    longitudinalMeters: MapLocate.spanMeters))
+            }
+        }
     }
 
     private func recenter() {
@@ -2643,12 +2759,24 @@ struct VenueSheet: View {
                 }
             }
             .mapStyle(.standard(elevation: .flat, pointsOfInterest: .including([.nightlife, .restaurant, .brewery, .winery])))
-            .mapControls {
-                MapUserLocationButton()
-                MapCompass()
-            }
+            .mapControls { MapCompass() }
             .frame(height: 240)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            // Our own locate button rather than MapUserLocationButton, so this
+            // map lands at the same scale as every other one. Apple's control
+            // gives no control over the resulting zoom.
+            .overlay(alignment: .bottomTrailing) {
+                LocateMeButton(enabled: location.location != nil) {
+                    guard let loc = location.location else { return }
+                    withAnimation(MapLocate.animation) {
+                        camera = .region(MKCoordinateRegion(
+                            center: loc.coordinate,
+                            latitudinalMeters: MapLocate.spanMeters,
+                            longitudinalMeters: MapLocate.spanMeters))
+                    }
+                }
+                .padding(10)
+            }
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)

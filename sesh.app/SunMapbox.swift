@@ -23,17 +23,27 @@ struct SunMapboxView: View {
     let centre: CLLocationCoordinate2D
     /// Set by search to fly the camera onto one venue.
     var focus: CLLocationCoordinate2D?
+    /// Raised while the user is touching the map, so the tab pager doesn't
+    /// steal the horizontal part of a pinch.
+    @Binding var pagingLocked: Bool
+    /// Bumped by the locate button. Watched instead of the coordinate so
+    /// tapping locate twice from the same spot still recentres.
+    var locateTick: Int = 0
 
     @State private var viewport: Viewport
 
     init(readings: [SunReading], previewAt: Date,
          selectedId: Binding<UUID?>, centre: CLLocationCoordinate2D,
-         focus: CLLocationCoordinate2D? = nil) {
+         focus: CLLocationCoordinate2D? = nil,
+         pagingLocked: Binding<Bool> = .constant(false),
+         locateTick: Int = 0) {
         self.readings = readings
         self.previewAt = previewAt
         self._selectedId = selectedId
         self.centre = centre
         self.focus = focus
+        self._pagingLocked = pagingLocked
+        self.locateTick = locateTick
         // Pitched in so the extrusions read as buildings, not footprints.
         _viewport = State(initialValue: .camera(center: centre, zoom: 15.2,
                                                 bearing: 0, pitch: 55))
@@ -53,15 +63,40 @@ struct SunMapboxView: View {
             map
                 .mapStyle(baseStyle)
                 .ornamentOptions(ornaments)
-                // Pinching to zoom was leaking horizontal movement out to the
-                // tab pager, so a two-finger zoom would slide the whole screen
-                // over to Chats. Claiming the gesture keeps the pan/zoom inside
-                // the map; the tab bar is still the way to change tabs.
-                .gesture(DragGesture(minimumDistance: 0), including: .subviews)
+                // Tell the paged TabView to stand down while a finger is on
+                // the map. Mapbox handles pan/pinch with its own UIKit
+                // recognisers, and the pager's scroll view was also claiming
+                // the horizontal component of a pinch — which slid the whole
+                // screen across to Chats mid-zoom.
+                //
+                // simultaneousGesture, so this OBSERVES without consuming and
+                // Mapbox still gets every gesture. An earlier attempt used
+                // .gesture(_:including: .subviews), which is a GestureMask that
+                // disables the attached gesture entirely and did nothing.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in if !pagingLocked { pagingLocked = true } }
+                        .onEnded { _ in pagingLocked = false }
+                )
+                .simultaneousGesture(
+                    MagnifyGesture(minimumScaleDelta: 0)
+                        .onChanged { _ in if !pagingLocked { pagingLocked = true } }
+                        .onEnded { _ in pagingLocked = false }
+                )
+                .onDisappear { pagingLocked = false }
                 .ignoresSafeArea(edges: [.top, .horizontal])
                 .onAppear { relight(proxy) }
                 .onChange(of: preset) { _, _ in relight(proxy) }
                 .onChange(of: focusKey) { _, _ in flyToFocus() }
+                // Locate: same scale the MapKit maps land on, so switching
+                // modes doesn't change how far out you end up.
+                .onChange(of: locateTick) { _, _ in
+                    guard let f = focus else { return }
+                    withViewportAnimation(.easeOut(duration: 0.5)) {
+                        viewport = .camera(center: f, zoom: MapLocate.mapboxZoom,
+                                           bearing: 0, pitch: 55)
+                    }
+                }
         }
     }
 

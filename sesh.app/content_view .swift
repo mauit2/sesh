@@ -3163,6 +3163,20 @@ struct FriendsMapView: View {
         .region(MKCoordinateRegion(center: c, span: citySpan))
     }
 
+    /// Centre on the user.
+    ///
+    /// Uses MapKit's own user-location camera rather than LocationService: this
+    /// view sits three layers below the one that owns that service, and
+    /// threading it down for a single button isn't worth the coupling. The
+    /// trade-off is that MapKit picks the zoom here instead of MapLocate's
+    /// preset — close, but not identical to the other maps.
+    private func locateMe() {
+        withAnimation(MapLocate.animation) {
+            focused = nil
+            camera = .userLocation(fallback: .automatic)
+        }
+    }
+
     /// Fly the camera to a friend and mark their chip as focused.
     private func fly(to p: FriendPulse) {
         guard let c = p.venueCoordinate else { return }
@@ -3230,6 +3244,18 @@ struct FriendsMapView: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 42)
             .allowsHitTesting(false)
+
+            // Outside the overlay above, which is hit-test disabled so the map
+            // stays draggable through the chips.
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    LocateMeButton(enabled: true) { locateMe() }
+                        .padding(.trailing, 16)
+                        .padding(.bottom, 108)
+                }
+            }
 
             header
         }
@@ -5138,6 +5164,10 @@ private struct SessionView: View {
     /// at the top and the swipe gesture on the underlying TabView.
     /// Defaults to LIVE so the app opens straight into the live experience.
     @State private var tab: TopTab = .live
+    /// Raised while a finger is on a map. The paged TabView's scroll view was
+    /// claiming the horizontal component of a pinch-to-zoom and sliding the
+    /// whole screen to the next tab mid-gesture.
+    @State private var mapPagingLocked = false
 
     private let eliminationRate = 0.015
 
@@ -5891,6 +5921,10 @@ private struct SessionView: View {
                     offersPage.tag(TopTab.offers)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
+                // A paged TabView is a scroll view underneath, so it competes
+                // with a map's own pan/pinch recognisers. Stand down while the
+                // map says a gesture is in flight.
+                .scrollDisabled(mapPagingLocked)
                 // Smooth horizontal swipe between modes; matches the
                 // bottom bar's spring so tapping a tab and dragging the
                 // page feel like the same animation.
@@ -6539,7 +6573,8 @@ private struct SessionView: View {
     /// animation settles (see DeferredOffersPage) — mounting it mid-swipe
     /// was hitching the transition, and the memory gating still applies.
     private var offersPage: some View {
-        DeferredOffersPage(active: tab == .offers, venues: venues, location: location) {
+        DeferredOffersPage(active: tab == .offers, venues: venues, location: location,
+                           pagingLocked: $mapPagingLocked) {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
                 tab = .timeline
             }
