@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import MapboxMaps
 
 @main
 struct sesh_appApp: App {
@@ -19,6 +20,11 @@ struct sesh_appApp: App {
         // Enlarge the HTTP cache + trim the on-disk image cache so photos stop
         // being re-downloaded on every launch (the main egress driver).
         ImageInfra.configure()
+        // Mapbox renders the Deals tab's Sun mode (3D buildings + relightable
+        // scene). A public token by design — it ships inside every copy of the
+        // app, which is why the Tilequery/vector-tile calls that build the sun
+        // horizons happen server-side with the same token held as a secret.
+        MapboxOptions.accessToken = Secrets.mapboxPublicToken
     }
 
     var body: some Scene {

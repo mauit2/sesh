@@ -958,7 +958,7 @@ struct DeferredOffersPage: View {
 }
 
 /// The two Deals-map layers: paid campaigns, or crowdsourced beer prices.
-private enum DealsMapMode { case deals, prices }
+private enum DealsMapMode { case deals, prices, sun }
 
 private struct OffersMapView: View {
     @ObservedObject var venues: VenueService
@@ -974,6 +974,11 @@ private struct OffersMapView: View {
     @State private var listOpen = false
     /// Which map layer is showing.
     @State private var mapMode: DealsMapMode = .deals
+    @StateObject private var sun = SunService()
+    @State private var selectedSunId: UUID?
+    @State private var sunListOpen = false
+    /// Where search asked the camera to go.
+    @State private var sunFocus: CLLocationCoordinate2D?
     /// The serving size the price map is filtered to.
     @State private var selectedServing: BeerServing = .canonical
     /// Beer-price submit sheet + its optional pre-filled bar.
@@ -1036,6 +1041,9 @@ private struct OffersMapView: View {
         ZStack(alignment: .top) {
             Color.ink.ignoresSafeArea()
 
+            if mapMode == .sun {
+                sunLayer
+            } else {
             Map(position: $camera) {
                 UserAnnotation()
                 if mapMode == .deals {
@@ -1069,8 +1077,39 @@ private struct OffersMapView: View {
                 }
             }
             .mapStyle(.standard(elevation: .flat, pointsOfInterest: .including([.nightlife, .restaurant, .brewery, .winery])))
+            }
 
             header
+
+            if mapMode == .sun {
+                VStack(spacing: 8) {
+                    Spacer()
+                    HStack(spacing: 8) {
+                        Button { sunListOpen = true } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "list.bullet")
+                                    .font(.system(size: 11, weight: .bold))
+                                Text("SUNNIEST FIRST")
+                                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                                    .tracking(1.2)
+                            }
+                            .foregroundStyle(Color.ink)
+                            .padding(.horizontal, 14).padding(.vertical, 9)
+                            .background(Capsule().fill(Color(red: 1.0, green: 0.79, blue: 0.28)))
+                        }
+                        .buttonStyle(PressScaleStyle())
+
+                    }
+                    SunTimeSlider(previewAt: $sun.previewAt,
+                                  calendar: sunCalendar,
+                                  zoneName: sunReference.name)
+                    Text("Modelled from building heights · © Mapbox © OpenStreetMap")
+                        .font(.system(size: 8, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.35))
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 30)
+            }
 
             // Billboard carousel — deals mode only, hidden while a card is up.
             if mapMode == .deals, selectedVenue == nil {
@@ -1149,6 +1188,41 @@ private struct OffersMapView: View {
         // The app-open interstitial (or any deep link) can request a bar; fly
         // to it once the Deals tab is showing.
         .onChange(of: venues.pendingFocusVenueId) { _, _ in consumePendingFocus() }
+        // Horizons load lazily — the Sun mode is opt-in, so nobody pays for it
+        // unless they ask, and once loaded a whole day scrubs offline.
+        .onChange(of: mapMode) { _, mode in
+            guard mode == .sun, sun.venues.isEmpty else { return }
+            Task {
+                await sun.load(near: location.location?.coordinate
+                    ?? CLLocationCoordinate2D(latitude: 57.7016, longitude: 11.9668))
+            }
+        }
+        .sheet(isPresented: $sunListOpen) {
+            SunListSheet(
+                readings: sunNearbyReadings,
+                placeName: sunReference.name,
+                sun: sun,
+                centre: sunReference.coord,
+                onPick: { venue in
+                    sun.pinned = venue
+                    selectedSunId = venue.id
+                    sunFocus = venue.coordinate
+                },
+                onPickWorldwide: { result in
+                    Task {
+                        guard let venue = await venues.resolveOrCreateMapKitVenue(result)
+                        else { return }
+                        if let sv = await sun.prepareAndPin(venueId: venue.id,
+                                                           zone: result.mapItem?.timeZone) {
+                            selectedSunId = sv.id
+                            sunFocus = sv.coordinate
+                        }
+                    }
+                })
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
         .sheet(isPresented: $listOpen) {
             DealsListSheet(venues: venues, location: location) { venue in
                 listOpen = false
@@ -1166,19 +1240,28 @@ private struct OffersMapView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(mapMode == .deals ? "DEALS NEARBY" : "BEER PRICES")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    Text(mapMode == .deals ? "DEALS NEARBY" : mapMode == .prices ? "BEER PRICES" : "WHERE'S THE SUN")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .tracking(2.4)
-                        .foregroundStyle(Color.bronze)
+                        // Bronze on a daylit map was nearly invisible; the sun
+                        // mode's own gold reads at any brightness.
+                        .foregroundStyle(mapMode == .sun
+                            ? Color(red: 1.0, green: 0.82, blue: 0.36) : Color.bronze)
                     Text(headerValue)
                         .font(.system(size: 22, weight: .heavy, design: .rounded))
                         .foregroundStyle(Color.cream)
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(Capsule().fill(Color.ink.opacity(0.6)))
+                .background(Capsule().fill(Color.ink.opacity(0.88)))
+                .overlay(Capsule().strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
                 Spacer()
                 if mapMode == .deals {
                     circleButton("list.bullet") { listOpen = true }
+                } else if mapMode == .sun {
+                    // Same corner, but it searches SUN here. Previously this was
+                    // wired to beer prices, so the obvious place to look up a
+                    // bar's sunlight silently searched for its beer price.
+                    circleButton("magnifyingglass") { sunListOpen = true }
                 } else {
                     circleButton("magnifyingglass") { priceListOpen = true }
                     circleButton("plus") { submitPreset = nil; submitOpen = true }
@@ -1215,20 +1298,96 @@ private struct OffersMapView: View {
     }
 
     private var headerValue: String {
+        if mapMode == .sun {
+            // "all in shade" with nothing loaded is a lie — that's the case when
+            // you're far from any venue we hold data for (a simulator in San
+            // Francisco, say), and it read as "every bar around here is shaded".
+            if sunNearbyReadings.isEmpty { return "nothing nearby yet" }
+            let lit = sunNearbyReadings.filter(\.isSunlit).count
+            return lit == 0 ? "all in shade" : "\(lit) in the sun"
+        }
         if mapMode == .deals { return "\(pins.count) \(pins.count == 1 ? "spot" : "spots")" }
         // Global map now, mixed currencies — a single "cheapest" is meaningless,
         // so just count the priced bars.
         return pricePins.isEmpty ? "tap ＋ to add" : "\(pricePins.count) \(pricePins.count == 1 ? "bar" : "bars")"
     }
 
+    // Cached in the service. Calling a recomputing function here meant
+    // 150 venues x 288 sun samples, several times per render.
+    private var sunReadings: [SunReading] { sun.readings }
+
+    /// "Sunniest first" means nearby, not everything we happen to have loaded.
+    /// Without this the list mixed San Francisco bars with a pinned Gothenburg
+    /// one — a nearby list spanning two continents.
+    private var sunNearbyReadings: [SunReading] {
+        let c = sunReference.coord
+        let here = CLLocation(latitude: c.latitude, longitude: c.longitude)
+        return sunReadings.filter { r in
+            here.distance(from: CLLocation(latitude: r.venue.lat,
+                                           longitude: r.venue.lon)) <= 30_000
+        }
+    }
+
+    /// The place the Sun screen is ABOUT — the venue you searched for, else
+    /// wherever you are. Everything on this screen keys off it: the scene's
+    /// lighting, the slider's clock, and the zone label.
+    ///
+    /// Getting this wrong is very confusing: with the simulator in San
+    /// Francisco and the phone on Swedish time, looking up a Gothenburg bar lit
+    /// the map from San Francisco's sun while the slider read Swedish hours, so
+    /// the map was bright at 03:00 and dark from 06:00 to 15:00.
+    private var sunReference: (coord: CLLocationCoordinate2D, zone: TimeZone, name: String?) {
+        // Priority: the pin you tapped, the venue you searched for, then whatever
+        // the map is actually showing. Falling straight through to GPS was the
+        // bug — the venues on screen can be a continent away from the phone.
+        let anchor = sunReadings.first(where: { $0.id == selectedSunId })?.venue
+            ?? sun.pinned
+            ?? sunReadings.first?.venue
+        if let anchor {
+            return (anchor.coordinate, anchor.timeZone, Self.zoneCity(anchor.timeZone))
+        }
+        let here = location.location?.coordinate
+            ?? CLLocationCoordinate2D(latitude: 57.7016, longitude: 11.9668)
+        return (here, .current, nil)
+    }
+
+    private var sunCalendar: Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = sunReference.zone
+        return c
+    }
+
+    /// "Europe/Stockholm" -> "Stockholm"
+    private static func zoneCity(_ tz: TimeZone) -> String? {
+        guard tz.identifier != TimeZone.current.identifier else { return nil }
+        return tz.identifier.split(separator: "/").last
+            .map { $0.replacingOccurrences(of: "_", with: " ") }
+    }
+
+    /// The Sun mode swaps the whole map surface for Mapbox — it is the only
+    /// renderer that draws 3D buildings AND lets us relight them, which is
+    /// what makes the hour slider legible. Everything else stays on MapKit.
+    @ViewBuilder
+    private var sunLayer: some View {
+        SunMapboxView(
+            readings: sunReadings,
+            previewAt: sun.previewAt,
+            selectedId: $selectedSunId,
+            // The lighting reference: whatever you're looking at.
+            centre: sunReference.coord,
+            focus: sunFocus
+        )
+    }
+
     private var modeToggle: some View {
         HStack(spacing: 0) {
             segButton("Deals", .deals)
-            segButton("Beer prices", .prices)
+            segButton("Beer", .prices)
+            segButton("Sun", .sun)
         }
         .padding(3)
         .background(Capsule().fill(Color.ink.opacity(0.65)))
-        .frame(maxWidth: 240)
+        .frame(maxWidth: 290)
     }
 
     private func segButton(_ title: String, _ mode: DealsMapMode) -> some View {
@@ -2376,7 +2535,12 @@ struct VenueSheet: View {
             }
             try? await Task.sleep(nanoseconds: 300_000_000)
             if Task.isCancelled { return }
-            search.search(query: snapshot, origin: location.location)
+            // biasToOrigin: false — reach any bar anywhere, the same as the sun
+            // search. `origin` is still passed so results carry a distance, but
+            // it no longer restricts the region: reporting a beer price for a bar
+            // in Tokyo shouldn't require standing in Tokyo.
+            search.search(query: snapshot, origin: location.location,
+                          biasToOrigin: false)
         }
     }
 

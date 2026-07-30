@@ -23,6 +23,21 @@ import UserNotifications
 enum Secrets {
     static let supabaseURL = URL(string: "https://lltuozmbxacxiepardys.supabase.co")!
     static let supabaseAnonKey = "sb_publishable_CXlmRXTLRfX0pYysE7vbKw_vC88ny42"
+    /// Mapbox PUBLIC token — renders the Sun mode's map. The secret-scoped
+    /// download token is a different thing entirely and lives only in a
+    /// developer's ~/.netrc, never here.
+    ///
+    /// Read at runtime from MapboxToken.txt, which is gitignored. The token is
+    /// public by design — it ships inside the built app — but committing it lets
+    /// it be scraped off GitHub and spent against our tile quota, and GitHub's
+    /// push protection blocks it outright. Missing file just means Sun mode's
+    /// map won't render; drop your own pk. token in there.
+    static let mapboxPublicToken: String = {
+        guard let url = Bundle.main.url(forResource: "MapboxToken", withExtension: "txt"),
+              let raw = try? String(contentsOf: url, encoding: .utf8)
+        else { return "" }
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    }()
 }
 
 let supabase = SupabaseClient(

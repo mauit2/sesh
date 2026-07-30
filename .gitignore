@@ -57,3 +57,8 @@ Secrets.local.*
 *.p8
 *.p12
 *.mobileprovision
+
+# Mapbox public token. It ships inside the built app, but keeping it out of the
+# repo stops it being scraped from GitHub and used against our tile quota.
+# Each developer drops their own pk. token here; see Secrets.mapboxPublicToken.
+sesh.app/MapboxToken.txt
