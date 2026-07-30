@@ -53,6 +53,11 @@ struct SunMapboxView: View {
             map
                 .mapStyle(baseStyle)
                 .ornamentOptions(ornaments)
+                // Pinching to zoom was leaking horizontal movement out to the
+                // tab pager, so a two-finger zoom would slide the whole screen
+                // over to Chats. Claiming the gesture keeps the pan/zoom inside
+                // the map; the tab bar is still the way to change tabs.
+                .gesture(DragGesture(minimumDistance: 0), including: .subviews)
                 .ignoresSafeArea(edges: [.top, .horizontal])
                 .onAppear { relight(proxy) }
                 .onChange(of: preset) { _, _ in relight(proxy) }

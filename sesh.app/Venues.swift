@@ -382,6 +382,7 @@ final class VenueService: ObservableObject {
             var map: [UUID: [VenueBeerPrice]] = [:]
             for r in rows { map[r.venueId, default: []].append(r) }
             beerPricesByVenue = map
+            rebuildPriceIndex()
         } catch {
             // keep whatever we had; a transient failure shouldn't blank the map
         }
@@ -416,17 +417,52 @@ final class VenueService: ObservableObject {
 
     /// Prices of the same serving + currency at bars within `beerRegionMeters`
     /// of a coordinate — the local comparison set.
+    /// Flattened (lat, lon, serving, currency, price) for every PRICED venue.
+    /// Rebuilt when prices or venues change.
+    private struct PricePoint { let lat: Double; let lon: Double
+                                let serving: String; let currency: String; let price: Double }
+    private var priceIndex: [PricePoint] = []
+    private var regionPriceMemo: [String: [Double]] = [:]
+
+    func rebuildPriceIndex() {
+        var idx: [PricePoint] = []
+        for v in venues {
+            guard let arr = beerPricesByVenue[v.id], !arr.isEmpty else { continue }
+            let c = coordinate(for: v)
+            for p in arr {
+                idx.append(PricePoint(lat: c.latitude, lon: c.longitude,
+                                      serving: p.serving, currency: p.currency, price: p.price))
+            }
+        }
+        priceIndex = idx
+        regionPriceMemo = [:]
+    }
+
+    /// Same-serving, same-currency prices within `beerRegionMeters`.
+    ///
+    /// This used to walk ALL venues and allocate a CLLocation per venue, once
+    /// per price pin being coloured — around 420k distance computations per
+    /// render at 1100 venues, which is what made switching map modes crawl.
+    /// Now it walks only priced venues (a couple of hundred), uses plain
+    /// arithmetic, and memoises per ~11 km cell so a city collapses to one scan.
     private func localBeerPrices(serving: String, currency: String,
                                  near coord: CLLocationCoordinate2D) -> [Double] {
-        let origin = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+        let key = "\(serving)|\(currency)|\((coord.latitude * 10).rounded())|\((coord.longitude * 10).rounded())"
+        if let hit = regionPriceMemo[key] { return hit }
+
+        let limit = Self.beerRegionMeters
+        // Cheap bounding box first; only the survivors get real distance maths.
+        let dLat = limit / 111_320.0
+        let dLon = limit / (111_320.0 * max(0.2, cos(coord.latitude * .pi / 180)))
         var out: [Double] = []
-        for v in venues {
-            guard let arr = beerPricesByVenue[v.id] else { continue }
-            let c = coordinate(for: v)
-            guard CLLocation(latitude: c.latitude, longitude: c.longitude)
-                    .distance(from: origin) <= Self.beerRegionMeters else { continue }
-            for p in arr where p.serving == serving && p.currency == currency { out.append(p.price) }
+        for p in priceIndex where p.serving == serving && p.currency == currency {
+            if abs(p.lat - coord.latitude) > dLat || abs(p.lon - coord.longitude) > dLon { continue }
+            let la1 = coord.latitude * .pi / 180, la2 = p.lat * .pi / 180
+            let dp = la2 - la1, dl = (p.lon - coord.longitude) * .pi / 180
+            let h = sin(dp / 2) * sin(dp / 2) + cos(la1) * cos(la2) * sin(dl / 2) * sin(dl / 2)
+            if 2 * 6_371_000 * asin(min(1, sqrt(h))) <= limit { out.append(p.price) }
         }
+        regionPriceMemo[key] = out
         return out
     }
 
@@ -646,12 +682,27 @@ final class VenueService: ObservableObject {
     func refresh() async {
         loading = true; defer { loading = false }
         do {
-            let vs: [Venue] = try await supabase
-                .from("venues")
-                .select()
-                .order("name", ascending: true)
-                .execute()
-                .value
+            // PostgREST caps ANY response at 1000 rows. Once the venue table
+            // passed that, a bare select() silently returned the first 1000 by
+            // name and dropped the rest — so bars late in the alphabet vanished
+            // from the app while the website (which reads through an RPC
+            // returning far fewer rows) still showed them. Page until short.
+            var vs: [Venue] = []
+            let pageSize = 1000
+            var offset = 0
+            while true {
+                let page: [Venue] = try await supabase
+                    .from("venues")
+                    .select()
+                    .order("name", ascending: true)
+                    .range(from: offset, to: offset + pageSize - 1)
+                    .execute()
+                    .value
+                vs.append(contentsOf: page)
+                if page.count < pageSize { break }
+                offset += pageSize
+                if offset > 50_000 { break }   // sanity stop
+            }
             let ss: [VenueSpecial] = try await supabase
                 .from("venue_specials")
                 .select()
@@ -665,6 +716,7 @@ final class VenueService: ObservableObject {
                 .execute()
                 .value
             venues = vs
+            rebuildPriceIndex()
             var grouped: [UUID: [VenueSpecial]] = [:]
             for s in ss {
                 grouped[s.venueId, default: []].append(s)
