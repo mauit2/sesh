@@ -572,6 +572,8 @@ enum VenueSource: String, Codable, Equatable, Hashable {
     case curated
     case mapkit
     case user
+    /// Bulk-imported from OpenStreetMap (migration 075).
+    case osm
 }
 
 struct Venue: Codable, Identifiable, Equatable, Hashable {
@@ -584,6 +586,10 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
     var isFeatured: Bool = false
     var source: VenueSource = .curated
     var externalId: String? = nil
+    /// Apple Maps place id, same identifier space as MKMapItem.identifier.
+    /// Separate from externalId because imported rows keep 'osm:node/123'
+    /// there — the OSM importer dedupes on it.
+    var mapkitId: String? = nil
     /// Paid Deals placement — 'none' | 'pin' | 'poster' | 'billboard'
     /// (migration 053). 'none' venues never appear on Deals surfaces.
     var tier: String = "none"
@@ -596,6 +602,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         case isFeatured = "is_featured"
         case source
         case externalId = "external_id"
+        case mapkitId   = "mapkit_id"
         case tier
         case qrToken    = "qr_token"
         case createdAt  = "created_at"
@@ -611,6 +618,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         isFeatured: Bool = false,
         source: VenueSource = .curated,
         externalId: String? = nil,
+        mapkitId: String? = nil,
         tier: String = "none",
         qrToken: String? = nil,
         createdAt: Date
@@ -624,6 +632,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         self.isFeatured = isFeatured
         self.source = source
         self.externalId = externalId
+        self.mapkitId = mapkitId
         self.tier = tier
         self.qrToken = qrToken
         self.createdAt = createdAt
@@ -638,8 +647,18 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         lat        = try c.decode(Double.self, forKey: .lat)
         lon        = try c.decode(Double.self, forKey: .lon)
         isFeatured = (try c.decodeIfPresent(Bool.self, forKey: .isFeatured)) ?? false
-        source     = (try c.decodeIfPresent(VenueSource.self, forKey: .source)) ?? .curated
+        // Decode through the RAW STRING, not the enum. decodeIfPresent only
+        // returns nil for an absent/null key — a PRESENT but unknown value
+        // THROWS, which escapes init(from:) and fails the whole [Venue] array.
+        // That is exactly what happened when 1002 rows arrived with
+        // source='osm' before this enum knew the case: every venue-driven
+        // screen went blank, silently, because the fetch's catch swallowed it.
+        // An unrecognised source must degrade to a default, never blank the app.
+        source     = VenueSource(
+            rawValue: (try? c.decodeIfPresent(String.self, forKey: .source)) as? String ?? ""
+        ) ?? .curated
         externalId = try c.decodeIfPresent(String.self, forKey: .externalId)
+        mapkitId   = try c.decodeIfPresent(String.self, forKey: .mapkitId)
         tier       = (try c.decodeIfPresent(String.self, forKey: .tier)) ?? "none"
         qrToken    = try c.decodeIfPresent(String.self, forKey: .qrToken)
         createdAt  = try c.decode(Date.self,   forKey: .createdAt)

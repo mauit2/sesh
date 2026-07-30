@@ -793,8 +793,15 @@ final class VenueService: ObservableObject {
     @discardableResult
     func resolveOrCreateMapKitVenue(_ result: MapKitVenueResult) async -> Venue? {
         // 1. Fast path: already in our local list.
+        //
+        // Checks mapkit_id as well as external_id. The Apple Maps Server API
+        // backfill writes the place id to mapkit_id (external_id still holds
+        // 'osm:node/123' on imported rows, and the OSM importer dedupes on it),
+        // so a venue linked server-side must still match one resolved here —
+        // otherwise tapping a bar would create a second copy of it.
         if let existing = venues.first(where: {
-            $0.externalId == result.id && $0.source == .mapkit
+            $0.mapkitId == result.id
+                || ($0.externalId == result.id && $0.source == .mapkit)
         }) { return existing }
 
         // 2. Re-check the DB in case another device beat us to the insert
