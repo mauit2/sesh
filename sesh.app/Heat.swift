@@ -9,6 +9,7 @@
 
 import SwiftUI
 import MapKit
+import CoreImage.CIFilterBuiltins
 import CoreLocation
 import Combine
 import Supabase
@@ -424,5 +425,203 @@ struct QRCameraView: UIViewControllerRepresentable {
                 }
             }
         }
+    }
+}
+
+
+// MARK: - Admin: printable check-in QR
+
+/// Admin-side half of QR check-in: pick a bar, get its table QR. The token is
+/// minted once per venue (ensure_qr_token) and encoded as
+/// https://seshapp.xyz/qr/<CODE> so the printed code also works as a plain
+/// web link for people without the app.
+struct QRAdminSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private struct VenueLite: Decodable, Identifiable {
+        let id: UUID
+        let name: String
+        let city: String?
+    }
+
+    @State private var venues: [VenueLite] = []
+    @State private var search = ""
+    @State private var picked: VenueLite?
+    @State private var token: String?
+    @State private var loading = false
+
+    private var filtered: [VenueLite] {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return venues }
+        return venues.filter { $0.name.lowercased().contains(q) }
+    }
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            if let picked, let token {
+                qrDetail(venue: picked, token: token)
+            } else {
+                venueList
+            }
+        }
+        .preferredColorScheme(.dark)
+        .task {
+            venues = (try? await supabase
+                .from("venues")
+                .select("id, name, city")
+                .order("name")
+                .execute().value) ?? []
+        }
+    }
+
+    private var venueList: some View {
+        VStack(spacing: 12) {
+            VStack(spacing: 4) {
+                Text("CHECK-IN QR")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(3)
+                    .foregroundStyle(Color.bronze)
+                Text("Pick a bar to print its code")
+                    .font(.system(size: 18, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color.cream)
+            }
+            .padding(.top, 22)
+
+            TextField("Search bars", text: $search)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.cream.opacity(0.06)))
+                .padding(.horizontal, 20)
+
+            ScrollView(showsIndicators: false) {
+                LazyVStack(spacing: 8) {
+                    ForEach(filtered) { v in
+                        Button {
+                            fetchToken(for: v)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(v.name)
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .foregroundStyle(Color.cream)
+                                    if let city = v.city, !city.isEmpty {
+                                        Text(city)
+                                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                                            .foregroundStyle(Color.cream.opacity(0.5))
+                                    }
+                                }
+                                Spacer()
+                                Image(systemName: "qrcode")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(Color.whiskey)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.cream.opacity(0.04)))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 30)
+            }
+        }
+    }
+
+    private func qrDetail(venue: VenueLite, token: String) -> some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 4) {
+                Text("TABLE QR")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(3)
+                    .foregroundStyle(Color.bronze)
+                Text(venue.name)
+                    .font(.system(size: 20, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color.cream)
+            }
+            .padding(.top, 24)
+
+            if let img = Self.qrImage(for: token) {
+                Image(uiImage: img)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 240, height: 240)
+                    .padding(14)
+                    .background(RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color.cream))
+            }
+
+            Text(token)
+                .font(.system(size: 20, weight: .black, design: .monospaced))
+                .tracking(5)
+                .foregroundStyle(Color.whiskey)
+
+            Text("Print this for the tables. Scanning checks guests in at \(venue.name) — the code under it works if the camera won't.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.6))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 36)
+
+            if let img = Self.qrImage(for: token) {
+                ShareLink(
+                    item: Image(uiImage: img),
+                    preview: SharePreview("\(venue.name) check-in QR", image: Image(uiImage: img))
+                ) {
+                    Label("Share / print", systemImage: "square.and.arrow.up")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(Color.whiskey))
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+
+            Button {
+                picked = nil
+                self.token = nil
+            } label: {
+                Text("ANOTHER BAR")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .tracking(2)
+                    .foregroundStyle(Color.bronze)
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 10)
+        }
+    }
+
+    private func fetchToken(for venue: VenueLite) {
+        guard !loading else { return }
+        loading = true
+        Task { @MainActor in
+            struct P: Encodable { let p_venue: UUID }
+            let t: String? = try? await supabase
+                .rpc("ensure_qr_token", params: P(p_venue: venue.id))
+                .execute().value
+            loading = false
+            if let t {
+                picked = venue
+                token = t
+            }
+        }
+    }
+
+    /// High-error-correction QR of the public check-in URL, scaled crisp.
+    private static func qrImage(for token: String) -> UIImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data("https://seshapp.xyz/qr/\(token)".utf8)
+        filter.correctionLevel = "Q"
+        guard let output = filter.outputImage else { return nil }
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: 12, y: 12))
+        guard let cg = CIContext().createCGImage(scaled, from: scaled.extent) else { return nil }
+        return UIImage(cgImage: cg)
     }
 }

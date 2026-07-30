@@ -9579,6 +9579,7 @@ struct OffersAdminView: View {
     @State private var editing: AdminOffer?
     /// A campaign the admin is composing an opt-in deal push for.
     @State private var pushTarget: AdminOffer?
+    @State private var qrAdminOpen = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -9643,6 +9644,27 @@ struct OffersAdminView: View {
                     }
                     .buttonStyle(PressScaleStyle())
 
+                    Button { qrAdminOpen = true } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "qrcode")
+                                .font(.system(size: 17, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.whiskey)
+                            Text("Check-in QR codes")
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.bronze)
+                        }
+                        .padding(.vertical, 13).padding(.horizontal, 16)
+                        .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.whiskey.opacity(0.08)))
+                        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1))
+                    }
+                    .buttonStyle(PressScaleStyle())
+
                     if svc.offers.isEmpty {
                         Text(svc.loading ? "Loading…" : "No campaigns yet. Create one above.")
                             .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -9663,6 +9685,11 @@ struct OffersAdminView: View {
         }
         .preferredColorScheme(.dark)
         .task { await svc.load() }
+        .sheet(isPresented: $qrAdminOpen) {
+            QRAdminSheet()
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
         .sheet(isPresented: $addOpen) {
             CampaignComposer(svc: svc, editing: nil) { addOpen = false }
                 .presentationBackground(Color.ink)
