@@ -1588,6 +1588,15 @@ private struct OffersMapView: View {
             // know they'll want it, and charging everyone memory for a mode
             // they never open is the wrong default.
             if UserDefaults.standard.bool(forKey: "sesh.sunUsed.v1"), !sunEverShown {
+                // AFTER the visible map has had its window. Starting the
+                // prewarm at page mount made the Mapbox style + tile fetch and
+                // four seconds of hidden rendering compete with MapKit's FIRST
+                // tile load — on cellular the map you're looking at sat grey
+                // while the one you weren't warmed up. The sun map can wait
+                // six seconds; nobody reaches the Sun toggle faster than that,
+                // and if they do, the normal on-demand load takes over below.
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                guard !sunEverShown else { return }
                 sunEverShown = true
                 sunPrewarming = true
                 await sun.load(near: location.location?.coordinate
