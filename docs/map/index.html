@@ -121,6 +121,9 @@
   .sunbar .now{margin-left:auto;font-weight:800;font-size:11px;color:var(--cream);background:rgba(245,237,216,.08);
     border:1px solid var(--line);padding:5px 11px;border-radius:999px;}
   .sunbar input[type=range]{width:100%;accent-color:var(--whiskey);}
+  .pin .cluster{position:absolute;left:0;top:0;transform:translate(-50%,-50%);min-width:34px;height:34px;border-radius:50%;
+    background:var(--ink-elev);border:2px solid var(--whiskey);color:var(--cream);display:flex;align-items:center;justify-content:center;
+    font-weight:800;font-size:12px;padding:0 6px;box-shadow:0 3px 10px rgba(0,0,0,.5);}
 </style>
 </head>
 <body>
@@ -255,7 +258,8 @@
       lit=n;}
     var mg=[];raw.forEach(function(w){if(mg.length&&w[0]-mg[mg.length-1][1]<1200000)mg[mg.length-1][1]=w[1];else mg.push(w.slice());});
     return mg.filter(function(w){return w[1]-w[0]>=900000;});}
-  function hhmm(ms){return new Intl.DateTimeFormat("sv-SE",{timeZone:sunTz,hour:"2-digit",minute:"2-digit"}).format(new Date(ms));}
+  var hhmmCache={};
+  function hhmm(ms){var f=hhmmCache[sunTz]||(hhmmCache[sunTz]=new Intl.DateTimeFormat("sv-SE",{timeZone:sunTz,hour:"2-digit",minute:"2-digit"}));return f.format(new Date(ms));}
   function durTxt(ms){var h=Math.floor(ms/3600000),m=Math.round(ms%3600000/60000);return h?(h+"h "+(m?m+"m":"")).trim():m+"m";}
 
   function sunRefetchIfMoved(){
@@ -288,6 +292,31 @@
       +'<div class="note">'+esc(list)+'</div>';
   }
 
+  // Recolour EXISTING pins for the slider position. The first version tore
+  // down and rebuilt every annotation (DOM churn through MapKit JS) and
+  // precomputed every callout per tick — that was the "super slow" slider.
+  // This touches ~200 class strings and nothing else.
+  var sunPinRefs=[];
+  function retintOne(ref){
+    if(!ref.el)return;
+    var tr=track(),i=sunStep==null?sunNowStep():sunStep;
+    var on=isLit(ref.r.horizon,{alt:tr.alt[i],az:tr.az[i]});
+    if(on!==ref.on){ref.on=on;ref.el.innerHTML=on?'<div class="sun">☀</div>':'<div class="shade"></div>';}
+  }
+  function retint(){
+    if(mode!=="sun")return;
+    var tr=track(),i=sunStep==null?sunNowStep():sunStep,lit=0;
+    $("sunTime").textContent=hhmm(tr.midnight+i*300000);
+    $("sunSlider").value=i;
+    var p={alt:tr.alt[i],az:tr.az[i]};
+    sunPinRefs.forEach(function(x){
+      if(!x.el)return;
+      var on=isLit(x.r.horizon,p);if(on)lit++;
+      if(on!==x.on){x.on=on;x.el.innerHTML=on?'<div class="sun">☀</div>':'<div class="shade"></div>';}
+    });
+    countEl.textContent=lit+" in the sun";
+  }
+
   async function rpc(fn,args){
     var r=await fetch(SB_URL+"/rest/v1/rpc/"+fn,{method:"POST",headers:{"Content-Type":"application/json","apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY},body:JSON.stringify(args||{})});
     if(!r.ok){var t="";try{t=(await r.json()).message||"";}catch(e){}throw new Error(t||("HTTP "+r.status));}
@@ -308,6 +337,15 @@
       showsScale:mapkit.FeatureVisibility.Hidden,showsZoomControl:true,showsMapTypeControl:false,isRotationEnabled:false,
       center:new mapkit.Coordinate(57.70,11.96),cameraDistance:9000});
     search=new mapkit.Search({getsUserLocation:false});
+    // Zoomed out, hundreds of DOM annotations made pan/zoom crawl. Native
+    // clustering collapses them into count bubbles; zoom in and they split.
+    map.annotationForCluster=function(cluster){
+      var n=(cluster.memberAnnotations||[]).length;
+      return new mapkit.Annotation(cluster.coordinate,function(){
+        var el=document.createElement("div");el.className="pin";
+        el.innerHTML='<div class="cluster">'+n+'</div>';return el;
+      },{anchorOffset:new DOMPoint(0,0)});
+    };
 
     SERVINGS.forEach(function(s){var b=document.createElement("button");b.textContent=s[1];b.dataset.serving=s[0];if(s[0]===serving)b.className="on";
       b.onclick=function(){serving=s[0];[].forEach.call($("sizes").children,function(c){c.className=c.dataset.serving===serving?"on":"";});render();renderList();};$("sizes").appendChild(b);});
@@ -320,8 +358,8 @@
       $("sunbar").style.display=mode==="sun"?"block":"none";
       if(mode==="sun"&&!sunData.length){var c=map.center;fetchSun(c.latitude,c.longitude);}
       render();});
-    $("sunSlider").addEventListener("input",function(){sunStep=+this.value;render();});
-    $("sunNow").onclick=function(){sunStep=null;render();};
+    $("sunSlider").addEventListener("input",function(){sunStep=+this.value;retint();});
+    $("sunNow").onclick=function(){sunStep=null;retint();};
     map.addEventListener("region-change-end",sunRefetchIfMoved);
     $("listBtn").onclick=function(){$("drawer").classList.add("open");renderList();};
     $("drawerClose").onclick=function(){$("drawer").classList.remove("open");};
@@ -340,9 +378,13 @@
     }).catch(function(err){msgEl.textContent="Couldn't load the data.";console.error(err);});
   }
 
-  function makePin(coord,html,popupHtml,id){
-    var ann=new mapkit.Annotation(coord,function(){var el=document.createElement("div");el.className="pin";el.innerHTML=html;return el;},{anchorOffset:new DOMPoint(0,0),calloutEnabled:!!popupHtml});
-    if(popupHtml){ann.callout={calloutElementForAnnotation:function(){var c=document.createElement("div");c.className="callout";c.innerHTML=popupHtml;return c;}};}
+  // popupHtml may be a STRING or a FUNCTION. A function is evaluated when the
+  // callout opens — sun callouts walk the whole day's windows, and computing
+  // that eagerly for every pin on every render was most of the slider lag.
+  function makePin(coord,html,popupHtml,id,clusterId,onEl){
+    var ann=new mapkit.Annotation(coord,function(){var el=document.createElement("div");el.className="pin";el.innerHTML=html;if(onEl)onEl(el);return el;},{anchorOffset:new DOMPoint(0,0),calloutEnabled:!!popupHtml});
+    if(popupHtml){ann.callout={calloutElementForAnnotation:function(){var c=document.createElement("div");c.className="callout";c.innerHTML=(typeof popupHtml==="function"?popupHtml():popupHtml);return c;}};}
+    if(clusterId)ann.clusteringIdentifier=clusterId;
     map.addAnnotation(ann);layerAnn.push(ann);if(id)annById[id]=ann;return ann;
   }
   function clearPins(){if(layerAnn.length)map.removeAnnotations(layerAnn);layerAnn=[];annById={};}
@@ -356,23 +398,24 @@
     clearPins();
     if(mode==="sun"){
       $("legend").style.display="none";
-      var tr=track(),i=sunStep==null?sunNowStep():sunStep;
-      var p={alt:tr.alt[i],az:tr.az[i]},lit=0;
-      $("sunTime").textContent=hhmm(tr.midnight+i*300000);
       $("sunZone").textContent=sunTz.split("/").pop().replace(/_/g," ");
-      $("sunSlider").value=i;
+      sunPinRefs=[];
       sunData.forEach(function(r){
-        var on=isLit(r.horizon,p);if(on)lit++;
-        makePin(new mapkit.Coordinate(r.lat,r.lon),
-          on?'<div class="sun">☀</div>':'<div class="shade"></div>',
-          popupSun(r,on),r.venue_id);
+        var ref={r:r,el:null,on:null};
+        makePin(new mapkit.Coordinate(r.lat,r.lon),'<div class="shade"></div>',
+          function(){var i=sunStep==null?sunNowStep():sunStep,tr=track();
+            return popupSun(r,isLit(r.horizon,{alt:tr.alt[i],az:tr.az[i]}));},
+          r.venue_id,"sun",function(el){ref.el=el;retintOne(ref);});
+        sunPinRefs.push(ref);
       });
-      countEl.textContent=lit+" in the sun";
+      retint();
       return;   // no auto-fit: sun pins follow wherever the user is looking
     }
     if(mode==="prices"){$("legend").style.display="";
-      beerData.filter(function(r){return r.serving===serving;}).forEach(function(r){var cheap=localCheapest(r,beerData);
-        makePin(new mapkit.Coordinate(r.lat,r.lon),'<span class="pill" style="background:'+colorFor(r.price,cheap)+'">'+fmt(r.price,r.currency)+'</span>',popupBeer(r,cheap),r.venue_id);});
+      beerData.filter(function(r){return r.serving===serving;}).forEach(function(r){
+        makePin(new mapkit.Coordinate(r.lat,r.lon),
+          '<span class="pill" style="background:'+colorFor(r.price,localCheapest(r,beerData))+'">'+fmt(r.price,r.currency)+'</span>',
+          function(){return popupBeer(r,localCheapest(r,beerData));},r.venue_id,"beer");});
       var n=Object.keys(annById).length;countEl.textContent=n+(n===1?" bar":" bars");
     }else{$("legend").style.display="none";
       dealData.forEach(function(d){var h=d.image_url?'<img class="art" src="'+esc(d.image_url)+'" alt="" />':'<div class="dot">🍺</div>';makePin(new mapkit.Coordinate(d.lat,d.lon),h,popupDeal(d));});
