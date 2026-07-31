@@ -15,7 +15,7 @@ import SwiftUI
 import CoreLocation
 import MapboxMaps
 
-struct SunMapboxView: View {
+struct SunMapboxView: View, Equatable {
     let readings: [SunReading]
     /// The moment being previewed, which drives the scene's lighting.
     let previewAt: Date
@@ -109,6 +109,24 @@ struct SunMapboxView: View {
         }
     }
 
+    /// Skip whole body evaluations when nothing this map draws has changed.
+    /// The parent re-evaluates on every one of ITS invalidations — camera
+    /// moves on the MapKit map, venue selection, price loads — and each one
+    /// re-ran this body and made Mapbox re-diff all annotations, parked or
+    /// not (5% of main-thread time as PlatformViewChild.updateValue in the
+    /// profile). Bindings are deliberately compared by VALUE.
+    static func == (a: SunMapboxView, b: SunMapboxView) -> Bool {
+        a.rendering == b.rendering
+            && a.locateTick == b.locateTick
+            && a.previewAt == b.previewAt
+            && a.centre.latitude == b.centre.latitude
+            && a.centre.longitude == b.centre.longitude
+            && a.focus?.latitude == b.focus?.latitude
+            && a.focus?.longitude == b.focus?.longitude
+            && a.selectedId == b.selectedId
+            && a.readings == b.readings
+    }
+
     /// Coordinates aren't Equatable, so drive onChange off a stable string.
     private var focusKey: String {
         guard let f = focus else { return "" }
@@ -165,17 +183,51 @@ struct SunMapboxView: View {
             .intensity(0.10 + 0.40 * daylight)
     }
 
-    // ForEvery, not SwiftUI's ForEach — map content has its own result builder.
+    // SPRITES for the field, a live view only for the selection. Every pin
+    // used to be a MapViewAnnotation — a UIKit view Mapbox repositions on the
+    // main thread every frame, which is fine for a handful and painful for 80
+    // on a phone (the Mac simulator's CPU hid it). PointAnnotations render in
+    // the style layer on the GPU with the tiles; the name travels as symbol
+    // text, so colliding labels auto-hide instead of overprinting — the old
+    // pins drew every name on top of its neighbours. Trade-off: the name loses
+    // its capsule background (symbol text can't draw one) and gets a dark halo
+    // instead.
     @MapContentBuilder
     private var annotations: some MapContent {
-        ForEvery(readings) { (r: SunReading) in
-            MapViewAnnotation(coordinate: r.venue.coordinate) {
-                SunPin(reading: r, selected: selectedId == r.id) {
-                    selectedId = (selectedId == r.id) ? nil : r.id
-                }
+        PointAnnotationGroup(readings.filter { $0.id != selectedId }) { (r: SunReading) in
+            PointAnnotation(coordinate: r.venue.coordinate)
+                .image(PointAnnotation.Image(
+                    image: r.isSunlit ? Self.litSprite : Self.shadeSprite,
+                    name: r.isSunlit ? "sesh-sun-lit" : "sesh-sun-shade"))
+                .textField(r.venue.name)
+                .textSize(9)
+                .textOffset(x: 0, y: 2.2)
+                .textColor(UIColor(Color.cream))
+                .textHaloColor(UIColor(Color.ink.opacity(0.85)))
+                .textHaloWidth(1.2)
+                .onTapGesture { selectedId = r.id }
+        }
+        .iconAllowOverlap(true)
+        .textOptional(true)
+
+        // The selected pin keeps the full SwiftUI treatment — pulse, state
+        // label, day-total chip — as the map's single view annotation.
+        if let sel = readings.first(where: { $0.id == selectedId }) {
+            MapViewAnnotation(coordinate: sel.venue.coordinate) {
+                SunPin(reading: sel, selected: true) { selectedId = nil }
             }
             .allowOverlap(true)
         }
+    }
+
+    /// The two pin faces, rasterised ONCE from the same SwiftUI the live pin
+    /// uses, at 3x so they stay crisp.
+    @MainActor private static let litSprite: UIImage = renderSprite(lit: true)
+    @MainActor private static let shadeSprite: UIImage = renderSprite(lit: false)
+    @MainActor private static func renderSprite(lit: Bool) -> UIImage {
+        let r = ImageRenderer(content: SunPinSprite(lit: lit))
+        r.scale = 3
+        return r.uiImage ?? UIImage()
     }
 
     /// Buildings on, clutter off: this map exists to show shade, so POI and
@@ -259,16 +311,28 @@ struct MapRenderGate: UIViewRepresentable {
         return v
     }
 
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    /// Remembers what was last applied, so updateUIView — which SwiftUI calls
+    /// on EVERY graph update of the host view — is a no-op unless `rendering`
+    /// actually flipped. Without this it dispatched an async hierarchy walk
+    /// per update, which profiling showed as steady representable churn.
+    final class Coordinator { var applied: Bool? }
+
     func updateUIView(_ uiView: UIView, context: Context) {
+        guard context.coordinator.applied != rendering else { return }
+        let want = rendering
         // Deferred: on the first pass SwiftUI may not have inserted the MapView
         // yet, and we would find nothing.
-        DispatchQueue.main.async {
-            guard let map = Self.mapView(near: uiView) else { return }
+        DispatchQueue.main.async { [weak uiView] in
+            guard let uiView, let map = Self.mapView(near: uiView) else { return }
             let wanted: MapView.DisplayState =
-                rendering ? [.foregroundActive, .foregroundInactive] : []
+                want ? [.foregroundActive, .foregroundInactive] : []
             if map.displayState.rawValue != wanted.rawValue {
                 map.displayState = wanted
             }
+            // Recorded only on success — a miss (map not inserted yet)
+            // retries on the next update instead of being latched as done.
+            context.coordinator.applied = want
         }
     }
 
@@ -292,5 +356,36 @@ struct MapRenderGate: UIViewRepresentable {
             if let m = search(sub, depth: depth + 1) { return m }
         }
         return nil
+    }
+}
+
+/// The unselected pin's face, kept in lockstep with SunPin's styling — this is
+/// what gets rasterised into the two sprite images.
+private struct SunPinSprite: View {
+    let lit: Bool
+    private var tint: Color {
+        lit ? Color(red: 1.0, green: 0.79, blue: 0.28)
+            : Color(red: 0.42, green: 0.46, blue: 0.56)
+    }
+    var body: some View {
+        ZStack {
+            if lit {
+                Circle()
+                    .fill(RadialGradient(colors: [tint.opacity(0.5), tint.opacity(0)],
+                                         center: .center, startRadius: 2, endRadius: 24))
+                    .frame(width: 48, height: 48)
+            }
+            Circle()
+                .fill(tint)
+                .frame(width: lit ? 20 : 13, height: lit ? 20 : 13)
+                .overlay(Circle().strokeBorder(Color.ink.opacity(0.55), lineWidth: 1))
+                .shadow(color: tint.opacity(lit ? 0.9 : 0.3), radius: 6)
+            if lit {
+                Image(systemName: "sun.max.fill")
+                    .font(.system(size: 10, weight: .black))
+                    .foregroundStyle(Color(red: 0.35, green: 0.22, blue: 0.02))
+            }
+        }
+        .frame(width: 48, height: 48)
     }
 }

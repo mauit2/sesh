@@ -1794,6 +1794,9 @@ private struct OffersMapView: View {
             // stops drawing.
             rendering: mapMode == .sun
         )
+        // Skip re-evaluating the Mapbox map when none of ITS inputs changed —
+        // this view's body runs on every map-screen invalidation otherwise.
+        .equatable()
     }
 
     private var modeToggle: some View {
