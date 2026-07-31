@@ -831,22 +831,35 @@ final class VenueService: ObservableObject {
             // also shipped opening_hours, time_zone, prominence and friends,
             // which the decoder ignored but the network and parser still paid
             // for — about a third of the venue payload.
-            var vs: [Venue] = []
             let pageSize = 1000
-            var offset = 0
             let cols = "id,name,address,city,lat,lon,is_featured,source,external_id,mapkit_id,tier,qr_token,created_at"
-            while true {
-                let page: [Venue] = try await supabase
+            func fetchPage(_ index: Int) async throws -> [Venue] {
+                try await supabase
                     .from("venues")
                     .select(cols)
                     .order("name", ascending: true)
-                    .range(from: offset, to: offset + pageSize - 1)
+                    .range(from: index * pageSize, to: (index + 1) * pageSize - 1)
                     .execute()
                     .value
-                vs.append(contentsOf: page)
-                if page.count < pageSize { break }
-                offset += pageSize
-                if offset > 50_000 { break }   // sanity stop
+            }
+            // The first three pages go out CONCURRENTLY — that covers 3000
+            // venues, well past the current table, so the whole catalog costs
+            // one round trip instead of three in a row. Concatenating in page
+            // order preserves the name ordering. Only if the table someday
+            // outgrows the burst does the serial tail below run.
+            async let f0 = fetchPage(0)
+            async let f1 = fetchPage(1)
+            async let f2 = fetchPage(2)
+            var vs: [Venue] = try await f0 + f1 + f2
+            if vs.count == 3 * pageSize {
+                var index = 3
+                while true {
+                    let page = try await fetchPage(index)
+                    vs.append(contentsOf: page)
+                    if page.count < pageSize { break }
+                    index += 1
+                    if index > 50 { break }   // sanity stop
+                }
             }
             let ss = try await specialsFetch
             let os = try await offersFetch
@@ -1144,7 +1157,7 @@ struct DeferredOffersPage: View {
             Color.ink.ignoresSafeArea()
             if mounted {
                 OffersMapView(venues: venues, location: location,
-                              pagingLocked: $pagingLocked)
+                              pagingLocked: $pagingLocked, pageActive: active)
                     // The interactive map swallows the TabView's horizontal
                     // page swipe, so a thin left-edge strip provides the
                     // "grab the edge to go back" gesture → back to Nightline.
@@ -1165,13 +1178,15 @@ struct DeferredOffersPage: View {
                     guard g == generation else { return }
                     withAnimation(.easeIn(duration: 0.15)) { mounted = true }
                 }
-            } else {
-                Task {
-                    try? await Task.sleep(nanoseconds: 600_000_000)
-                    guard g == generation else { return }
-                    mounted = false
-                }
             }
+            // DELIBERATELY NO UNMOUNT. This used to tear the page down 600 ms
+            // after every swipe away, which meant every return rebuilt both
+            // maps, the annotation set, and (once Sun had been opened) the
+            // whole Mapbox style — the largest single cost in "switching
+            // screens is slow". A parked page is measurably free now: the
+            // profiler's idle pass showed the main thread 100% asleep, and the
+            // Mapbox render gate + Equatable skips hold when inactive. The
+            // spent memory is the trade, and it buys instant returns.
         }
     }
 
@@ -1219,6 +1234,15 @@ private struct OffersMapView: View {
     /// Bumped on every locate tap. The Sun map watches this rather than the
     /// coordinate, so tapping twice from the same spot still re-centres.
     @State private var locateTick = 0
+    /// Whether this page is the one the pager is showing. The page persists
+    /// when swiped away (see DeferredOffersPage); this is what parks the Sun
+    /// map's renderer while it's off-screen and re-runs the staleness-guarded
+    /// refreshes on the way back in.
+    var pageActive: Bool = true
+    /// True while the Sun map is warming its style hidden behind the MapKit
+    /// map. Only granted to users who have opened Sun before (persisted), so
+    /// people who never use it never pay the memory or the frames.
+    @State private var sunPrewarming = false
     /// What the map is actually showing. Pins are filtered to this rather than
     /// to a radius around YOU: the maps are deliberately global (zoom out to
     /// browse another city), but handing MapKit venues on another continent
@@ -1556,6 +1580,23 @@ private struct OffersMapView: View {
             .presentationBackground(Color.ink)
         }
         .task {
+            // PREWARM Sun for people who actually use it. Mounting the Mapbox
+            // map parked would parse the style but never fetch tiles — tile
+            // requests are driven by the render loop — so it renders hidden
+            // for a few seconds, then the gate parks it. First-ever users
+            // still pay the style load on their first tap; there is no way to
+            // know they'll want it, and charging everyone memory for a mode
+            // they never open is the wrong default.
+            if UserDefaults.standard.bool(forKey: "sesh.sunUsed.v1"), !sunEverShown {
+                sunEverShown = true
+                sunPrewarming = true
+                await sun.load(near: location.location?.coordinate
+                    ?? CLLocationCoordinate2D(latitude: 57.7016, longitude: 11.9668))
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                sunPrewarming = false
+            }
+        }
+        .task {
             recenter()
             // Catalog and prices are independent — overlap them. Coordinate
             // resolution reads the offers the refresh brings in, so it waits.
@@ -1571,10 +1612,23 @@ private struct OffersMapView: View {
         .onChange(of: venues.pendingFocusVenueId) { _, _ in consumePendingFocus() }
         // Horizons load lazily — the Sun mode is opt-in, so nobody pays for it
         // unless they ask, and once loaded a whole day scrubs offline.
+        .onChange(of: pageActive) { _, isActive in
+            guard isActive else { return }
+            // Both are 5-minute-guarded, so returning to the page is free
+            // unless the data is genuinely stale.
+            Task {
+                await venues.refreshIfStale()
+                await venues.loadBeerPrices()
+            }
+        }
         .onChange(of: venues.catalogStamp) { _, _ in rebuildPinModels() }
         .onChange(of: selectedServing) { _, _ in rebuildPinModels() }
         .onChange(of: mapMode) { _, mode in
-            if mode == .sun { sunEverShown = true }
+            if mode == .sun {
+                sunEverShown = true
+                // Remembered across launches: next session prewarms for them.
+                UserDefaults.standard.set(true, forKey: "sesh.sunUsed.v1")
+            }
             // DROP THE STALE VIEWPORT. onScreen() filters pins against
             // visibleRegion, which only MapKit's onMapCameraChange refreshes —
             // and the MapKit map is torn down while Sun is showing. Coming back,
@@ -1790,9 +1844,11 @@ private struct OffersMapView: View {
             focus: sunFocus,
             pagingLocked: $pagingLocked,
             locateTick: locateTick,
-            // Parked behind the MapKit map in the other modes: stays loaded,
-            // stops drawing.
-            rendering: mapMode == .sun
+            // Parked behind the MapKit map in the other modes and whenever
+            // the PAGE is swiped away: stays loaded, stops drawing. The
+            // prewarm window lets a fresh launch load the style + tiles
+            // hidden, so the first Sun tap of the session is a fade.
+            rendering: pageActive && (mapMode == .sun || sunPrewarming)
         )
         // Skip re-evaluating the Mapbox map when none of ITS inputs changed —
         // this view's body runs on every map-screen invalidation otherwise.
