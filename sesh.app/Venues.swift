@@ -295,6 +295,11 @@ final class VenueService: ObservableObject {
     /// MapKit lookup (or its memory) on every open.
     @Published private(set) var resolvedCoords: [UUID: CLLocationCoordinate2D] = [:]
     @Published private(set) var loading = false
+    /// Bumped whenever venues, offers or prices change. The map listens to
+    /// THIS to rebuild its pin models, instead of recomputing them inside
+    /// every body evaluation — profiling showed the pin pipeline running
+    /// four times per eval, on every invalidation, for identical results.
+    @Published private(set) var catalogStamp = 0
     /// Set by deep entry points (the app-open interstitial) to ask the Deals
     /// map to fly to + open a specific venue when it next appears. The map
     /// consumes and clears it.
@@ -398,6 +403,7 @@ final class VenueService: ObservableObject {
         rebuildPriceIndex()
         attachLocalSpecials()
         reconcileCurrent()
+        catalogStamp += 1
     }
 
     /// Snapshot current state to disk. Encoding ~2000 venues is a few tens of
@@ -491,6 +497,7 @@ final class VenueService: ObservableObject {
             rebuildPriceIndex()
             lastPricesAt = Date()
             saveCatalogCache()
+            catalogStamp += 1
         } catch {
             // keep whatever we had; a transient failure shouldn't blank the map
         }
@@ -859,6 +866,7 @@ final class VenueService: ObservableObject {
             reconcileCurrent()
             lastRefreshedAt = Date()
             saveCatalogCache()
+            catalogStamp += 1
         } catch {
             // Network or schema problem. Don't seed any venues —
             // discovery is MapKit-driven. Still attach local specials
@@ -1291,33 +1299,65 @@ private struct OffersMapView: View {
     /// built in one pass, which is what made switching into Beer mode hang for
     /// several seconds. The Sun map already caps at 80 for the same reason.
     /// A cheap bounding-box pre-filter keeps this from doing trig 1115 times.
-    /// Priced bars for this serving that are in view, BEFORE the draw cap.
-    private var pricedOnScreen: [Venue] {
-        venues.venuesWithBeerPrice(serving: selectedServing).filter(onScreen)
-    }
-
-    /// How many priced bars in view the cap is holding back. Drives the zoom
-    /// hint — without it the map silently claims a dense city has 120 bars.
-    private var hiddenPriceCount: Int {
-        max(0, pricedOnScreen.count - pricePins.count)
-    }
-
-    private var pricePins: [Venue] {
-        let all = pricedOnScreen
-        guard let here = location.location, all.count > Self.maxPricePins else { return all }
-        let lat = here.coordinate.latitude, lon = here.coordinate.longitude
-        let box = 0.75   // degrees; generous, just to avoid sorting the world
-        let near = all.filter { abs($0.lat - lat) < box && abs($0.lon - lon) < box }
-        let pool = near.count >= Self.maxPricePins ? near : all
-        return pool
-            .map { ($0, ($0.lat - lat) * ($0.lat - lat) + ($0.lon - lon) * ($0.lon - lon)) }
-            .sorted { $0.1 < $1.1 }
-            .prefix(Self.maxPricePins)
-            .map(\.0)
-    }
-
     /// Enough to fill a city, few enough that the map builds them quickly.
     private static let maxPricePins = 120
+
+    /// The MapKit map's annotations, PRECOMPUTED. Everything a pin needs to
+    /// draw any of its faces (deal artwork, offer count, price + local
+    /// cheapest) is resolved here once, so the pin itself holds plain values —
+    /// an earlier version passed the whole VenueService into all 120 pins as
+    /// @ObservedObject, which subscribed every pin to every service publish
+    /// and more than doubled the SwiftUI graph work per switch.
+    ///
+    /// Rebuilt by rebuildPinModels() when an INPUT changes (viewport, serving,
+    /// catalogStamp), not per body evaluation: the pipeline (filter 2000
+    /// venues, sort, dedupe) was running four times per eval for identical
+    /// results, because headerValue, the hint, the nudge and the ForEach each
+    /// pulled on the computed chain.
+    @State private var pinModels: [MapPinModel] = []
+    /// Priced bars in view the cap held back — the zoom hint's number.
+    @State private var hiddenPrices = 0
+    /// How many models carry a price for the selected serving — the header
+    /// count and the contribute nudge, without re-walking the pipeline.
+    private var pricePinCount: Int { pinModels.lazy.filter { $0.price != nil }.count }
+
+    private func rebuildPinModels() {
+        let priced = venues.venuesWithBeerPrice(serving: selectedServing).filter(onScreen)
+        var top = priced
+        if priced.count > Self.maxPricePins {
+            // Rank from wherever the user is, or failing that from what
+            // they're LOOKING at. An earlier guard bailed entirely without a
+            // GPS fix — no cap at all, every priced venue in view at once.
+            let ref = location.location?.coordinate ?? visibleRegion?.center
+                ?? CLLocationCoordinate2D(latitude: 57.7016, longitude: 11.9668)
+            let lat = ref.latitude, lon = ref.longitude
+            let box = 0.75   // degrees; generous, just to avoid sorting the world
+            let near = priced.filter { abs($0.lat - lat) < box && abs($0.lon - lon) < box }
+            let pool = near.count >= Self.maxPricePins ? near : priced
+            top = pool
+                .map { ($0, ($0.lat - lat) * ($0.lat - lat) + ($0.lon - lon) * ($0.lon - lon)) }
+                .sorted { $0.1 < $1.1 }
+                .prefix(Self.maxPricePins)
+                .map(\.0)
+        }
+        hiddenPrices = priced.count - top.count
+
+        var seen = Set<UUID>()
+        var models: [MapPinModel] = []
+        for v in top + pins where seen.insert(v.id).inserted {
+            let price = venues.beerPrice(for: v, serving: selectedServing)
+            models.append(MapPinModel(
+                venue: v,
+                offerArt: venues.posterOffer(for: v)?.imageURL,
+                offerCount: venues.offers(for: v).count,
+                price: price,
+                cheapest: price.map { venues.localCheapest(
+                    serving: $0.serving, currency: $0.currency,
+                    near: venues.coordinate(for: v), own: $0.price) } ?? 0
+            ))
+        }
+        pinModels = models
+    }
 
     /// Is this venue inside (a padded version of) what's on screen?
     /// Padding means panning reveals pins that are already there rather than
@@ -1353,35 +1393,25 @@ private struct OffersMapView: View {
                     .allowsHitTesting(mapMode == .sun)
             }
 
-            if mapMode != .sun {
+            // MOUNTED PERMANENTLY, like the Mapbox map above. A profile of mode
+            // cycling showed ~365 ms of -[MKMapView dealloc] on the main thread
+            // every time Sun opened, plus the rebuild (tiles, annotation
+            // manager, 120 pin views) on the way back — most of what made
+            // switching feel heavy. Parked under the Sun map it draws nothing
+            // measurable; the profile's idle pass was 100% asleep in mach_msg.
+            //
+            // ONE annotation set for both MapKit modes, keyed by venue id, and
+            // the PIN decides what to show for the current mode. Swapping two
+            // ForEach branches (deals pins <-> price pins) made SwiftUI tear
+            // down one set of UIViews and build the other on every toggle;
+            // with stable identity a mode switch just restyles in place.
             Map(position: $camera) {
                 UserAnnotation()
-                if mapMode == .deals {
-                    ForEach(pins) { venue in
-                        Annotation(venue.name, coordinate: venues.coordinate(for: venue)) {
-                            // Poster/billboard artwork → branded pin; pins keep
-                            // the classic whiskey dot.
-                            Group {
-                                if let art = venues.posterOffer(for: venue)?.imageURL {
-                                    PosterPin(url: art, selected: selectedVenue?.id == venue.id)
-                                } else {
-                                    OfferPin(count: venues.offers(for: venue).count,
-                                             selected: selectedVenue?.id == venue.id)
-                                }
-                            }
-                            .onTapGesture { selectedVenue = venue }
-                        }
-                    }
-                } else {
-                    ForEach(pricePins) { venue in
-                        Annotation(venue.name, coordinate: venues.coordinate(for: venue)) {
-                            if let p = venues.beerPrice(for: venue, serving: selectedServing) {
-                                BeerPricePin(price: p,
-                                             cheapest: venues.localCheapest(serving: p.serving, currency: p.currency,
-                                                                            near: venues.coordinate(for: venue), own: p.price),
-                                             selected: selectedVenue?.id == venue.id)
-                                    .onTapGesture { selectedVenue = venue }
-                            }
+                ForEach(pinModels) { model in
+                    Annotation(model.venue.name, coordinate: venues.coordinate(for: model.venue)) {
+                        ModePin(model: model, mode: mapMode,
+                                selected: selectedVenue?.id == model.venue.id) {
+                            selectedVenue = model.venue
                         }
                     }
                 }
@@ -1389,8 +1419,10 @@ private struct OffersMapView: View {
             .mapStyle(.standard(elevation: .flat, pointsOfInterest: .including([.nightlife, .restaurant, .brewery, .winery])))
             .onMapCameraChange(frequency: .onEnd) { ctx in
                 visibleRegion = ctx.region
+                rebuildPinModels()
             }
-            }
+            .opacity(mapMode == .sun ? 0 : 1)
+            .allowsHitTesting(mapMode != .sun)
 
             header
 
@@ -1448,13 +1480,13 @@ private struct OffersMapView: View {
             // Zoom nudge — the map draws at most maxPricePins bars, nearest
             // first, so zoomed out over a city it silently hides most of them
             // and the header count looks like the whole truth. Say so.
-            if mapMode == .prices, selectedVenue == nil, hiddenPriceCount > 0 {
+            if mapMode == .prices, selectedVenue == nil, hiddenPrices > 0 {
                 VStack {
                     Spacer()
                     HStack(spacing: 6) {
                         Image(systemName: "plus.magnifyingglass")
                             .font(.system(size: 10, weight: .bold))
-                        Text("\(hiddenPriceCount) MORE HERE · ZOOM IN")
+                        Text("\(hiddenPrices) MORE HERE · ZOOM IN")
                             .font(.system(size: 10, weight: .black, design: .monospaced))
                             .tracking(1.1)
                     }
@@ -1471,7 +1503,7 @@ private struct OffersMapView: View {
 
             // Contribute nudge — the price map is only as good as the crowd, so
             // when there's nothing nearby yet, invite the user to seed it.
-            if mapMode == .prices, selectedVenue == nil, pricePins.isEmpty {
+            if mapMode == .prices, selectedVenue == nil, pricePinCount == 0 {
                 VStack {
                     Spacer()
                     contributeCard
@@ -1539,6 +1571,8 @@ private struct OffersMapView: View {
         .onChange(of: venues.pendingFocusVenueId) { _, _ in consumePendingFocus() }
         // Horizons load lazily — the Sun mode is opt-in, so nobody pays for it
         // unless they ask, and once loaded a whole day scrubs offline.
+        .onChange(of: venues.catalogStamp) { _, _ in rebuildPinModels() }
+        .onChange(of: selectedServing) { _, _ in rebuildPinModels() }
         .onChange(of: mapMode) { _, mode in
             if mode == .sun { sunEverShown = true }
             // DROP THE STALE VIEWPORT. onScreen() filters pins against
@@ -1549,6 +1583,7 @@ private struct OffersMapView: View {
             // search), every pin tests as off-screen and the map looks empty.
             // nil means "don't filter yet", so it fails open instead.
             visibleRegion = nil
+            rebuildPinModels()
             guard mode == .sun, sun.venues.isEmpty else { return }
             Task {
                 await sun.load(near: location.location?.coordinate
@@ -1683,9 +1718,10 @@ private struct OffersMapView: View {
         // really the first 120 of 206 — the header stating the limit as if it
         // were the total. The plus says there are more without pretending to
         // have drawn them.
-        if pricePins.isEmpty { return "tap ＋ to add" }
-        let more = hiddenPriceCount > 0
-        return "\(pricePins.count)\(more ? "+" : "") \(pricePins.count == 1 && !more ? "bar" : "bars")"
+        let n = pricePinCount
+        if n == 0 { return "tap ＋ to add" }
+        let more = hiddenPrices > 0
+        return "\(n)\(more ? "+" : "") \(n == 1 && !more ? "bar" : "bars")"
     }
 
     // Cached in the service. Calling a recomputing function here meant
@@ -3790,3 +3826,49 @@ private struct MapKitResultRow: View {
     }
 }
 
+
+/// One MapKit annotation's precomputed data — every face it might show, so the
+/// pin view needs no service access at render time.
+private struct MapPinModel: Identifiable {
+    let venue: Venue
+    let offerArt: URL?
+    let offerCount: Int
+    let price: VenueBeerPrice?
+    let cheapest: Double
+    var id: UUID { venue.id }
+}
+
+/// The single MapKit pin, restyled per mode instead of torn down. Which face it
+/// shows (deal artwork, whiskey dot, price pill, or nothing) follows the mode;
+/// its Annotation — and the UIView MapKit backs it with — stays put. In Sun
+/// mode the MapKit map is parked at opacity 0, so drawing nothing here is fine.
+///
+/// Plain values only. A previous version took the VenueService as
+/// @ObservedObject, which made all ~120 pins re-evaluate on every service
+/// publish — visible in the profile as doubled AttributeGraph time.
+private struct ModePin: View {
+    let model: MapPinModel
+    let mode: DealsMapMode
+    let selected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        switch mode {
+        case .deals:
+            if let art = model.offerArt {
+                PosterPin(url: art, selected: selected)
+                    .onTapGesture(perform: onTap)
+            } else if model.offerCount > 0 {
+                OfferPin(count: model.offerCount, selected: selected)
+                    .onTapGesture(perform: onTap)
+            }
+        case .prices:
+            if let p = model.price {
+                BeerPricePin(price: p, cheapest: model.cheapest, selected: selected)
+                    .onTapGesture(perform: onTap)
+            }
+        case .sun:
+            EmptyView()
+        }
+    }
+}
