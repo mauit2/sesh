@@ -340,6 +340,83 @@ final class VenueService: ObservableObject {
 
     init() {
         loadCurrent()
+        // First paint from disk. The full catalog is ~1.5 MB of JSON across
+        // seven requests, which is why the maps used to sit on a spinner for
+        // seconds on every open — the data was refetched from scratch each
+        // time. Cached pins draw immediately; the network refresh still runs
+        // and quietly replaces them.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let blob = VenueService.readCatalogCache() else { return }
+            await self?.applyCatalogCache(blob)
+        }
+    }
+
+    // MARK: - Disk cache (instant first paint)
+
+    /// Everything the maps need to draw, flattened for storage. Grouping back
+    /// into the per-venue dictionaries is cheap and reuses the same code the
+    /// network path runs.
+    private struct CatalogCache: Codable {
+        let venues: [Venue]
+        let specials: [VenueSpecial]
+        let offers: [VenueOffer]
+        let prices: [VenueBeerPrice]
+        let savedAt: Date
+    }
+
+    // nonisolated: the read and the write both run off the main actor on
+    // purpose — decoding ~2000 venues on the main thread would be its own jank.
+    private nonisolated static var catalogCacheURL: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("venue-catalog-v1.json")
+    }
+
+    /// Coders are built where they're used rather than stored — JSONEncoder
+    /// isn't Sendable, so a shared static would tie them to the main actor,
+    /// which is exactly where this work must not run. The date strategies are
+    /// a matched pair: the models' custom decoders read dates through the
+    /// decoder's strategy, so as long as these two agree the cache
+    /// round-trips; the live network path keeps the Supabase client's coder.
+    private nonisolated static func readCatalogCache() -> CatalogCache? {
+        guard let data = try? Data(contentsOf: catalogCacheURL) else { return nil }
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return try? d.decode(CatalogCache.self, from: data)
+    }
+
+    /// Apply a cached catalog, but never over live data: if a network refresh
+    /// finished first, the cache is the stale copy and loses.
+    @MainActor
+    private func applyCatalogCache(_ blob: CatalogCache) {
+        guard venues.isEmpty else { return }
+        venues = blob.venues
+        specialsByVenue = Dictionary(grouping: blob.specials, by: \.venueId)
+        offersByVenue = Dictionary(grouping: blob.offers, by: \.venueId)
+        if beerPricesByVenue.isEmpty {
+            beerPricesByVenue = Dictionary(grouping: blob.prices, by: \.venueId)
+        }
+        rebuildPriceIndex()
+        attachLocalSpecials()
+        reconcileCurrent()
+    }
+
+    /// Snapshot current state to disk. Encoding ~2000 venues is a few tens of
+    /// milliseconds, so it happens off the main thread; the write is atomic so
+    /// a mid-write kill can't leave half a file.
+    private func saveCatalogCache() {
+        let blob = CatalogCache(
+            venues: venues,
+            specials: specialsByVenue.values.flatMap { $0 },
+            offers: offersByVenue.values.flatMap { $0 },
+            prices: beerPricesByVenue.values.flatMap { $0 },
+            savedAt: Date()
+        )
+        Task.detached(priority: .utility) {
+            let e = JSONEncoder()
+            e.dateEncodingStrategy = .iso8601
+            guard let data = try? e.encode(blob) else { return }
+            try? data.write(to: VenueService.catalogCacheURL, options: .atomic)
+        }
     }
 
     // MARK: - Public reads
@@ -390,6 +467,9 @@ final class VenueService: ObservableObject {
     /// page forever and double-count it. Migration 084 makes the slice part of
     /// the function's contract instead of a transport detail.
     func loadBeerPrices() async {
+        // Same staleness guard as refreshIfStale, same reason: this fires on
+        // every entry to the map tab, mid page-swipe.
+        if let last = lastPricesAt, Date().timeIntervalSince(last) < 5 * 60 { return }
         do {
             var rows: [VenueBeerPrice] = []
             let pageSize = 1000
@@ -409,10 +489,15 @@ final class VenueService: ObservableObject {
             for r in rows { map[r.venueId, default: []].append(r) }
             beerPricesByVenue = map
             rebuildPriceIndex()
+            lastPricesAt = Date()
+            saveCatalogCache()
         } catch {
             // keep whatever we had; a transient failure shouldn't blank the map
         }
     }
+
+    /// When prices were last pulled successfully; nil until the first fetch.
+    private var lastPricesAt: Date? = nil
 
     /// This venue's price for a specific serving, if reported.
     func beerPrice(for venue: Venue, serving: BeerServing) -> VenueBeerPrice? {
@@ -706,20 +791,47 @@ final class VenueService: ObservableObject {
     /// user found via Apple Maps keeps its secret menu even when the
     /// DB is empty or offline.
     func refresh() async {
-        loading = true; defer { loading = false }
+        // Block the UI only when there is nothing to draw. With the disk cache
+        // (or a previous fetch) on screen, a refresh is invisible upkeep — the
+        // spinner over live pins was most of the perceived slowness.
+        if venues.isEmpty { loading = true }
+        defer { loading = false }
         do {
+            // Specials and offers don't depend on the venue pages, so they run
+            // CONCURRENTLY with them. The whole load used to be seven awaits in
+            // a row; on a phone connection the round trips, not the bytes, were
+            // the bulk of the wait.
+            async let specialsFetch: [VenueSpecial] = supabase
+                .from("venue_specials")
+                .select()
+                .execute()
+                .value
+            // RLS filters venue_offers to live (active + approved + unexpired)
+            // offers, so a plain select returns exactly what's safe to show.
+            async let offersFetch: [VenueOffer] = supabase
+                .from("venue_offers")
+                .select()
+                .execute()
+                .value
+
             // PostgREST caps ANY response at 1000 rows. Once the venue table
             // passed that, a bare select() silently returned the first 1000 by
             // name and dropped the rest — so bars late in the alphabet vanished
             // from the app while the website (which reads through an RPC
             // returning far fewer rows) still showed them. Page until short.
+            //
+            // Explicit columns, matching the model's CodingKeys: select() star
+            // also shipped opening_hours, time_zone, prominence and friends,
+            // which the decoder ignored but the network and parser still paid
+            // for — about a third of the venue payload.
             var vs: [Venue] = []
             let pageSize = 1000
             var offset = 0
+            let cols = "id,name,address,city,lat,lon,is_featured,source,external_id,mapkit_id,tier,qr_token,created_at"
             while true {
                 let page: [Venue] = try await supabase
                     .from("venues")
-                    .select()
+                    .select(cols)
                     .order("name", ascending: true)
                     .range(from: offset, to: offset + pageSize - 1)
                     .execute()
@@ -729,18 +841,8 @@ final class VenueService: ObservableObject {
                 offset += pageSize
                 if offset > 50_000 { break }   // sanity stop
             }
-            let ss: [VenueSpecial] = try await supabase
-                .from("venue_specials")
-                .select()
-                .execute()
-                .value
-            // RLS filters venue_offers to live (active + approved + unexpired)
-            // offers, so a plain select returns exactly what's safe to show.
-            let os: [VenueOffer] = try await supabase
-                .from("venue_offers")
-                .select()
-                .execute()
-                .value
+            let ss = try await specialsFetch
+            let os = try await offersFetch
             venues = vs
             rebuildPriceIndex()
             var grouped: [UUID: [VenueSpecial]] = [:]
@@ -756,6 +858,7 @@ final class VenueService: ObservableObject {
             attachLocalSpecials()
             reconcileCurrent()
             lastRefreshedAt = Date()
+            saveCatalogCache()
         } catch {
             // Network or schema problem. Don't seed any venues —
             // discovery is MapKit-driven. Still attach local specials
@@ -1422,9 +1525,12 @@ private struct OffersMapView: View {
         }
         .task {
             recenter()
-            await venues.refreshIfStale()
+            // Catalog and prices are independent — overlap them. Coordinate
+            // resolution reads the offers the refresh brings in, so it waits.
+            async let catalog: Void = venues.refreshIfStale()
+            async let prices: Void = venues.loadBeerPrices()
+            _ = await (catalog, prices)
             await venues.resolveOfferCoordinates()
-            await venues.loadBeerPrices()
             recenter()
             consumePendingFocus()
         }
