@@ -184,6 +184,22 @@
   </div>
 </div>
 
+<!-- Sun mode's "+". Searches the bars we hold PRICES for, because that is
+     exactly the population the sun map draws from — marking anything else
+     would record a terrace that never shows up here. -->
+<div class="backdrop" id="outBackdrop">
+  <div class="modal">
+    <h2>Add outdoor seating</h2>
+    <p class="lead">The sun map only shows bars with a terrace. Find one that's missing and mark it.</p>
+    <label class="lab">Which bar has a terrace?</label>
+    <input id="oSearch" placeholder="Bar name…" autocomplete="off" />
+    <div class="results" id="oResults"></div>
+    <div class="err" id="oErr"></div>
+    <p class="lead" id="oFoot">Which way the seats face is set in the Sesh app — it redoes the sun for that bar from the real building heights.</p>
+    <button class="cancel" id="oCancel">Close</button>
+  </div>
+</div>
+
 <div class="sunbar" id="sunbar">
   <div class="row1"><span class="t" id="sunTime">--:--</span><span class="z" id="sunZone"></span><button class="now" id="sunNow">Now</button></div>
   <input type="range" id="sunSlider" min="0" max="287" step="1" value="144" />
@@ -427,6 +443,7 @@
     $("modeSeg").addEventListener("click",function(e){var btn=e.target.closest("button");if(!btn)return;mode=btn.dataset.mode;
       [].forEach.call(this.children,function(c){c.className=c.dataset.mode===mode?"on":"";});$("sizes").className=mode==="prices"?"sizes":"sizes hide";$("legend").style.display=mode==="prices"?"":"none";
       $("sunbar").style.display=mode==="sun"?"block":"none";
+      syncAddBtn();
       if(mode==="sun")fetchSunForView();
       render();});
     $("sunSlider").addEventListener("input",function(){sunStep=+this.value;retint();});
@@ -437,7 +454,12 @@
     $("search").addEventListener("input",renderList);
     map.addEventListener("region-change-end",function(){if($("drawer").classList.contains("open"))renderList();});
 
-    $("addBtn").onclick=openAdd;
+    // One "+" button, two jobs: in sun mode a terrace is the thing worth
+    // adding (a price wouldn't put a pin on this map), everywhere else a price.
+    $("addBtn").onclick=function(){ if(mode==="sun")openAddOut(); else openAdd(); };
+    $("oCancel").onclick=closeAddOut;
+    $("oSearch").addEventListener("input",renderOutResults);
+    syncAddBtn();
     $("fCancel").onclick=closeAdd;
     $("fPrice").addEventListener("input",validate);
     $("fGo").onclick=submitAdd;
@@ -551,6 +573,89 @@
         map.setRegionAnimated(new mapkit.CoordinateRegion(new mapkit.Coordinate(r.lat,r.lon),new mapkit.CoordinateSpan(0.02,0.02)));
         var a=annById[r.venue_id];if(a)a.selected=true;$("drawer").classList.remove("open");};
       host.appendChild(el);});
+  }
+
+  // ---- sun mode: add outdoor seating ----
+  function syncAddBtn(){
+    $("addBtn").textContent = mode==="sun" ? "＋ Add terrace" : "＋ Add price";
+  }
+  function openAddOut(){
+    $("oSearch").value="";$("oErr").textContent="";
+    $("oResults").innerHTML='<div class="empty">Start typing a bar name.</div>';
+    $("outBackdrop").classList.add("open");
+    setTimeout(function(){$("oSearch").focus();},60);
+  }
+  function closeAddOut(){$("outBackdrop").classList.remove("open");}
+
+  // Searched against beerData — the bars we hold prices for — deduped by
+  // venue, since a bar with four serving sizes is four rows in there.
+  function renderOutResults(){
+    var q=$("oSearch").value.trim().toLowerCase();
+    var host=$("oResults");
+    if(q.length<2){host.innerHTML='<div class="empty">Start typing a bar name.</div>';return;}
+    var seen={},hits=[];
+    beerData.forEach(function(r){
+      if(seen[r.venue_id]||(r.venue_name||"").toLowerCase().indexOf(q)<0)return;
+      seen[r.venue_id]=1;hits.push(r);
+    });
+    hits.sort(function(a,b){
+      // Unmarked bars first — those are the ones this dialog exists to fix.
+      var am=a.outdoor===true?1:0,bm=b.outdoor===true?1:0;
+      return am-bm || a.venue_name.localeCompare(b.venue_name);
+    });
+    host.innerHTML="";
+    if(!hits.length){
+      host.innerHTML='<div class="empty">No bar by that name has a price yet. '
+        +'Add its price first and it can be marked here.</div>';
+      return;
+    }
+    hits.slice(0,8).forEach(function(r){
+      var el=document.createElement("div");el.className="rres";
+      var marked=r.outdoor===true;
+      el.innerHTML='<b>'+esc(r.venue_name)+'</b><span>'
+        +(marked?"☀ already marked as having a terrace":"Tap to mark a terrace here")+'</span>';
+      if(marked){el.style.opacity=".55";}
+      else{el.onclick=function(){markTerrace(r,el);};}
+      host.appendChild(el);
+    });
+  }
+
+  function markTerrace(r,el){
+    el.onclick=null;el.style.opacity=".55";
+    el.querySelector("span").textContent="saving…";
+    $("oErr").textContent="";
+    // Void-returning RPC: 204 with no body, so rpc()'s json parse would throw.
+    fetch(SB_URL+"/rest/v1/rpc/report_outdoor_seating_web",{method:"POST",
+      headers:{"Content-Type":"application/json","apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY},
+      body:JSON.stringify({p_venue:r.venue_id})
+    }).then(function(res){
+      if(!res.ok)throw new Error("HTTP "+res.status);
+      beerData.forEach(function(x){if(x.venue_id===r.venue_id)x.outdoor=true;});
+      closeAddOut();
+      // Frame the bar so its new pin is on screen. Centring also fires
+      // region-change-end -> sunRefetchIfMoved, which re-derives the sun set;
+      // the explicit call covers the case where the camera barely moved.
+      map.setCenterAnimated(new mapkit.Coordinate(r.lat,r.lon),true);
+      setTimeout(fetchSunForView,700);
+      // The horizon for this bar was never fetched (it wasn't a terrace until
+      // a second ago), so the pin arrives one async round-trip later. Poll
+      // briefly rather than guessing a delay, and give up quietly — the
+      // terrace is saved either way, which is what the toast promises.
+      var tries=0;
+      (function selectWhenDrawn(){
+        var a=annById[r.venue_id];
+        if(a){try{a.selected=true;}catch(e){}return;}
+        if(++tries<12)setTimeout(selectWhenDrawn,250);
+      })();
+      toast("Terrace added — "+r.venue_name+" is on the sun map.");
+    }).catch(function(err){
+      var m=String(err.message||err);
+      $("oErr").textContent=m.indexOf("429")>=0||m.indexOf("rate")>=0
+        ? "That's a lot of reports from here — try again later."
+        : "Couldn't save that — try again.";
+      el.querySelector("span").textContent="Tap to mark a terrace here";
+      el.style.opacity="";el.onclick=function(){markTerrace(r,el);};
+    });
   }
 
   // ---- add via Apple Maps search ----
