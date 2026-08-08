@@ -1415,6 +1415,9 @@ private struct OffersMapView: View {
     /// Last venue-id set handed to SunService, so an unchanged viewport doesn't
     /// re-issue the same request on every pin rebuild.
     @State private var lastSunWanted: [UUID] = []
+    /// Where the Mapbox map is looking, from its onMapIdle. The MapKit
+    /// visibleRegion can't stand in for this — the two maps pan separately.
+    @State private var sunMapCentre: CLLocationCoordinate2D?
     /// How many models carry a price for the selected serving — the header
     /// count and the contribute nudge, without re-walking the pipeline.
     private var pricePinCount: Int { pinModels.lazy.filter { $0.price != nil }.count }
@@ -1456,14 +1459,30 @@ private struct OffersMapView: View {
         }
         pinModels = models
 
-        // THE SUN MAP FOLLOWS THE BEER MAP. Same viewport, same "has a price"
-        // test — any serving, not the selected one, because a bar is on the
-        // beer map whether or not it sells the size you happen to be filtering
-        // by. Capped a little above the pin cap: the Sun map draws GPU sprites
-        // rather than UIViews, so it carries more pins cheaply.
-        let sunWanted = Array(venues.venuesWithAnyBeerPrice
-            .filter(onScreen)
-            .prefix(Self.maxSunPins))
+        // THE SUN MAP FOLLOWS THE BEER MAP: same "has a price" test, any
+        // serving — a bar belongs on the beer map whether or not it sells the
+        // size you happen to be filtering by.
+        //
+        // RANKED BY DISTANCE, then capped. An earlier version took
+        // `.prefix(maxSunPins)` straight off venuesWithAnyBeerPrice, which is
+        // in NAME order — so it picked the first 160 priced bars alphabetically
+        // WORLDWIDE, and only the handful of those that happened to be near you
+        // ever appeared. That is why the Sun map looked far emptier than the
+        // Beer map.
+        //
+        // The origin is the sun map's own centre when we have it: that map pans
+        // independently of the MapKit one, so its viewport is the only thing
+        // that describes what the user is actually looking at.
+        let sunOrigin = sunMapCentre
+            ?? location.location?.coordinate
+            ?? visibleRegion?.center
+            ?? CLLocationCoordinate2D(latitude: 57.7016, longitude: 11.9668)
+        let sLat = sunOrigin.latitude, sLon = sunOrigin.longitude
+        let sunWanted = venues.venuesWithAnyBeerPrice
+            .map { ($0, ($0.lat - sLat) * ($0.lat - sLat) + ($0.lon - sLon) * ($0.lon - sLon)) }
+            .sorted { $0.1 < $1.1 }
+            .prefix(Self.maxSunPins)
+            .map(\.0)
         let key = sunWanted.map(\.id)
         if key != lastSunWanted {
             lastSunWanted = key
@@ -1886,14 +1905,20 @@ private struct OffersMapView: View {
     /// "Sunniest first" means nearby, not everything we happen to have loaded.
     /// Without this the list mixed San Francisco bars with a pinned Gothenburg
     /// one — a nearby list spanning two continents.
-    private var sunNearbyReadings: [SunReading] {
-        let c = sunReference.coord
-        let here = CLLocation(latitude: c.latitude, longitude: c.longitude)
-        return sunReadings.filter { r in
-            here.distance(from: CLLocation(latitude: r.venue.lat,
-                                           longitude: r.venue.lon)) <= 30_000
-        }
-    }
+    /// The readings the Sun map is showing. Formerly this re-filtered to 30 km
+    /// around sunReference — a SECOND, independently derived set, and the same
+    /// mistake that made the Sun and Beer maps disagree.
+    ///
+    /// It read "1 in the sun" while a dozen pins were plainly gold, because
+    /// sunReference is itself derived from readings.first, so the radius was
+    /// measured from a venue that could sit at the edge of the set and cut most
+    /// of it away. Measured ground truth for that screen at 11:00 was 19 of 160
+    /// lit — the pins were right, the header was wrong.
+    ///
+    /// The re-filter is also redundant now: the set handed to SunService is
+    /// already the priced bars nearest the sun map's own centre, capped. What's
+    /// drawn IS what's nearby, so the header counts exactly that.
+    private var sunNearbyReadings: [SunReading] { sunReadings }
 
     /// The place the Sun screen is ABOUT — the venue you searched for, else
     /// wherever you are. Everything on this screen keys off it: the scene's
@@ -1949,7 +1974,21 @@ private struct OffersMapView: View {
             // the PAGE is swiped away: stays loaded, stops drawing. The
             // prewarm window lets a fresh launch load the style + tiles
             // hidden, so the first Sun tap of the session is a fade.
-            rendering: pageActive && (mapMode == .sun || sunPrewarming)
+            rendering: pageActive && (mapMode == .sun || sunPrewarming),
+            onSettled: { centre in
+                // Only when this map is the one on screen: a parked map can
+                // still emit idle events as it warms, and reacting to those
+                // would re-rank the set around a camera nobody is looking at.
+                guard mapMode == .sun else { return }
+                let moved = sunMapCentre.map {
+                    CLLocation(latitude: $0.latitude, longitude: $0.longitude)
+                        .distance(from: CLLocation(latitude: centre.latitude,
+                                                   longitude: centre.longitude)) > 500
+                } ?? true
+                guard moved else { return }
+                sunMapCentre = centre
+                rebuildPinModels()
+            }
         )
         // Skip re-evaluating the Mapbox map when none of ITS inputs changed —
         // this view's body runs on every map-screen invalidation otherwise.

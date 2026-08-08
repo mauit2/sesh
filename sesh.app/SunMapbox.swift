@@ -33,6 +33,10 @@ struct SunMapboxView: View, Equatable {
     /// switching back doesn't reload the style; this stops it drawing frames
     /// meanwhile. See MapRenderGate.
     var rendering: Bool = true
+    /// Called when a pan/zoom settles, with the new centre. This map pans
+    /// independently of the MapKit one, so without it the pin set is chosen
+    /// from a viewport the user is no longer looking at.
+    var onSettled: ((CLLocationCoordinate2D) -> Void)? = nil
 
     @State private var viewport: Viewport
 
@@ -41,7 +45,8 @@ struct SunMapboxView: View, Equatable {
          focus: CLLocationCoordinate2D? = nil,
          pagingLocked: Binding<Bool> = .constant(false),
          locateTick: Int = 0,
-         rendering: Bool = true) {
+         rendering: Bool = true,
+         onSettled: ((CLLocationCoordinate2D) -> Void)? = nil) {
         self.readings = readings
         self.previewAt = previewAt
         self._selectedId = selectedId
@@ -50,6 +55,7 @@ struct SunMapboxView: View, Equatable {
         self._pagingLocked = pagingLocked
         self.locateTick = locateTick
         self.rendering = rendering
+        self.onSettled = onSettled
         // Pitched in so the extrusions read as buildings, not footprints.
         _viewport = State(initialValue: .camera(center: centre, zoom: 15.2,
                                                 bearing: 0, pitch: 55))
@@ -69,6 +75,19 @@ struct SunMapboxView: View, Equatable {
             map
                 .mapStyle(baseStyle)
                 .ornamentOptions(ornaments)
+                // Placed here because onMapIdle is a method on Map, not on
+                // View, and mapStyle/ornamentOptions both return Self — so the
+                // chain is still a Map at this point, while `proxy` is in scope
+                // to read the camera. MapIdle itself carries no camera state.
+                //
+                // Idle, not onCameraChanged: the SDK documents that one as
+                // firing on every rendering frame and warns against touching
+                // @State from it. Idle fires once, when a pan or zoom settles —
+                // exactly when a new pin set is wanted.
+                .onMapIdle { _ in
+                    guard let c = proxy.map?.cameraState.center else { return }
+                    onSettled?(c)
+                }
                 // Tell the paged TabView to stand down while a finger is on
                 // the map. Mapbox handles pan/pinch with its own UIKit
                 // recognisers, and the pager's scroll view was also claiming
@@ -125,6 +144,9 @@ struct SunMapboxView: View, Equatable {
             && a.focus?.longitude == b.focus?.longitude
             && a.selectedId == b.selectedId
             && a.readings == b.readings
+        // onSettled is deliberately excluded: closures aren't Equatable, and
+        // the parent hands us a fresh one every body pass. Comparing it would
+        // make this view always-unequal and defeat the skip.
     }
 
     /// Coordinates aren't Equatable, so drive onChange off a stable string.

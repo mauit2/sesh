@@ -289,7 +289,20 @@
     if(!missing.length){rebuildSunData(want);return;}
     sunPending=true;
     rpc("venue_sun_by_ids",{p_ids:missing.slice(0,300)}).then(function(rows){
-      rows.forEach(function(r){sunHave[r.venue_id]=r;});
+      rows.forEach(function(r){
+        // TENTHS -> DEGREES, once, at the cache boundary. venue_sun stores the
+        // horizon as smallint tenths of a degree (72 bins); the app unpacks it
+        // in SunHorizon(packedTenths:) and this file has to do the same. Skipping
+        // it compares a 41 deg sun against a "654" horizon, so every bar reads as
+        // shade — which is exactly what this page was doing.
+        //
+        // The port's MATHS was verified against the compiled Swift, but with a
+        // synthetic horizon supplied in degrees, so the unit mismatch at the data
+        // boundary slipped through. Algorithm and data contract need separate
+        // checks.
+        r.horizon = r.horizon.map(function(t){return t/10;});
+        sunHave[r.venue_id]=r;
+      });
       if(rows.length&&rows[0].time_zone)sunTz=rows[0].time_zone;
       sunTrackCache=null;
       rebuildSunData(want);
