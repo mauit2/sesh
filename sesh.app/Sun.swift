@@ -12,6 +12,7 @@ import SwiftUI
 import CoreLocation
 import Combine
 import Supabase
+import MapKit
 
 // MARK: - Model
 
@@ -39,6 +40,9 @@ struct SunVenue: Decodable, Identifiable, Equatable {
     let facadeBearing: Int?
     /// How many people have reported it.
     let facadeReports: Int
+    /// True shows the card's "outdoor seating" note; false and nil show
+    /// nothing, so absence of data never reads as absence of a terrace.
+    let outdoorSeating: Bool?
 
     var id: UUID { venueId }
 
@@ -88,6 +92,7 @@ struct SunVenue: Decodable, Identifiable, Equatable {
         case horizonTenths = "horizon"
         case facadeBearing = "facade_bearing"
         case facadeReports = "facade_reports"
+        case outdoorSeating = "outdoor_seating"
     }
 
     init(from decoder: Decoder) throws {
@@ -105,6 +110,7 @@ struct SunVenue: Decodable, Identifiable, Equatable {
         isOverride = try c.decodeIfPresent(Bool.self, forKey: .isOverride) ?? false
         facadeBearing = try c.decodeIfPresent(Int.self, forKey: .facadeBearing)
         facadeReports = try c.decodeIfPresent(Int.self, forKey: .facadeReports) ?? 0
+        outdoorSeating = try c.decodeIfPresent(Bool.self, forKey: .outdoorSeating)
     }
 }
 
@@ -220,7 +226,14 @@ final class SunService: ObservableObject {
     /// Cached by id, so a pan fetches only what is new and a switch back to Sun
     /// fetches nothing at all.
     func setVisible(_ wanted: [Venue]) async {
-        guard !wanted.isEmpty else { return }
+        // An empty set is a real answer — "no terraces near where you're
+        // looking" — and must clear the map. Early-returning here left the
+        // previous city's readings (and its "116 in the sun" header) published
+        // while the user was on another continent.
+        guard !wanted.isEmpty else {
+            if !venues.isEmpty { venues = [] }
+            return
+        }
         let missing = wanted.map(\.id).filter { horizonCache[$0] == nil }
         if !missing.isEmpty {
             struct P: Encodable { let p_ids: [UUID] }
@@ -621,6 +634,17 @@ struct SunPin: View {
                         .font(.system(size: 7.5, weight: .bold, design: .monospaced))
                         .tracking(0.8)
                         .foregroundStyle(Color.cream.opacity(0.6))
+                    // Orthogonal to the facade/override rows below — a bar can
+                    // have both. Only TRUE draws; nil stays silent by design.
+                    // Sized to be readable at a glance, not squinted at: this
+                    // is the fact that decides whether you walk there.
+                    if reading.venue.outdoorSeating == true {
+                        Label("OUTDOOR SEATING", systemImage: "chair.lounge.fill")
+                            .font(.system(size: 10, weight: .black, design: .monospaced))
+                            .tracking(1.1)
+                            .foregroundStyle(Color(red: 1.0, green: 0.79, blue: 0.28))
+                            .padding(.top, 1)
+                    }
                     // Whose clock we're quoting, when it isn't the phone's.
                     if let note = reading.foreignZoneNote {
                         Text(note.uppercased())
@@ -1211,6 +1235,222 @@ struct SunListSheet: View {
 /// evening sun" is the thing the user can check against memory, which makes a
 /// wrong tap obvious before they commit. That mapping flips below the equator,
 /// so it is derived from the venue's own latitude rather than hardcoded.
+/// The Sun map's "+": tell us a bar has outdoor seating, and which way it
+/// faces. Two steps in one sheet — find the bar, then the same compass rose
+/// the facade editor uses. The terrace flag is reported the moment a bar is
+/// picked (that alone is worth having); the facing step can be skipped by a
+/// user who doesn't remember which way the seats point.
+struct AddOutdoorSheet: View {
+    @ObservedObject var venues: VenueService
+    @ObservedObject var sun: SunService
+    let centre: CLLocationCoordinate2D?
+    /// Called with the venue once it's been marked, so the map can pin it.
+    let onAdded: (SunVenue) -> Void
+    let onClose: () -> Void
+
+    @State private var picked: SunVenue?
+    @State private var saving = false
+    @State private var saveFailed = false
+    /// Apple Maps in parallel with our own catalog, unbiased to the user's
+    /// location — so "Atlas Bar Singapore" finds Singapore from Sweden. MapKit
+    /// parses the country straight out of the natural-language query.
+    @StateObject private var world = MapKitVenueSearch()
+
+    private let sunny = Color(red: 1.0, green: 0.79, blue: 0.28)
+
+    var body: some View {
+        Group {
+            if let v = picked {
+                // Facing step. SunFacadeSheet owns the rose and the recompute;
+                // the terrace itself was already reported when the bar was
+                // picked, so skipping here loses nothing.
+                VStack(spacing: 0) {
+                    SunFacadeSheet(venue: v, sun: sun) { onClose() }
+                    Button { onClose() } label: {
+                        Text("SKIP — JUST MARK THE TERRACE")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .tracking(1.1)
+                            .foregroundStyle(Color.cream.opacity(0.55))
+                            .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 8)
+                }
+            } else {
+                searchStep
+            }
+        }
+        // A fresh sheet must not inherit the last sun search's query — it
+        // opened once with "Ce La Vie" already typed and zero results, which
+        // read as broken.
+        .onAppear { sun.clearSearch(); world.clear() }
+        .onDisappear { sun.clearSearch(); world.clear() }
+    }
+
+    private var searchStep: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("ADD OUTDOOR SEATING")
+                .font(.system(size: 11, weight: .black, design: .monospaced))
+                .tracking(1.6)
+                .foregroundStyle(Color.cream.opacity(0.6))
+                .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 4)
+            Text("Which bar has a terrace we're missing? Add the country to look abroad — \"Atlas Bar Singapore\".")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.55))
+                .padding(.horizontal, 20).padding(.bottom, 12)
+
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.cream.opacity(0.45))
+                TextField("Bar name", text: $sun.searchQuery)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .onChange(of: sun.searchQuery) { _, _ in
+                        sun.search(near: centre)
+                        world.search(query: sun.searchQuery,
+                                     origin: centre.map {
+                                         CLLocation(latitude: $0.latitude, longitude: $0.longitude)
+                                     },
+                                     biasToOrigin: false)
+                    }
+                if !sun.searchQuery.isEmpty {
+                    Button { sun.clearSearch(); world.clear() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Color.cream.opacity(0.35))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 11)
+            .background(RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(Color.cream.opacity(0.07)))
+            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+            .padding(.horizontal, 20)
+
+            if saveFailed {
+                Text("Couldn't save that just now — try again in a moment.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color(red: 0.91, green: 0.46, blue: 0.42))
+                    .padding(.horizontal, 20).padding(.top, 12)
+            }
+
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(sun.searchResults) { v in
+                        Button { pick(v) } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: v.outdoorSeating == true
+                                      ? "checkmark.circle.fill" : "chair.lounge.fill")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundStyle(v.outdoorSeating == true
+                                                     ? Color.cream.opacity(0.35) : sunny)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(v.name)
+                                        .font(.system(size: 14.5, weight: .bold, design: .rounded))
+                                        .foregroundStyle(Color.cream)
+                                    if v.outdoorSeating == true {
+                                        Text("Already marked — tap to set which way it faces")
+                                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                                            .foregroundStyle(Color.cream.opacity(0.45))
+                                    }
+                                }
+                                Spacer()
+                                if saving && picked == nil { ProgressView().tint(sunny) }
+                            }
+                            .padding(.horizontal, 14).padding(.vertical, 11)
+                            .background(RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                .fill(Color.cream.opacity(0.05)))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(saving)
+                    }
+
+                    // Anywhere on earth. Shown under our own hits so a bar we
+                    // already know always wins over creating a duplicate.
+                    let known = Set(sun.searchResults.map(\.name))
+                    let abroad = world.results.filter { !known.contains($0.name) }
+                    if !abroad.isEmpty {
+                        Text("ANYWHERE ON EARTH")
+                            .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                            .tracking(1.6)
+                            .foregroundStyle(Color.cream.opacity(0.4))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 10)
+                        ForEach(abroad) { r in
+                            Button { pickWorldwide(r) } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "globe.europe.africa.fill")
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundStyle(Color.cream.opacity(0.5))
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(r.name)
+                                            .font(.system(size: 14.5, weight: .bold, design: .rounded))
+                                            .foregroundStyle(Color.cream)
+                                        let place = [r.address, r.city].compactMap { $0 }
+                                            .joined(separator: ", ")
+                                        if !place.isEmpty {
+                                            Text(place)
+                                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                                .foregroundStyle(Color.cream.opacity(0.45))
+                                        }
+                                    }
+                                    Spacer()
+                                    if saving { ProgressView().tint(sunny) }
+                                }
+                                .padding(.horizontal, 14).padding(.vertical, 11)
+                                .background(RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .fill(Color.cream.opacity(0.05)))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(saving)
+                        }
+                    }
+                }
+                .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 24)
+            }
+        }
+    }
+
+    /// A bar Apple Maps knows but we don't: create the venue, mark the
+    /// terrace, compute its sun, then fall through to the facing step.
+    private func pickWorldwide(_ r: MapKitVenueResult) {
+        saving = true
+        saveFailed = false
+        Task {
+            var made: SunVenue?
+            if let venue = await venues.resolveOrCreateMapKitVenue(r),
+               await venues.reportOutdoorSeating(venueId: venue.id) {
+                made = await sun.prepareAndPin(venueId: venue.id,
+                                               zone: r.mapItem?.timeZone)
+            }
+            await MainActor.run {
+                saving = false
+                if let sv = made { picked = sv; onAdded(sv) } else { saveFailed = true }
+            }
+        }
+    }
+
+    private func pick(_ v: SunVenue) {
+        saving = true
+        saveFailed = false
+        Task {
+            // Already-true bars skip the report (the RPC would no-op anyway)
+            // and go straight to the facing step.
+            var ok = v.outdoorSeating == true
+            if !ok { ok = await venues.reportOutdoorSeating(venueId: v.venueId) }
+            await MainActor.run {
+                saving = false
+                if ok { picked = v; onAdded(v) } else { saveFailed = true }
+            }
+        }
+    }
+}
+
 struct SunFacadeSheet: View {
     let venue: SunVenue
     @ObservedObject var sun: SunService

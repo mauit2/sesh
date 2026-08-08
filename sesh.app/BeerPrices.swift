@@ -126,6 +126,16 @@ struct BeerPriceDetailCard: View {
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(Color.cream.opacity(0.55))
                     }
+                    // Only a TRUE flag renders; false and unknown look identical,
+                    // so a bar with no data is never labelled as terrace-less.
+                    if venue.outdoorSeating == true {
+                        Label("Outdoor seating", systemImage: "sun.max.fill")
+                            .font(.system(size: 14, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.whiskey)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Capsule().fill(Color.whiskey.opacity(0.14)))
+                            .padding(.top, 5)
+                    }
                 }
 
                 if let p = sel {
@@ -497,14 +507,21 @@ struct BeerPriceListSheet: View {
     let serving: BeerServing
     let onSelect: (Venue) -> Void
     @State private var query = ""
+    /// Apple Maps alongside the catalog, unbiased, so "Atlas Bar Singapore"
+    /// jumps continents. Only consulted while the user is typing a query.
+    @StateObject private var world = MapKitVenueSearch()
+    @State private var resolving = false
 
     private var rows: [(venue: Venue, price: VenueBeerPrice)] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         let here = location.location
         return venues.venuesWithBeerPrice(serving: serving)
-            // Only bars near you / in your city — not everywhere.
+            // The BROWSE list is bars near you; a typed SEARCH reaches the
+            // whole catalog — "Bar Etzy" should find Gothenburg from
+            // Stockholm, and "…Berlin" should find Berlin (the worldwide
+            // section below covers bars we hold no price for yet).
             .filter { v in
-                guard let here else { return true }
+                guard q.isEmpty, let here else { return true }
                 let d = CLLocation(latitude: v.lat, longitude: v.lon).distance(from: here)
                 return d <= VenueService.dealsRadiusMeters
             }
@@ -526,15 +543,23 @@ struct BeerPriceListSheet: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.4))
-                    TextField("", text: $query, prompt: Text("Search a bar").foregroundStyle(Color.cream.opacity(0.4)))
+                    TextField("", text: $query,
+                              prompt: Text("Search a bar — add a country to look abroad")
+                                  .foregroundStyle(Color.cream.opacity(0.4)))
                         .font(.system(size: 14, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.cream)
                         .autocorrectionDisabled()
+                        .onChange(of: query) { _, _ in
+                            world.search(query: query, origin: location.location,
+                                         biasToOrigin: false)
+                        }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.cream.opacity(0.05)))
 
-                if list.isEmpty {
+                // Don't declare "no bars match" while the worldwide search is
+                // about to answer right underneath.
+                if list.isEmpty && !(!query.isEmpty && (world.isSearching || !world.results.isEmpty)) {
                     Text(query.isEmpty ? "No \(serving.label) prices yet — add the first."
                                        : "No bars match “\(query)”.")
                         .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -545,11 +570,70 @@ struct BeerPriceListSheet: View {
                     Button { onSelect(entry.venue) } label: { row(entry.venue, entry.price, cheapest) }
                         .buttonStyle(PressScaleStyle())
                 }
+
+                // Bars we hold no price for, from Apple Maps — pick one and the
+                // map flies there; its card is where the first price gets added.
+                let knownNames = Set(list.map(\.venue.name))
+                let abroad = world.results.filter { !knownNames.contains($0.name) }
+                if !query.isEmpty && !abroad.isEmpty {
+                    Text("ANYWHERE ON EARTH · NO PRICE YET")
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .tracking(2)
+                        .foregroundStyle(Color.bronze)
+                        .padding(.top, 10)
+                    ForEach(abroad) { r in
+                        Button {
+                            guard !resolving else { return }
+                            resolving = true
+                            Task {
+                                let v = await venues.resolveOrCreateMapKitVenue(r)
+                                await MainActor.run {
+                                    resolving = false
+                                    if let v { onSelect(v) }
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "globe.europe.africa.fill")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundStyle(Color.cream.opacity(0.5))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(r.name)
+                                        .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                        .foregroundStyle(Color.cream).lineLimit(1)
+                                    let place = [r.address, r.city].compactMap { $0 }
+                                        .joined(separator: ", ")
+                                    if !place.isEmpty {
+                                        Text(place)
+                                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                                            .foregroundStyle(Color.cream.opacity(0.45)).lineLimit(1)
+                                    }
+                                }
+                                Spacer(minLength: 4)
+                                if resolving {
+                                    ProgressView().tint(Color.whiskey)
+                                } else {
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.35))
+                                }
+                            }
+                            .padding(12)
+                            .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color.cream.opacity(0.04)))
+                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                        .disabled(resolving)
+                    }
+                }
             }
             .padding(20)
         }
         .background(Color.ink)
         .preferredColorScheme(.dark)
+        .onDisappear { world.clear() }
     }
 
     private func row(_ v: Venue, _ p: VenueBeerPrice, _ cheapest: Double) -> some View {

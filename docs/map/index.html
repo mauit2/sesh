@@ -66,6 +66,10 @@
   .callout .sub{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;color:var(--bronze);text-transform:uppercase;}
   .callout .big{font-weight:900;font-size:30px;margin:6px 0 2px;letter-spacing:-.01em;}
   .callout .note{font-size:12.5px;color:var(--cream);opacity:.72;margin-top:4px;}
+  /* Rendered only when the venue row says outdoor seating is TRUE — false and
+     unknown draw nothing, so silence never claims a bar has no terrace. */
+  .callout .out{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;color:#ffc947;margin-top:7px;font-weight:700;}
+  .callout .out.no{color:var(--bronze);opacity:.75;font-weight:400;}
 
   .drawer{position:fixed;z-index:1100;top:0;right:0;bottom:0;width:min(360px,90vw);background:var(--ink);border-left:1px solid var(--line);
     transform:translateX(100%);transition:transform .28s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;box-shadow:-12px 0 40px rgba(0,0,0,.5);}
@@ -133,7 +137,7 @@
   <a class="brand" href="/">Sesh<span>.</span></a>
   <span class="count" id="count">loading…</span>
   <div class="spacer"></div>
-  <a class="icon-btn" href="/blogg/" style="text-decoration:none">📊 Ölpriser</a>
+  <a class="icon-btn" href="/blog/" style="text-decoration:none">📰 Beer blog</a>
   <button class="icon-btn" id="listBtn">☰ List</button>
   <button class="icon-btn primary" id="addBtn">＋ Add price</button>
   <div class="seg" id="modeSeg">
@@ -277,7 +281,11 @@
   function sunVenuesInView(){
     var seen={},out=[];
     beerData.forEach(function(r){
-      if(seen[r.venue_id]||!inView(r))return;
+      // TERRACES ONLY: sun on a bar with nowhere to sit outside answers
+      // nothing. Strict ===true — an unchecked bar (null) stays off the sun
+      // map rather than padding it with maybes. Filtering here also means we
+      // never fetch horizons for indoor bars at all.
+      if(seen[r.venue_id]||!inView(r)||r.outdoor!==true)return;
       seen[r.venue_id]=1;
       out.push(r);
     });
@@ -332,7 +340,8 @@
     var list=ws.length?ws.map(function(w){return hhmm(w[0])+"–"+hhmm(w[1]);}).join(" · "):"No direct sun today";
     return '<div class="sub">'+(litNow?"IN THE SUN":"IN SHADE")+' at '+esc($("sunTime").textContent)+'</div><h3>'+esc(r.name)+'</h3>'
       +'<div class="big" style="color:'+(litNow?"#ffc947":"#6b7590")+';font-size:20px">'+(total?durTxt(total)+" of sun today":"—")+'</div>'
-      +'<div class="note">'+esc(list)+'</div>';
+      +'<div class="note">'+esc(list)+'</div>'
+      +outdoorLine(r.outdoor_seating);
   }
 
   // Recolour EXISTING pins for the slider position. The first version tore
@@ -381,10 +390,16 @@
   var qLat = parseFloat(qp.get("lat")), qLon = parseFloat(qp.get("lon"));
   if (!isFinite(qLat) || !isFinite(qLon)) { qLat = qLon = 0; }
   var qCity = (qp.get("city") || "").slice(0, 40);
+  // v = the bar to open, s = the serving it was priced at. Both come from a
+  // price article's table row, so arriving from an article lands on that bar
+  // with its card already open rather than on an anonymous pin.
+  var qVenue = (qp.get("v") || "").slice(0, 40);
+  var qServing = (qp.get("s") || "").slice(0, 6);
+  var deepOpened = false;
 
   function boot(){
     countEl=$("count");msgEl=$("msg");
-    if (qCity) document.title = "Ölpriser i " + qCity + " – Sesh";
+    if (qCity) document.title = "Beer prices in " + qCity + " – Sesh";
     map=new mapkit.Map("map",{colorScheme:mapkit.Map.ColorSchemes.Dark,showsCompass:mapkit.FeatureVisibility.Hidden,
       showsScale:mapkit.FeatureVisibility.Hidden,showsZoomControl:true,showsMapTypeControl:false,isRotationEnabled:false,
       center:new mapkit.Coordinate(qLat||57.70,qLon||11.96),cameraDistance:qLat?4200:9000});
@@ -399,6 +414,9 @@
       },{anchorOffset:new DOMPoint(0,0)});
     };
 
+    // A bar priced only at 50 cl has no pin while the map sits on its 40 cl
+    // default, so honour the serving the link carried before building the chips.
+    if(qServing&&SERVINGS.some(function(x){return x[0]===qServing;}))serving=qServing;
     SERVINGS.forEach(function(s){var b=document.createElement("button");b.textContent=s[1];b.dataset.serving=s[0];if(s[0]===serving)b.className="on";
       b.onclick=function(){serving=s[0];[].forEach.call($("sizes").children,function(c){c.className=c.dataset.serving===serving?"on":"";});render();renderList();};$("sizes").appendChild(b);});
     SERVINGS.forEach(function(s){var b=document.createElement("button");b.textContent=s[1];b.dataset.serving=s[0];if(s[0]===fSize)b.className="on";
@@ -443,7 +461,14 @@
 
   function popupBeer(r,cheap){var pct=r.price/cheap,v=pct<1.05?"Cheapest around":pct<1.25?"Cheap":pct<1.6?"About average":"On the pricey side";
     var rep=r.report_count==1?"1 report":(r.report_count+" reports");
-    return '<div class="sub">'+esc(servingLabel(r.serving))+' · '+esc(rep)+'</div><h3>'+esc(r.venue_name)+'</h3><div class="big" style="color:'+colorFor(r.price,cheap)+'">'+fmt(r.price,r.currency)+'</div><div class="note">'+v+'</div>';}
+    return '<div class="sub">'+esc(servingLabel(r.serving))+' · '+esc(rep)+'</div><h3>'+esc(r.venue_name)+'</h3><div class="big" style="color:'+colorFor(r.price,cheap)+'">'+fmt(r.price,r.currency)+'</div><div class="note">'+v+'</div>'
+      +outdoorLine(r.outdoor);}
+  // true -> bright yes, false -> muted no, null/undefined -> nothing at all:
+  // an unchecked bar must never read as terrace-less.
+  function outdoorLine(v){
+    if(v===true)return '<div class="out">☀ Outdoor seating</div>';
+    if(v===false)return '<div class="out no">✕ No outdoor seating</div>';
+    return '';}
   function popupDeal(d){return '<div class="sub">'+esc(d.venue_name)+'</div><h3>'+esc(d.title)+'</h3>'+(d.description?'<div class="note">'+esc(d.description)+'</div>':'');}
 
   function render(){
@@ -475,6 +500,13 @@
     // A deep link has already framed the city; auto-fitting would immediately
     // zoom back out to every pin and undo it.
     if(!qLat&&layerAnn.length){try{map.showItems(layerAnn,{animate:false,padding:new mapkit.Padding(100,60,60,60),minimumSpan:new mapkit.CoordinateSpan(0.01,0.01)});}catch(e){}}
+    // Open the linked bar's card. Done here rather than at boot because the
+    // annotations only exist after a render, and only ONCE — re-selecting on
+    // every render would reopen the callout each time the user changed filter.
+    if(qVenue&&!deepOpened){
+      var a=annById[qVenue];
+      if(a){deepOpened=true;setTimeout(function(){try{a.selected=true;}catch(e){}},350);}
+    }
   }
 
   function inView(r){var reg=map.region;if(!reg)return true;var c=reg.center,sp=reg.span;

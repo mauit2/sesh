@@ -600,6 +600,9 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
     /// highest value it has seen as its cursor, so a refresh normally returns
     /// zero rows instead of re-sending 2150 venues.
     var updatedAt: Date? = nil
+    /// Tri-state on purpose: true shows the "outdoor seating" note, false AND
+    /// nil both show nothing — an absent note must never read as "no terrace".
+    var outdoorSeating: Bool? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, name, address, city, lat, lon
@@ -611,6 +614,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         case qrToken    = "qr_token"
         case createdAt  = "created_at"
         case updatedAt  = "updated_at"
+        case outdoorSeating = "outdoor_seating"
     }
 
     init(
@@ -670,6 +674,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         // Absent on rows that came from an older cache file; the sync treats a
         // nil cursor as "do a full pull", which is the safe direction.
         updatedAt  = try? c.decodeIfPresent(Date.self, forKey: .updatedAt)
+        outdoorSeating = try? c.decodeIfPresent(Bool.self, forKey: .outdoorSeating)
     }
 
 

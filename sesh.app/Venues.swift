@@ -511,6 +511,26 @@ final class VenueService: ObservableObject {
     /// When prices were last pulled successfully; nil until the first fetch.
     private var lastPricesAt: Date? = nil
 
+    /// Report that a bar has outdoor seating (migration 094). Server-side the
+    /// flag only ever flips TO true — there is no crowd path to unset it — so
+    /// mirroring optimistically here can't diverge from what the server will
+    /// hold. The updated_at trigger delivers the same change to every other
+    /// client through the normal incremental sync.
+    func reportOutdoorSeating(venueId: UUID) async -> Bool {
+        struct P: Encodable { let p_venue: UUID }
+        do {
+            try await supabase.rpc("report_outdoor_seating", params: P(p_venue: venueId))
+                .execute()
+        } catch { return false }
+        if let i = venues.firstIndex(where: { $0.id == venueId }),
+           venues[i].outdoorSeating != true {
+            venues[i].outdoorSeating = true
+            saveCatalogCache()
+            catalogStamp += 1
+        }
+        return true
+    }
+
     /// This venue's price for a specific serving, if reported.
     func beerPrice(for venue: Venue, serving: BeerServing) -> VenueBeerPrice? {
         beerPricesByVenue[venue.id]?.first { $0.serving == serving.rawValue }
@@ -837,7 +857,7 @@ final class VenueService: ObservableObject {
             // which the decoder ignored but the network and parser still paid
             // for — about a third of the venue payload.
             let pageSize = 1000
-            let cols = "id,name,address,city,lat,lon,is_featured,source,external_id,mapkit_id,tier,qr_token,created_at,updated_at"
+            let cols = "id,name,address,city,lat,lon,is_featured,source,external_id,mapkit_id,tier,qr_token,created_at,updated_at,outdoor_seating"
 
             // INCREMENTAL when we already hold a catalog and a cursor, and the
             // last full pull is recent enough to trust for deletions. The whole
@@ -1420,6 +1440,8 @@ private struct OffersMapView: View {
     @State private var sunMapCentre: CLLocationCoordinate2D?
     /// The venue whose seating direction is being corrected.
     @State private var facadeEdit: SunVenue?
+    /// The sun map's "+" flow: report a terrace + its facing.
+    @State private var addOutdoorOpen = false
     /// How many models carry a price for the selected serving — the header
     /// count and the contribute nudge, without re-walking the pipeline.
     private var pricePinCount: Int { pinModels.lazy.filter { $0.price != nil }.count }
@@ -1481,6 +1503,18 @@ private struct OffersMapView: View {
             ?? CLLocationCoordinate2D(latitude: 57.7016, longitude: 11.9668)
         let sLat = sunOrigin.latitude, sLon = sunOrigin.longitude
         let sunWanted = venues.venuesWithAnyBeerPrice
+            // TERRACES ONLY. Sun on a bar with nowhere to sit outside answers
+            // nothing, so the sun map draws just the bars flagged
+            // outdoor_seating = true. Strict == true on purpose: an unchecked
+            // bar (nil) stays off this map until someone confirms the terrace,
+            // rather than padding the map with maybes.
+            .filter { $0.outdoorSeating == true }
+            // Same "here means here" cutoff as the beer pins: ranking by
+            // distance alone would happily fill the set with bars 8000 km away
+            // when the user is on another continent, and the header would count
+            // them as if they were nearby.
+            .filter { abs($0.lat - sLat) <= Self.fallbackBoxLat
+                   && abs($0.lon - sLon) <= Self.fallbackBoxLon }
             .map { ($0, ($0.lat - sLat) * ($0.lat - sLat) + ($0.lon - sLon) * ($0.lon - sLon)) }
             .sorted { $0.1 < $1.1 }
             .prefix(Self.maxSunPins)
@@ -1497,11 +1531,27 @@ private struct OffersMapView: View {
     /// Is this venue inside (a padded version of) what's on screen?
     /// Padding means panning reveals pins that are already there rather than
     /// popping them in at the edge.
+    ///
+    /// NO REGION NO LONGER MEANS NO FILTER. visibleRegion is nil at launch and
+    /// after every mode switch (deliberately, so a stale viewport can't blank
+    /// the map), and this used to fail open to the entire catalog — which is
+    /// how a phone in San Francisco read "120+ bars · 559 more here · 116 in
+    /// the sun", every one of them in Sweden. It now fails open to a metro-
+    /// sized box (~130 km) around the best reference we have, so "here" always
+    /// means here; a user with no venues within that box gets the empty states,
+    /// which is the truth.
+    private static let fallbackBoxLat = 1.2   // degrees, ~130 km
+    private static let fallbackBoxLon = 1.8   // wider: lon degrees shrink north
     private func onScreen(_ v: Venue) -> Bool {
-        guard let r = visibleRegion else { return true }
-        let padLat = r.span.latitudeDelta, padLon = r.span.longitudeDelta
-        return abs(v.lat - r.center.latitude) <= padLat
-            && abs(v.lon - r.center.longitude) <= padLon
+        if let r = visibleRegion {
+            let padLat = r.span.latitudeDelta, padLon = r.span.longitudeDelta
+            return abs(v.lat - r.center.latitude) <= padLat
+                && abs(v.lon - r.center.longitude) <= padLon
+        }
+        let ref = location.location?.coordinate
+            ?? CLLocationCoordinate2D(latitude: 57.7016, longitude: 11.9668)
+        return abs(v.lat - ref.latitude) <= Self.fallbackBoxLat
+            && abs(v.lon - ref.longitude) <= Self.fallbackBoxLon
     }
 
     private func withinRadius(_ list: [Venue]) -> [Venue] {
@@ -1776,6 +1826,27 @@ private struct OffersMapView: View {
             .presentationDetents([.medium])
             .presentationBackground(Color.ink)
         }
+        .sheet(isPresented: $addOutdoorOpen) {
+            AddOutdoorSheet(
+                venues: venues, sun: sun,
+                centre: location.location?.coordinate ?? sunMapCentre,
+                onAdded: { v in
+                    // Pin it so the new terrace is on the map immediately even
+                    // if the bar has no beer price yet (the automatic set is
+                    // priced ∩ outdoor). The catalog flag was already flipped
+                    // locally, so the next rebuild includes it organically too.
+                    sun.pinned = v
+                    selectedSunId = v.id
+                    sunFocus = v.coordinate
+                },
+                onClose: {
+                    addOutdoorOpen = false
+                    lastSunWanted = []
+                    rebuildPinModels()
+                })
+            .presentationDetents([.large])
+            .presentationBackground(Color.ink)
+        }
         .sheet(isPresented: $sunListOpen) {
             SunListSheet(
                 readings: sunListReadings ?? [],
@@ -1843,6 +1914,9 @@ private struct OffersMapView: View {
                     // wired to beer prices, so the obvious place to look up a
                     // bar's sunlight silently searched for its beer price.
                     circleButton("magnifyingglass") { sunListOpen = true }
+                    // The sun map draws terraces only, so its "+" adds one:
+                    // mark a bar as having outdoor seating + which way it faces.
+                    circleButton("plus") { addOutdoorOpen = true }
                 } else {
                     circleButton("magnifyingglass") { priceListOpen = true }
                     circleButton("plus") { submitPreset = nil; submitOpen = true }
