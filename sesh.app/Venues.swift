@@ -1412,6 +1412,9 @@ private struct OffersMapView: View {
     @State private var pinModels: [MapPinModel] = []
     /// Priced bars in view the cap held back — the zoom hint's number.
     @State private var hiddenPrices = 0
+    /// Last venue-id set handed to SunService, so an unchanged viewport doesn't
+    /// re-issue the same request on every pin rebuild.
+    @State private var lastSunWanted: [UUID] = []
     /// How many models carry a price for the selected serving — the header
     /// count and the contribute nudge, without re-walking the pipeline.
     private var pricePinCount: Int { pinModels.lazy.filter { $0.price != nil }.count }
@@ -1452,7 +1455,23 @@ private struct OffersMapView: View {
             ))
         }
         pinModels = models
+
+        // THE SUN MAP FOLLOWS THE BEER MAP. Same viewport, same "has a price"
+        // test — any serving, not the selected one, because a bar is on the
+        // beer map whether or not it sells the size you happen to be filtering
+        // by. Capped a little above the pin cap: the Sun map draws GPU sprites
+        // rather than UIViews, so it carries more pins cheaply.
+        let sunWanted = Array(venues.venuesWithAnyBeerPrice
+            .filter(onScreen)
+            .prefix(Self.maxSunPins))
+        let key = sunWanted.map(\.id)
+        if key != lastSunWanted {
+            lastSunWanted = key
+            Task { await sun.setVisible(sunWanted) }
+        }
     }
+
+    private static let maxSunPins = 160
 
     /// Is this venue inside (a padded version of) what's on screen?
     /// Padding means panning reveals pins that are already there rather than
@@ -1666,12 +1685,12 @@ private struct OffersMapView: View {
             //   3. TILES need the render loop, so the map draws hidden for a
             //      few seconds — but only after MapKit's camera has settled.
             //      Doing this on mount is what made the visible map go grey.
-            let centre = location.location?.coordinate
-                ?? CLLocationCoordinate2D(latitude: 57.7016, longitude: 11.9668)
             sunEverShown = true                 // style begins loading, parked
-            if sun.venues.isEmpty {
-                await sun.load(near: centre)    // data, in parallel with MapKit
-            }
+            // Sun DATA now comes from the beer set, which rebuildPinModels()
+            // maintains — so this only has to make sure the pin models exist.
+            // If the catalog is still in flight, catalogStamp fires the rebuild
+            // (and with it the sun fetch) the moment it lands.
+            rebuildPinModels()
             // Wait for the visible map, with a ceiling so a camera that never
             // reports (no fix, no interaction) can't strand the warm-up.
             for _ in 0..<40 where !mapKitPainted {
@@ -1721,12 +1740,10 @@ private struct OffersMapView: View {
             // search), every pin tests as off-screen and the map looks empty.
             // nil means "don't filter yet", so it fails open instead.
             visibleRegion = nil
+            // rebuildPinModels also refreshes the Sun map's venue set, so no
+            // separate fetch on mode entry: Sun is already populated with the
+            // same bars the Beer map was showing.
             rebuildPinModels()
-            guard mode == .sun, sun.venues.isEmpty else { return }
-            Task {
-                await sun.load(near: location.location?.coordinate
-                    ?? CLLocationCoordinate2D(latitude: 57.7016, longitude: 11.9668))
-            }
         }
         .sheet(isPresented: $sunListOpen) {
             SunListSheet(

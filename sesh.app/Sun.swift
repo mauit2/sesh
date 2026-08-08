@@ -172,7 +172,9 @@ struct SunReading: Identifiable, Equatable {
 
 @MainActor
 final class SunService: ObservableObject {
-    @Published private(set) var venues: [SunVenue] = []
+    @Published private(set) var venues: [SunVenue] = [] {
+        didSet { rebuildReadings() }
+    }
     @Published private(set) var loading = false
     /// The moment being previewed — "now", or wherever the slider was dragged.
     /// Rebuilding is cheap here because it no-ops unless the previewed time
@@ -182,6 +184,55 @@ final class SunService: ObservableObject {
     }
 
     private var lastFetchCentre: CLLocationCoordinate2D?
+    /// Horizons already fetched, keyed by venue id. The visible set is driven
+    /// by the map (see setVisible), so panning only ever costs the venues that
+    /// are newly on screen.
+    private var horizonCache: [UUID: SunVenue] = [:]
+
+    /// THE SUN MAP'S PINS ARE THE BEER MAP'S PINS.
+    ///
+    /// The caller passes the venues the Beer map would draw — priced bars in
+    /// view — and this fills in their horizons and rebuilds the readings from
+    /// exactly that set. Previously the map asked "what venue_sun rows are
+    /// within 25 km of here", which produced a different, independently-derived
+    /// set that drifted from the Beer map and, worse, never followed a pan.
+    ///
+    /// Cached by id, so a pan fetches only what is new and a switch back to Sun
+    /// fetches nothing at all.
+    func setVisible(_ wanted: [Venue]) async {
+        guard !wanted.isEmpty else { return }
+        let missing = wanted.map(\.id).filter { horizonCache[$0] == nil }
+        if !missing.isEmpty {
+            struct P: Encodable { let p_ids: [UUID] }
+            if let rows: [SunVenue] = try? await supabase
+                .rpc("venue_sun_by_ids", params: P(p_ids: missing))
+                .execute().value {
+                for r in rows { horizonCache[r.venueId] = r }
+            }
+        }
+        let next = wanted.compactMap { horizonCache[$0.id] }
+        // Identity check before publishing: this is called on every pin rebuild
+        // and an unchanged set must not invalidate the map.
+        if next.map(\.venueId) != venues.map(\.venueId) {
+            venues = next
+        }
+        // Venues with no horizon yet (freshly added bars) get one computed.
+        let unresolved = wanted.filter { horizonCache[$0.id] == nil }
+        if !unresolved.isEmpty {
+            Task { [weak self] in await self?.warmIds(unresolved.prefix(4).map(\.id)) }
+        }
+    }
+
+    /// Kick the Edge Function for venues that have no stored horizon. Capped
+    /// hard — each call fetches nine Mapbox tiles and ray-casts twelve facades.
+    private func warmIds(_ ids: [UUID]) async {
+        for id in ids {
+            struct B: Encodable { let venue_id: String }
+            _ = try? await supabase.functions.invoke(
+                "sun-horizon", options: .init(body: B(venue_id: id.uuidString))
+            ) as Data?
+        }
+    }
 
     /// Fetch horizons around a coordinate, then nudge the Edge Function to
     /// compute any venues nearby that don't have one yet (fire and forget —

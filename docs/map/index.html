@@ -262,25 +262,54 @@
   function hhmm(ms){var f=hhmmCache[sunTz]||(hhmmCache[sunTz]=new Intl.DateTimeFormat("sv-SE",{timeZone:sunTz,hour:"2-digit",minute:"2-digit"}));return f.format(new Date(ms));}
   function durTxt(ms){var h=Math.floor(ms/3600000),m=Math.round(ms%3600000/60000);return h?(h+"h "+(m?m+"m":"")).trim():m+"m";}
 
-  function sunRefetchIfMoved(){
-    if(mode!=="sun")return;var c=map.center;
-    if(sunFetchedAt&&hav(sunFetchedAt.lat,sunFetchedAt.lon,c.latitude,c.longitude)<10000)return;
-    fetchSun(c.latitude,c.longitude);
+  // THE SUN MAP SHOWS THE BEER MAP'S BARS. beerData already lists every bar
+  // with a reported price; all the Sun map needs is their horizons, fetched by
+  // id for whatever is in view.
+  //
+  // The previous version asked venue_sun_map for a fixed 25 km around
+  // map.center, which was badly wrong here: render() auto-fits the Beer map to
+  // ALL pins, so the centre ends up near the centroid of every priced venue —
+  // rural Ostergotland — and there are ZERO priced bars within 25 km of it.
+  // That is why the Sun map showed only a couple of bars.
+  var sunHave={};                       // venue_id -> horizon row
+  var sunPending=false;
+  function sunVenuesInView(){
+    var seen={},out=[];
+    beerData.forEach(function(r){
+      if(seen[r.venue_id]||!inView(r))return;
+      seen[r.venue_id]=1;
+      out.push(r);
+    });
+    return out.slice(0,300);
   }
-  function fetchSun(lat,lon){
-    sunFetchedAt={lat:lat,lon:lon};
-    rpc("venue_sun_map",{p_lat:lat,p_lon:lon,p_radius_m:25000,p_limit:200}).then(function(rows){
-      var seen={};sunData.forEach(function(r){seen[r.venue_id]=1;});
-      rows.forEach(function(r){if(!seen[r.venue_id])sunData.push(r);});
+  function fetchSunForView(){
+    if(sunPending)return;
+    var want=sunVenuesInView();
+    var missing=want.filter(function(r){return !sunHave[r.venue_id];}).map(function(r){return r.venue_id;});
+    if(!missing.length){rebuildSunData(want);return;}
+    sunPending=true;
+    rpc("venue_sun_by_ids",{p_ids:missing.slice(0,300)}).then(function(rows){
+      rows.forEach(function(r){sunHave[r.venue_id]=r;});
       if(rows.length&&rows[0].time_zone)sunTz=rows[0].time_zone;
       sunTrackCache=null;
-      if(mode==="sun")render();
-    }).catch(function(e){console.error(e);});
+      rebuildSunData(want);
+    }).catch(function(e){console.error(e);}).finally(function(){sunPending=false;});
   }
+  function rebuildSunData(want){
+    sunData=want.map(function(r){return sunHave[r.venue_id];}).filter(Boolean);
+    if(mode==="sun")render();
+  }
+  function sunRefetchIfMoved(){ if(mode==="sun")fetchSunForView(); }
   function sunNowStep(){var mid=localMidnight(sunTz,Date.now());return Math.min(287,Math.max(0,Math.floor((Date.now()-mid)/300000)));}
   function track(){
-    if(!sunTrackCache){var ref=sunFetchedAt||{lat:map.center.latitude,lon:map.center.longitude};
-      sunTrackCache=sunTrack(sunTz,Date.now(),ref.lat,ref.lon);}
+    if(!sunTrackCache){
+      // One day-track per view, sampled at the centre of the bars actually on
+      // screen rather than the map centre — within a city the sun's position
+      // varies by far less than one 5-degree horizon bin.
+      var n=sunData.length,la=0,lo=0;
+      if(n){sunData.forEach(function(r){la+=r.lat;lo+=r.lon;});la/=n;lo/=n;}
+      else {la=map.center.latitude;lo=map.center.longitude;}
+      sunTrackCache=sunTrack(sunTz,Date.now(),la,lo);}
     return sunTrackCache;
   }
   function popupSun(r,litNow){
@@ -325,7 +354,7 @@
 
   var map,search,layerAnn=[],annById={},tempAnn=null;
   var beerData=[],dealData=[],mode="prices",serving="40",addLoc=null,fSize="40",searchTimer;
-  var sunData=[],sunFetchedAt=null,sunStep=null,sunTz="Europe/Stockholm",sunTrackCache=null;
+  var sunData=[],sunStep=null,sunTz="Europe/Stockholm",sunTrackCache=null;
   var $=function(id){return document.getElementById(id);};
   var countEl,msgEl;
 
@@ -356,7 +385,7 @@
     $("modeSeg").addEventListener("click",function(e){var btn=e.target.closest("button");if(!btn)return;mode=btn.dataset.mode;
       [].forEach.call(this.children,function(c){c.className=c.dataset.mode===mode?"on":"";});$("sizes").className=mode==="prices"?"sizes":"sizes hide";$("legend").style.display=mode==="prices"?"":"none";
       $("sunbar").style.display=mode==="sun"?"block":"none";
-      if(mode==="sun"&&!sunData.length){var c=map.center;fetchSun(c.latitude,c.longitude);}
+      if(mode==="sun")fetchSunForView();
       render();});
     $("sunSlider").addEventListener("input",function(){sunStep=+this.value;retint();});
     $("sunNow").onclick=function(){sunStep=null;retint();};
