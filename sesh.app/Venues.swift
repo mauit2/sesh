@@ -1418,6 +1418,8 @@ private struct OffersMapView: View {
     /// Where the Mapbox map is looking, from its onMapIdle. The MapKit
     /// visibleRegion can't stand in for this — the two maps pan separately.
     @State private var sunMapCentre: CLLocationCoordinate2D?
+    /// The venue whose seating direction is being corrected.
+    @State private var facadeEdit: SunVenue?
     /// How many models carry a price for the selected serving — the header
     /// count and the contribute nudge, without re-walking the pipeline.
     private var pricePinCount: Int { pinModels.lazy.filter { $0.price != nil }.count }
@@ -1764,6 +1766,16 @@ private struct OffersMapView: View {
             // same bars the Beer map was showing.
             rebuildPinModels()
         }
+        .sheet(item: $facadeEdit) { v in
+            SunFacadeSheet(venue: v, sun: sun) {
+                facadeEdit = nil
+                // Force the next pass to refetch this venue's horizon.
+                lastSunWanted = []
+                rebuildPinModels()
+            }
+            .presentationDetents([.medium])
+            .presentationBackground(Color.ink)
+        }
         .sheet(isPresented: $sunListOpen) {
             SunListSheet(
                 readings: sunNearbyReadings,
@@ -1988,7 +2000,8 @@ private struct OffersMapView: View {
                 guard moved else { return }
                 sunMapCentre = centre
                 rebuildPinModels()
-            }
+            },
+            onEditFacade: { v in facadeEdit = v }
         )
         // Skip re-evaluating the Mapbox map when none of ITS inputs changed —
         // this view's body runs on every map-screen invalidation otherwise.

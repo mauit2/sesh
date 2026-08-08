@@ -464,6 +464,42 @@ final class SunService: ObservableObject {
 
     /// Call after anything that changes venues, the pin, or the previewed time.
     func refreshReadings() { rebuildReadings() }
+
+    // MARK: - User corrections
+
+    @Published var reportingFacade = false
+    @Published var facadeError: String?
+
+    /// Tell the server which way a venue's seating faces, then recompute its
+    /// horizon from that side.
+    ///
+    /// This is NOT an override of the model — it feeds it. The building still
+    /// blocks whatever it blocks; we just stop guessing the one fact vector
+    /// tiles cannot carry (where the terrace is), which the sunniest-facade
+    /// heuristic was getting wrong in an optimistic direction.
+    func reportFacade(venueId: UUID, bearing: Int) async -> Bool {
+        reportingFacade = true
+        facadeError = nil
+        defer { reportingFacade = false }
+        struct P: Encodable { let p_venue: UUID; let p_bearing: Int }
+        do {
+            _ = try await supabase
+                .rpc("report_sun_facade", params: P(p_venue: venueId, p_bearing: bearing))
+                .execute()
+        } catch {
+            facadeError = "Couldn't save that — try again."
+            return false
+        }
+        // Recompute with the new bearing. Awaited, unlike the background warms:
+        // the user is watching for their correction to take effect.
+        struct B: Encodable { let venue_id: String }
+        _ = try? await supabase.functions.invoke(
+            "sun-horizon", options: .init(body: B(venue_id: venueId.uuidString))
+        ) as Data?
+        // Drop the cached horizon so the next visible-set pass refetches it.
+        horizonCache[venueId] = nil
+        return true
+    }
 }
 
 // MARK: - Map annotation
@@ -474,6 +510,10 @@ struct SunPin: View {
     let reading: SunReading
     let selected: Bool
     let onTap: () -> Void
+    /// Shown only while selected: lets the person standing there tell us which
+    /// way the seating faces, which is the one input the building model can't
+    /// derive for itself.
+    var onEdit: (() -> Void)? = nil
     @State private var glowing = false
 
     private var tint: Color {
@@ -545,6 +585,18 @@ struct SunPin: View {
                             .font(.system(size: 6.5, weight: .bold, design: .monospaced))
                             .tracking(0.9)
                             .foregroundStyle(Color.cream.opacity(0.4))
+                    }
+                    if let onEdit {
+                        Button(action: onEdit) {
+                            Text(reading.venue.isOverride ? "EDIT SPOT" : "WRONG SPOT?")
+                                .font(.system(size: 7, weight: .black, design: .monospaced))
+                                .tracking(1)
+                                .foregroundStyle(Color.ink)
+                                .padding(.horizontal, 7).padding(.vertical, 3)
+                                .background(Capsule().fill(tint.opacity(0.9)))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 2)
                     }
                     if reading.venue.isOverride {
                         Text("SET BY HAND")
@@ -1066,5 +1118,98 @@ struct SunListSheet: View {
     private static func hours(_ t: TimeInterval) -> String {
         let m = Int(t / 60)
         return m >= 60 ? "\(m / 60)h\(String(format: "%02d", m % 60))" : "\(m)m"
+    }
+}
+
+/// "Which way does the seating face?" — the one fact the building model can't
+/// derive from vector tiles, asked of the person who is actually standing there.
+///
+/// Eight compass points rather than a free dial: nobody knows their terrace
+/// faces 247°, and the facade candidates are spaced ~12 m apart around the
+/// footprint anyway, so finer input would be false precision.
+struct SunFacadeSheet: View {
+    let venue: SunVenue
+    @ObservedObject var sun: SunService
+    let onDone: () -> Void
+
+    @State private var picked: Int?
+
+    private static let points: [(String, Int)] = [
+        ("N", 0), ("NE", 45), ("E", 90), ("SE", 135),
+        ("S", 180), ("SW", 225), ("W", 270), ("NW", 315),
+    ]
+
+    var body: some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 4) {
+                Text("WHERE DO YOU SIT?")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.bronze)
+                Text(venue.name)
+                    .font(.system(size: 19, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .multilineTextAlignment(.center)
+            }
+            Text("We work out the sun from the buildings around each bar, but we can't tell which side the seats are on — so we guess the sunniest one. Point us the right way and we'll redo it.")
+                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.62))
+                .multilineTextAlignment(.center)
+                .lineSpacing(2)
+
+            LazyVGrid(columns: Array(repeating: GridItem(spacing: 8), count: 4), spacing: 8) {
+                ForEach(Self.points, id: \.1) { p in
+                    let on = picked == p.1
+                    Button { picked = p.1 } label: {
+                        VStack(spacing: 2) {
+                            Image(systemName: "location.north.fill")
+                                .font(.system(size: 13, weight: .black))
+                                .rotationEffect(.degrees(Double(p.1)))
+                            Text(p.0)
+                                .font(.system(size: 10, weight: .black, design: .monospaced))
+                        }
+                        .foregroundStyle(on ? Color.ink : Color.cream.opacity(0.8))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(on ? Color(red: 1.0, green: 0.79, blue: 0.28)
+                                     : Color.cream.opacity(0.06)))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if let e = sun.facadeError {
+                Text(e).font(.system(size: 12, weight: .semibold)).foregroundStyle(Color(red: 0.91, green: 0.46, blue: 0.42))
+            }
+
+            Button {
+                guard let b = picked else { return }
+                Task {
+                    if await sun.reportFacade(venueId: venue.venueId, bearing: b) { onDone() }
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    if sun.reportingFacade { ProgressView().tint(Color.ink) }
+                    Text(sun.reportingFacade ? "REDOING THE SUN…" : "THAT'S THE SIDE")
+                        .font(.system(size: 13, weight: .black, design: .monospaced))
+                        .tracking(1.1)
+                }
+                .foregroundStyle(Color.ink)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(red: 1.0, green: 0.79, blue: 0.28)))
+            }
+            .buttonStyle(.plain)
+            .disabled(picked == nil || sun.reportingFacade)
+            .opacity(picked == nil ? 0.4 : 1)
+
+            Text("Recomputed from real building heights, not from your answer — you're only telling us where to stand.")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.38))
+                .multilineTextAlignment(.center)
+        }
+        .padding(20)
     }
 }

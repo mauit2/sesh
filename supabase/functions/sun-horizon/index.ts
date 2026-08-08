@@ -9,18 +9,21 @@
 // Now we cast a ray every RAY_STEP degrees and intersect it with every wall
 // segment: gap-free by construction, and exact.
 //
-// WHERE WE STAND — the sunniest facade. A venue's pin normally sits INSIDE its
-// building, and a point inside a building sees no sky at all, so the pin itself
-// is not a usable vantage point. But standing 2.5 m from a long wall blocks
-// half the sky, so the answer depends entirely on WHICH facade you pick — and
-// picking the nearest one is a coin flip. It made a courtyard venue read as "no
-// sun at all" purely because its pin sat closest to the north wall. So we try
-// candidate points spread around the host footprint and keep the one most open
-// toward the equator: a venue with a terrace puts it where the sun is, so this
-// is both the physically meaningful answer and the useful one ("can I sit in
-// the sun here?"). The host building is kept in the geometry throughout, so it
-// blocks the sky behind you — and for a venue on an inner courtyard the
-// enclosing walls stay in the model.
+// WHERE WE STAND — the sunniest facade, unless a user tells us otherwise. A
+// venue's pin normally sits INSIDE its building, and a point inside a building
+// sees no sky at all, so the pin itself is not a usable vantage point. But
+// standing 2.5 m from a long wall blocks half the sky, so the answer depends
+// entirely on WHICH facade you pick — and picking the nearest one is a coin
+// flip. It made a courtyard venue read as "no sun at all" purely because its
+// pin sat closest to the north wall. So we try candidate points spread around
+// the host footprint and keep the one most open toward the equator.
+//
+// That heuristic is OPTIMISTIC by construction: it chooses the sunniest side of
+// the building, which need not be the side the seats are on. Migration 090 lets
+// users report the bearing their seating faces, and when we have one we cast
+// from the candidate nearest THAT direction instead. The geometry is unchanged
+// either way — the building blocks what it blocks; the report only settles the
+// one fact vector tiles cannot carry.
 //
 // HEIGHT SOURCE — Mapbox vector tiles, OSM as fallback. We read the raw .mvt
 // rather than the Tilequery API because Tilequery only returns a representative
@@ -296,7 +299,21 @@ function equatorFacingBlock(hz: number[], lat: number): number {
   return n ? sum / n : 0;
 }
 
-function computeHorizon(lat: number, lon: number, prints: Footprint[]) {
+/// Angular distance between two compass bearings, 0-180.
+///
+/// The wrap has to be handled: 350 and 10 degrees are 20 apart, not 340. Signed
+/// difference folded into -180..180, then absolute. Getting this inside out
+/// (returning 180 - gap) would pick the facade pointing exactly AWAY from the
+/// reported one, which is worse than not asking.
+function bearingGap(a: number, b: number): number {
+  const d = ((a - b + 180) % 360 + 360) % 360 - 180;
+  return Math.abs(d);
+}
+
+function computeHorizon(
+  lat: number, lon: number, prints: Footprint[],
+  preferBearing: number | null = null,
+) {
   const known = prints
     .map((p) => p.height)
     .filter((h): h is number => h !== null)
@@ -343,12 +360,32 @@ function computeHorizon(lat: number, lon: number, prints: Footprint[]) {
     ? facadeCandidates(hosts)
     : [[0, 0]];
 
+  // WHICH VANTAGE POINT WINS.
+  //
+  // Without a reported bearing we keep the old heuristic: the facade most open
+  // toward the equator. It is a guess, and a systematically OPTIMISTIC one —
+  // it picks the sunniest side of the building, which need not be the side
+  // people actually sit on. Bar Etzy came out facing east (morning sun, dead
+  // afternoon) on exactly that basis.
+  //
+  // With a bearing from users (migration 090), we cast from the candidate
+  // nearest that direction instead. The geometry is unchanged — the building
+  // still blocks what it blocks — we simply stop guessing the one fact the
+  // tiles cannot tell us: where the terrace is.
   let bestHz: number[] | null = null;
   let bestScore = Infinity;
   let bestAt: [number, number] = [0, 0];
   for (const [ox, oy] of candidates) {
     const hz = horizonAt(walls, ox, oy);
-    const score = equatorFacingBlock(hz, lat);
+    let score: number;
+    if (preferBearing != null) {
+      // Compass bearing of this candidate from the venue centre: x is east,
+      // y is north. Lower is better, so score IS the angular gap.
+      const bearing = ((Math.atan2(ox, oy) * 180 / Math.PI) % 360 + 360) % 360;
+      score = bearingGap(bearing, preferBearing);
+    } else {
+      score = equatorFacingBlock(hz, lat);
+    }
     if (score < bestScore) { bestScore = score; bestHz = hz; bestAt = [ox, oy]; }
   }
   const horizon = bestHz ?? new Array(BINS).fill(0);
@@ -371,6 +408,7 @@ function computeHorizon(lat: number, lon: number, prints: Footprint[]) {
     withHeight: usedWithHeight, heightsInTiles: known.length, hostSkipped: hosts.length, walls: walls.length,
     movedM: Math.round(Math.hypot(bestAt[0], bestAt[1]) * 10) / 10,
     facades: candidates.length,
+    facadeBearingUsed: preferBearing,
   };
 }
 
@@ -397,6 +435,7 @@ async function processVenue(
   venue: { id: string; lat: number; lon: number },
   token: string | undefined,
   cache: TileCache = new Map(),
+  preferBearing: number | null = null,
 ) {
   let prints: Footprint[] = [];
   let source = "osm";
@@ -414,13 +453,15 @@ async function processVenue(
     source = "osm";
   }
 
-  const r = computeHorizon(venue.lat, venue.lon, prints);
+  const r = computeHorizon(venue.lat, venue.lon, prints, preferBearing);
   const { error } = await admin.from("venue_sun").upsert({
     venue_id: venue.id,
     horizon: r.horizon,
     confidence: r.confidence,
     source,
     computed_at: new Date().toISOString(),
+    // facade_bearing is deliberately absent: PostgREST's upsert only SETs the
+    // columns provided, so a user-reported bearing survives a recompute.
   }, { onConflict: "venue_id" });
   if (error) throw new Error("save_failed: " + error.message);
   return { ...r, source, note };
@@ -437,10 +478,20 @@ async function runBatch(
   const CONCURRENCY = 4;
   // Shared across the whole batch — see TileCache.
   const cache: TileCache = new Map();
+  // Reported facades for the whole batch in ONE query rather than per venue.
+  const bearings = new Map<string, number>();
+  {
+    const { data } = await admin.from("venue_sun")
+      .select("venue_id,facade_bearing")
+      .in("venue_id", venues.map((v) => v.id));
+    for (const r of (data ?? []) as { venue_id: string; facade_bearing: number | null }[]) {
+      if (r.facade_bearing != null) bearings.set(r.venue_id, r.facade_bearing);
+    }
+  }
   for (let i = 0; i < venues.length; i += CONCURRENCY) {
     const slice = venues.slice(i, i + CONCURRENCY);
     const out = await Promise.allSettled(
-      slice.map((v) => processVenue(admin, v, token, cache)),
+      slice.map((v) => processVenue(admin, v, token, cache, bearings.get(v.id) ?? null)),
     );
     for (const r of out) {
       if (r.status === "fulfilled") ok++;
@@ -584,12 +635,16 @@ Deno.serve(async (req: Request) => {
   if (vErr || !venue) return json({ error: "venue_not_found" }, 404);
 
   try {
-    const r = await processVenue(admin, venue, token);
+    const { data: fb } = await admin.from("venue_sun")
+      .select("facade_bearing").eq("venue_id", venueId).maybeSingle();
+    const bearing = (fb as { facade_bearing: number | null } | null)?.facade_bearing ?? null;
+    const r = await processVenue(admin, venue, token, new Map(), bearing);
     return json({
       ok: true, source: r.source, buildings: r.buildings,
       with_height: r.withHeight, confidence: r.confidence,
       hosts: r.hostSkipped, moved_m: r.movedM, facades: r.facades,
       walls: r.walls, note: r.note,
+      facade_bearing_used: r.facadeBearingUsed,
     }, 200);
   } catch (e) {
     return json({ error: String(e) }, 503);

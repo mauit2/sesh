@@ -37,6 +37,8 @@ struct SunMapboxView: View, Equatable {
     /// independently of the MapKit one, so without it the pin set is chosen
     /// from a viewport the user is no longer looking at.
     var onSettled: ((CLLocationCoordinate2D) -> Void)? = nil
+    /// Raised from the selected pin's "wrong spot?" button.
+    var onEditFacade: ((SunVenue) -> Void)? = nil
 
     @State private var viewport: Viewport
 
@@ -46,7 +48,8 @@ struct SunMapboxView: View, Equatable {
          pagingLocked: Binding<Bool> = .constant(false),
          locateTick: Int = 0,
          rendering: Bool = true,
-         onSettled: ((CLLocationCoordinate2D) -> Void)? = nil) {
+         onSettled: ((CLLocationCoordinate2D) -> Void)? = nil,
+         onEditFacade: ((SunVenue) -> Void)? = nil) {
         self.readings = readings
         self.previewAt = previewAt
         self._selectedId = selectedId
@@ -56,6 +59,7 @@ struct SunMapboxView: View, Equatable {
         self.locateTick = locateTick
         self.rendering = rendering
         self.onSettled = onSettled
+        self.onEditFacade = onEditFacade
         // Pitched in so the extrusions read as buildings, not footprints.
         _viewport = State(initialValue: .camera(center: centre, zoom: 15.2,
                                                 bearing: 0, pitch: 55))
@@ -236,7 +240,9 @@ struct SunMapboxView: View, Equatable {
         // label, day-total chip — as the map's single view annotation.
         if let sel = readings.first(where: { $0.id == selectedId }) {
             MapViewAnnotation(coordinate: sel.venue.coordinate) {
-                SunPin(reading: sel, selected: true) { selectedId = nil }
+                SunPin(reading: sel, selected: true,
+                       onTap: { selectedId = nil },
+                       onEdit: onEditFacade.map { cb in { cb(sel.venue) } })
             }
             .allowOverlap(true)
         }
