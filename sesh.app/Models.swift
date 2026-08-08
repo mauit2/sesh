@@ -596,6 +596,10 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
     /// Printable check-in code (migration 070). Nil until an admin mints one.
     var qrToken: String? = nil
     let createdAt: Date
+    /// Server-side change stamp (migration 088). The catalog sync uses the
+    /// highest value it has seen as its cursor, so a refresh normally returns
+    /// zero rows instead of re-sending 2150 venues.
+    var updatedAt: Date? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, name, address, city, lat, lon
@@ -606,6 +610,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         case tier
         case qrToken    = "qr_token"
         case createdAt  = "created_at"
+        case updatedAt  = "updated_at"
     }
 
     init(
@@ -662,6 +667,9 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         tier       = (try c.decodeIfPresent(String.self, forKey: .tier)) ?? "none"
         qrToken    = try c.decodeIfPresent(String.self, forKey: .qrToken)
         createdAt  = try c.decode(Date.self,   forKey: .createdAt)
+        // Absent on rows that came from an older cache file; the sync treats a
+        // nil cursor as "do a full pull", which is the safe direction.
+        updatedAt  = try? c.decodeIfPresent(Date.self, forKey: .updatedAt)
     }
 
 

@@ -367,6 +367,8 @@ final class VenueService: ObservableObject {
         let offers: [VenueOffer]
         let prices: [VenueBeerPrice]
         let savedAt: Date
+        /// Highest venues.updated_at this cache contains — the sync cursor.
+        var syncedTo: Date? = nil
     }
 
     // nonisolated: the read and the write both run off the main actor on
@@ -400,6 +402,8 @@ final class VenueService: ObservableObject {
         if beerPricesByVenue.isEmpty {
             beerPricesByVenue = Dictionary(grouping: blob.prices, by: \.venueId)
         }
+        catalogSyncedTo = blob.syncedTo
+        catalogFullPullAt = blob.savedAt
         rebuildPriceIndex()
         attachLocalSpecials()
         reconcileCurrent()
@@ -415,7 +419,8 @@ final class VenueService: ObservableObject {
             specials: specialsByVenue.values.flatMap { $0 },
             offers: offersByVenue.values.flatMap { $0 },
             prices: beerPricesByVenue.values.flatMap { $0 },
-            savedAt: Date()
+            savedAt: catalogFullPullAt ?? Date(),
+            syncedTo: catalogSyncedTo
         )
         Task.detached(priority: .utility) {
             let e = JSONEncoder()
@@ -832,7 +837,53 @@ final class VenueService: ObservableObject {
             // which the decoder ignored but the network and parser still paid
             // for — about a third of the venue payload.
             let pageSize = 1000
-            let cols = "id,name,address,city,lat,lon,is_featured,source,external_id,mapkit_id,tier,qr_token,created_at"
+            let cols = "id,name,address,city,lat,lon,is_featured,source,external_id,mapkit_id,tier,qr_token,created_at,updated_at"
+
+            // INCREMENTAL when we already hold a catalog and a cursor, and the
+            // last full pull is recent enough to trust for deletions. The whole
+            // table is ~194 KB compressed and it was being re-sent on every
+            // launch and every five minutes; a delta is normally zero rows.
+            let fullPullIsFresh = (catalogFullPullAt.map {
+                Date().timeIntervalSince($0) < Self.fullResyncAfter
+            } ?? false)
+            if let since = catalogSyncedTo, !venues.isEmpty, fullPullIsFresh {
+                // Fractional seconds matter: Postgres stores microseconds and
+                // this formatter emits milliseconds, so the cursor rounds DOWN
+                // and the most recently changed row comes back once more on the
+                // next sync. Harmless — the merge is keyed by id and idempotent —
+                // and far safer than rounding up, which would skip a row.
+                let iso = ISO8601DateFormatter()
+                iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                let changed: [Venue] = try await supabase
+                    .from("venues")
+                    .select(cols)
+                    .gt("updated_at", value: iso.string(from: since))
+                    .order("updated_at", ascending: true)
+                    .limit(pageSize)
+                    .execute()
+                    .value
+                if !changed.isEmpty {
+                    var byId = Dictionary(uniqueKeysWithValues: venues.map { ($0.id, $0) })
+                    for v in changed { byId[v.id] = v }
+                    venues = byId.values.sorted {
+                        $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                    }
+                    advanceCursor(with: changed)
+                    rebuildPriceIndex()
+                }
+                // Specials and offers are tiny (a few hundred bytes) — always
+                // refresh them; they're what changes day to day.
+                let ss: [VenueSpecial] = try await supabase
+                    .from("venue_specials").select().execute().value
+                let os: [VenueOffer] = try await supabase
+                    .from("venue_offers").select().execute().value
+                applySpecials(ss, offers: os)
+                lastRefreshedAt = Date()
+                catalogStamp += 1
+                saveCatalogCache()
+                return
+            }
+
             func fetchPage(_ index: Int) async throws -> [Venue] {
                 try await supabase
                     .from("venues")
@@ -864,19 +915,10 @@ final class VenueService: ObservableObject {
             let ss = try await specialsFetch
             let os = try await offersFetch
             venues = vs
+            advanceCursor(with: vs)
+            catalogFullPullAt = Date()
             rebuildPriceIndex()
-            var grouped: [UUID: [VenueSpecial]] = [:]
-            for s in ss {
-                grouped[s.venueId, default: []].append(s)
-            }
-            specialsByVenue = grouped
-            var groupedOffers: [UUID: [VenueOffer]] = [:]
-            for o in os {
-                groupedOffers[o.venueId, default: []].append(o)
-            }
-            offersByVenue = groupedOffers
-            attachLocalSpecials()
-            reconcileCurrent()
+            applySpecials(ss, offers: os)
             lastRefreshedAt = Date()
             saveCatalogCache()
             catalogStamp += 1
@@ -889,8 +931,30 @@ final class VenueService: ObservableObject {
         }
     }
 
+    /// Move the sync cursor to the newest stamp in a batch. Never moves
+    /// backwards, and a batch with no stamps at all (an old cache) leaves it
+    /// alone so the next refresh still does a full pull.
+    private func advanceCursor(with batch: [Venue]) {
+        guard let newest = batch.compactMap(\.updatedAt).max() else { return }
+        if catalogSyncedTo == nil || newest > catalogSyncedTo! { catalogSyncedTo = newest }
+    }
+
+    private func applySpecials(_ ss: [VenueSpecial], offers os: [VenueOffer]) {
+        specialsByVenue = Dictionary(grouping: ss, by: \.venueId)
+        offersByVenue = Dictionary(grouping: os, by: \.venueId)
+        attachLocalSpecials()
+        reconcileCurrent()
+    }
+
     /// When the catalog was pulled successfully; nil until the first fetch.
     private var lastRefreshedAt: Date? = nil
+    /// Highest venues.updated_at we hold. nil forces a full pull.
+    private var catalogSyncedTo: Date? = nil
+    /// When we last did a FULL pull. Deletions aren't tracked server-side
+    /// (migration 088), so a full pull every 24h is what eventually drops a
+    /// removed venue.
+    private var catalogFullPullAt: Date? = nil
+    private static let fullResyncAfter: TimeInterval = 24 * 60 * 60
 
     /// Skip the round-trip when the catalog is recent. Entering the DEALS
     /// tab is a hot path — it fires mid page-swipe, and an unconditional
