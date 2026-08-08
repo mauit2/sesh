@@ -70,6 +70,7 @@
      unknown draw nothing, so silence never claims a bar has no terrace. */
   .callout .out{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;color:#ffc947;margin-top:7px;font-weight:700;}
   .callout .out.no{color:var(--bronze);opacity:.75;font-weight:400;}
+  .callout .out a{color:var(--whiskey);text-decoration:underline;cursor:pointer;}
 
   .drawer{position:fixed;z-index:1100;top:0;right:0;bottom:0;width:min(360px,90vw);background:var(--ink);border-left:1px solid var(--line);
     transform:translateX(100%);transition:transform .28s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;box-shadow:-12px 0 40px rgba(0,0,0,.5);}
@@ -341,7 +342,7 @@
     return '<div class="sub">'+(litNow?"IN THE SUN":"IN SHADE")+' at '+esc($("sunTime").textContent)+'</div><h3>'+esc(r.name)+'</h3>'
       +'<div class="big" style="color:'+(litNow?"#ffc947":"#6b7590")+';font-size:20px">'+(total?durTxt(total)+" of sun today":"—")+'</div>'
       +'<div class="note">'+esc(list)+'</div>'
-      +outdoorLine(r.outdoor_seating);
+      +outdoorLine(r.outdoor_seating,null);
   }
 
   // Recolour EXISTING pins for the slider position. The first version tore
@@ -462,13 +463,37 @@
   function popupBeer(r,cheap){var pct=r.price/cheap,v=pct<1.05?"Cheapest around":pct<1.25?"Cheap":pct<1.6?"About average":"On the pricey side";
     var rep=r.report_count==1?"1 report":(r.report_count+" reports");
     return '<div class="sub">'+esc(servingLabel(r.serving))+' · '+esc(rep)+'</div><h3>'+esc(r.venue_name)+'</h3><div class="big" style="color:'+colorFor(r.price,cheap)+'">'+fmt(r.price,r.currency)+'</div><div class="note">'+v+'</div>'
-      +outdoorLine(r.outdoor);}
-  // true -> bright yes, false -> muted no, null/undefined -> nothing at all:
-  // an unchecked bar must never read as terrace-less.
-  function outdoorLine(v){
+      +outdoorLine(r.outdoor,r.venue_id);}
+  // true -> bright yes, false -> muted no + a report link, null -> just the
+  // report link: an unchecked bar must never read as terrace-less, and the
+  // crowd is how false/missing flags get corrected.
+  function outdoorLine(v,vid){
+    var rep=vid?' · <a href="#" class="rep-out" data-v="'+esc(vid)+'">report a terrace</a>':'';
     if(v===true)return '<div class="out">☀ Outdoor seating</div>';
-    if(v===false)return '<div class="out no">✕ No outdoor seating</div>';
-    return '';}
+    if(v===false)return '<div class="out no">✕ No outdoor seating'+rep+'</div>';
+    return vid?'<div class="out no">Outdoor seating? '+rep.slice(3)+'</div>':'';}
+
+  // The report link lives inside MapKit-managed callout DOM, so listen at the
+  // document and delegate. report_outdoor_seating_web returns void (HTTP 204),
+  // which the json-parsing rpc() helper would misread as failure — hence the
+  // bare fetch.
+  document.addEventListener("click",function(e){
+    var a=e.target&&e.target.closest?e.target.closest(".rep-out"):null;
+    if(!a)return;
+    e.preventDefault();
+    var id=a.getAttribute("data-v");
+    a.textContent="saving…";
+    fetch(SB_URL+"/rest/v1/rpc/report_outdoor_seating_web",{method:"POST",
+      headers:{"Content-Type":"application/json","apikey":SB_KEY,"Authorization":"Bearer "+SB_KEY},
+      body:JSON.stringify({p_venue:id})
+    }).then(function(r){
+      if(!r.ok)throw new Error("HTTP "+r.status);
+      beerData.forEach(function(x){if(x.venue_id===id)x.outdoor=true;});
+      var line=a.parentElement;
+      line.className="out";
+      line.textContent="☀ Outdoor seating · thanks!";
+    }).catch(function(){a.textContent="couldn't save — try again";});
+  });
   function popupDeal(d){return '<div class="sub">'+esc(d.venue_name)+'</div><h3>'+esc(d.title)+'</h3>'+(d.description?'<div class="note">'+esc(d.description)+'</div>':'');}
 
   function render(){

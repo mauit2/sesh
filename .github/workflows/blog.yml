@@ -1,0 +1,43 @@
+# Regenerate the blog every morning so the pages track the live price data.
+#
+# The pages are static snapshots; without this they drift the moment someone
+# reports a price, and a reader comparing a blog table against the live map
+# sees "discrepancies" that are really just staleness. The generator is fully
+# deterministic from the database, so a daily rebuild + commit-if-changed
+# keeps every number on the site equal to what the map serves.
+#
+# The SUPA key below is the PUBLISHABLE anon key — the same string every
+# visitor's browser already receives in the website's own JavaScript. It is
+# not a secret; the service_role key must never appear here.
+name: Rebuild blog pages
+on:
+  schedule:
+    - cron: "20 4 * * *"   # 04:20 UTC daily, before anyone's lunch reading
+  workflow_dispatch: {}     # and on demand from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Generate pages
+        env:
+          SUPA_ANON: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsdHVvem1ieGFjeGllcGFyZHlzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3MTIyMDgsImV4cCI6MjA5MjI4ODIwOH0.dQzFgHJbSkUqz5eJ8d_X85g5M7SPCTNfOD4nIV5dz9I
+        run: node scripts/gen-blog.mjs
+      - name: Commit if anything changed
+        run: |
+          if git diff --quiet docs/; then
+            echo "No price movement since the last build — nothing to commit."
+            exit 0
+          fi
+          git config user.name "sesh-blog-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/
+          git commit -m "Blog: daily rebuild from live prices"
+          git push

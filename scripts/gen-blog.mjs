@@ -388,6 +388,16 @@ function priceTable(list, lang, showSize) {
   return `<div class="tw"><table>${head}\n${body}</table></div>` + legend(lang);
 }
 
+/// When a table is capped, say so right under it — a median computed over 67
+/// bars above a table showing the 30 cheapest reads as a discrepancy, and the
+/// reader has no way to know it isn't one.
+function tableNote(lang, shown, total, medianTxt) {
+  if (shown >= total) return "";
+  return `<p class="note">${lang === "sv"
+    ? `Visar de ${shown} billigaste av ${total} ställen. Medianen${medianTxt ? ` (${medianTxt})` : ""} räknas över alla ${total}.`
+    : `Showing the ${shown} cheapest of ${total} places. The median${medianTxt ? ` (${medianTxt})` : ""} is computed over all ${total}.`}</p>`;
+}
+
 function figs(items) {
   const step = (v) => {
     const n = String(v).length;
@@ -789,8 +799,9 @@ for (const c of cities) {
   <p class="stamp">Uppdaterad ${updatedSv}</p>
   ${figs([[String(hits.length), `ställen under ${t} kr`], [kr(cheapest.price), "billigast"],
           [`${share} %`, "av stadens barer"], [kr(c.median40 ?? 0), "median i stan"]])}
-  <h2>Alla ställen under ${t} kr</h2>
+  <h2>${hits.length > 30 ? `Billigaste ställena under ${t} kr` : `Alla ställen under ${t} kr`}</h2>
   ${priceTable(hits.slice(0, 30), "sv", false)}
+  ${tableNote("sv", Math.min(30, hits.length), hits.length, null)}
   ${mapCta("sv", c)}
   <h2>Är ${t} kr billigt i ${c.city}?</h2>
   <p>Medianen för en stor stark i ${c.city} ligger på ${kr(c.median40 ?? 0)}, så ${t} kr är ${((c.median40 ?? t) > t) ? "under" : "kring"} vad man normalt betalar. Räknat per centiliter motsvarar ${t} kr för 40 cl ${perCl(t / 40)}, mot stadens median på ${perCl(c.medianRate)}.</p>
@@ -814,8 +825,9 @@ for (const c of cities) {
   <p class="stamp">Updated ${updatedEn}</p>
   ${figs([[String(hits.length), `places under ${t} kr`], [kr(cheapest.price), "cheapest"],
           [`${share}%`, "of the city's bars"], [kr(c.median40 ?? 0), "city median"]])}
-  <h2>Every place under ${t} kr</h2>
+  <h2>${hits.length > 30 ? `The cheapest places under ${t} kr` : `Every place under ${t} kr`}</h2>
   ${priceTable(hits.slice(0, 30), "en", false)}
+  ${tableNote("en", Math.min(30, hits.length), hits.length, null)}
   ${mapCta("en", c)}
   <h2>Is ${t} kr cheap in ${en}?</h2>
   <p>The median large draught in ${en} is ${kr(c.median40 ?? 0)}, so ${t} kr sits ${((c.median40 ?? t) > t) ? "below" : "around"} what you would normally pay. Per centilitre, ${t} kr for 40 cl works out at ${perCl(t / 40)} against the city median of ${perCl(c.medianRate)}.</p>
@@ -885,20 +897,29 @@ const hhCaveat = (lang) => lang === "sv"
      <a href="${SITE}/map/">report the hours in the app</a> and they will
      appear here.</p>`;
 
+/// The happy-hour median used in every "how much do you save" comparison.
+/// 40 cl ONLY: the city median it is compared against is a 40 cl number, and
+/// mixing pints and 50 cl into one side of the comparison quietly skews it.
+/// Falls back to null (no claim) when there are too few 40 cl rows to stand on.
+function hhMedian40(list) {
+  const at40 = list.filter((r) => r.serving === "40").map((r) => r.price);
+  return at40.length >= 3 ? median(at40) : null;
+}
+
 function hhFaq(lang, nm, list, cityMedian) {
   // "Cheapest" in prose = lowest absolute price. list[0] is the per-cl best,
   // which is a different bar whenever a large glass out-values a small one.
   const lo = [...list].sort((a, b) => a.price - b.price)[0];
-  const hhMed = median(list.map((r) => r.price));
+  const hhMed = hhMedian40(list);
   const qs = lang === "sv" ? [
     [`Vilka tider är happy hour i ${nm}?`,
      `Det varierar från krog till krog. I Sverige ligger happy hour oftast på tidig kvällstid på vardagar, men varje ställe sätter sina egna timmar och ändrar dem ofta. Vi listar vilka barer som har happy hour och vad ölen kostar — tiderna publicerar vi inte förrän de är inrapporterade, eftersom ett felaktigt klockslag är värre än inget.`],
     [`Var är happy hour billigast i ${nm}?`,
      `${esc(lo.venue)} har det lägsta happy hour-priset vi har, ${kr(lo.price)} för ${SERVING_LABEL[lo.serving]} — ${perCl(lo.price / lo.cl)}.`],
     [`Hur mycket sparar man på happy hour?`,
-     cityMedian
-       ? `Medianen bland happy hour-priserna vi har i ${nm} är ${kr(hhMed)}, mot ${kr(cityMedian)} för en vanlig stor stark i staden. Det är ungefär ${Math.max(0, Math.round((1 - hhMed / cityMedian) * 100))} % lägre.`
-       : `Medianen bland happy hour-priserna vi har i ${nm} är ${kr(hhMed)}.`],
+     (cityMedian && hhMed)
+       ? `Medianen bland happy hour-priserna för stor stark (40 cl) i ${nm} är ${kr(hhMed)}, mot ${kr(cityMedian)} för en vanlig stor stark i staden. Det är ungefär ${Math.max(0, Math.round((1 - hhMed / cityMedian) * 100))} % lägre.`
+       : `Vi har ännu för få 40 cl-priser under happy hour i ${nm} för att ge en rättvis jämförelse — tabellen ovan visar de priser vi har.`],
     [`Hur många krogar har happy hour i ${nm}?`,
      `Vi har happy hour-pris för ${list.length} krogar i ${nm}. Det är de vi har rapporter på, inte alla som finns — hittar du en till, lägg in den i appen.`],
   ] : [
@@ -907,9 +928,9 @@ function hhFaq(lang, nm, list, cityMedian) {
     [`Where is happy hour cheapest in ${nm}?`,
      `${esc(lo.venue)} has the lowest happy hour price we hold, ${kr(lo.price)} for ${SERVING_LABEL[lo.serving]} — ${perCl(lo.price / lo.cl)}.`],
     [`How much does happy hour save you?`,
-     cityMedian
-       ? `The median happy hour price we have in ${nm} is ${kr(hhMed)}, against ${kr(cityMedian)} for an ordinary large draught in the city — roughly ${Math.max(0, Math.round((1 - hhMed / cityMedian) * 100))}% less.`
-       : `The median happy hour price we have in ${nm} is ${kr(hhMed)}.`],
+     (cityMedian && hhMed)
+       ? `The median happy hour price for a large draught (40 cl) in ${nm} is ${kr(hhMed)}, against ${kr(cityMedian)} for an ordinary one — roughly ${Math.max(0, Math.round((1 - hhMed / cityMedian) * 100))}% less.`
+       : `We hold too few 40 cl happy hour prices in ${nm} yet for a fair comparison — the table above shows what we have.`],
     [`How many bars run happy hour in ${nm}?`,
      `We hold a happy hour price for ${list.length} bars in ${nm}. That is the ones we have reports for, not every bar that runs one — if you find another, add it in the app.`],
   ];
@@ -935,8 +956,8 @@ for (const [city, list] of hhCities) {
   const enU = `${SITE}/blog/happy-hour-${slugify(en)}/`;
   // Lowest price on the door — NOT list[0], which is the per-cl winner.
   const lo = [...list].sort((a, b) => a.price - b.price)[0];
-  const hhMed = median(list.map((r) => r.price));
-  const saving = cityMedian ? Math.max(0, Math.round((1 - hhMed / cityMedian) * 100)) : 0;
+  const hhMed = hhMedian40(list);   // 40 cl only — comparable to cityMedian
+  const saving = (cityMedian && hhMed) ? Math.max(0, Math.round((1 - hhMed / cityMedian) * 100)) : 0;
 
   const artLd = (headline, url, lang) => ([
     { "@context": "https://schema.org", "@type": "Article", headline,
@@ -963,13 +984,13 @@ for (const [city, list] of hhCities) {
   <p class="lede">Vi har happy hour-pris för <strong>${list.length} krogar</strong> i ${city}. Billigast är ${esc(lo.venue)} med ${kr(lo.price)} för ${SERVING_LABEL[lo.serving]}${lo.beer ? ` (${esc(lo.beer)})` : ""}.</p>
   <p class="stamp">Uppdaterad ${updatedSv}</p>
   ${figs([[String(list.length), "krogar med happy hour"], [kr(lo.price), "billigast"],
-          [kr(hhMed ?? 0), "median happy hour"],
-          [cityMedian ? `${saving} %` : "—", "under stadens median"]])}
+          [hhMed ? kr(hhMed) : "—", "median stor stark, hh"],
+          [(cityMedian && hhMed) ? `${saving} %` : "—", "under stadens median"]])}
   ${hhCaveat("sv")}
   <h2>Happy hour-priser i ${city}</h2>
   ${hhTable(list, "sv")}
-  ${cityMedian ? `<h2>Är det värt det?</h2>
-  <p>En vanlig stor stark i ${city} har medianpriset ${kr(cityMedian)}. Happy hour-priserna vi har ligger på ${kr(hhMed)} i median — alltså ungefär ${saving} % lägre. Skillnaden är störst i innerstaden, där grundpriset är högst.</p>` : ""}
+  ${(cityMedian && hhMed) ? `<h2>Är det värt det?</h2>
+  <p>En vanlig stor stark i ${city} har medianpriset ${kr(cityMedian)}. Happy hour-medianen för samma storlek är ${kr(hhMed)} — alltså ungefär ${saving} % lägre. Skillnaden är störst i innerstaden, där grundpriset är högst.</p>` : ""}
   ${mapCta("sv", c || { city })}
   <p>Se även <a href="${SITE}/blogg/billig-ol-${slugify(city)}/">billigaste ölen i ${city}</a> och <a href="${SITE}/blogg/happy-hour-sverige/">happy hour i hela Sverige</a>.</p>
   ${svFaq.html}
@@ -992,13 +1013,13 @@ for (const [city, list] of hhCities) {
   <p class="lede">We hold happy hour prices for <strong>${list.length} bars</strong> in ${en}. The cheapest is ${esc(lo.venue)} at ${kr(lo.price)} for ${SERVING_LABEL[lo.serving]}${lo.beer ? ` (${esc(lo.beer)})` : ""}.</p>
   <p class="stamp">Updated ${updatedEn}</p>
   ${figs([[String(list.length), "bars with happy hour"], [kr(lo.price), "cheapest"],
-          [kr(hhMed ?? 0), "median happy hour"],
-          [cityMedian ? `${saving}%` : "—", "below city median"]])}
+          [hhMed ? kr(hhMed) : "—", "median 40 cl, hh"],
+          [(cityMedian && hhMed) ? `${saving}%` : "—", "below city median"]])}
   ${hhCaveat("en")}
   <h2>Happy hour prices in ${en}</h2>
   ${hhTable(list, "en")}
-  ${cityMedian ? `<h2>Is it worth it?</h2>
-  <p>An ordinary large draught in ${en} has a median price of ${kr(cityMedian)}. The happy hour prices we hold sit at a median of ${kr(hhMed)} — roughly ${saving}% less. The gap is widest in the centre, where the base price is highest.</p>` : ""}
+  ${(cityMedian && hhMed) ? `<h2>Is it worth it?</h2>
+  <p>An ordinary large draught in ${en} has a median price of ${kr(cityMedian)}. The happy hour median for the same size is ${kr(hhMed)} — roughly ${saving}% less. The gap is widest in the centre, where the base price is highest.</p>` : ""}
   ${mapCta("en", c || { city })}
   <p>See also <a href="${SITE}/blog/cheapest-beer-${slugify(en)}/">cheapest beer in ${en}</a> and <a href="${SITE}/blog/happy-hour-sweden/">happy hour across Sweden</a>.</p>
   ${enFaq.html}
@@ -1014,7 +1035,7 @@ for (const [city, list] of hhCities) {
   const enU = `${SITE}/blog/happy-hour-sweden/`;
   // Same distinction nationally: the headline "cheapest" is the lowest price.
   const lo = [...happy].sort((a, b) => a.price - b.price)[0];
-  const hhMed = median(happy.map((r) => r.price));
+  const hhMed = hhMedian40(happy);
   const nCities = happyByCity.size;
   const top = happy.slice(0, 25);
   const cityRow = (lang) => `<div class="tw"><table>
@@ -1047,13 +1068,14 @@ for (const [city, list] of hhCities) {
   <p class="lede">Vi har happy hour-priser från <strong>${happy.length} krogar</strong> i ${nCities} städer. Billigast i landet är ${esc(lo.venue)} i ${esc(lo.city)}: ${kr(lo.price)} för ${SERVING_LABEL[lo.serving]}, ${perCl(lo.price / lo.cl)}.</p>
   <p class="stamp">Uppdaterad ${updatedSv}</p>
   ${figs([[String(happy.length), "happy hour-priser"], [String(nCities), "städer"],
-          [kr(lo.price), "billigast i landet"], [kr(hhMed ?? 0), "median"]])}
+          [kr(lo.price), "billigast i landet"], [hhMed ? kr(hhMed) : "—", "median stor stark"]])}
   ${hhCaveat("sv")}
   <h2>Städer</h2>
   ${cityRow("sv")}
   <h2>Billigaste happy hour i landet</h2>
   <p>Sorterat på literpris, så att 50 cl för 48 kr rankas före 40 cl för 45 kr.</p>
   ${hhTable(top, "sv")}
+  ${tableNote("sv", top.length, happy.length, null)}
   ${mapCta("sv", { city: "Sverige" })}
   <p>Se även <a href="${SITE}/blogg/billig-ol-sverige/">billig öl i Sverige</a>.</p>
   ${svFaq.html}
@@ -1079,13 +1101,14 @@ for (const [city, list] of hhCities) {
   <p class="lede">We hold happy hour prices from <strong>${happy.length} bars</strong> across ${nCities} cities. The cheapest in the country is ${esc(lo.venue)} in ${esc(lo.city)}: ${kr(lo.price)} for ${SERVING_LABEL[lo.serving]}, ${perCl(lo.price / lo.cl)}.</p>
   <p class="stamp">Updated ${updatedEn}</p>
   ${figs([[String(happy.length), "happy hour prices"], [String(nCities), "cities"],
-          [kr(lo.price), "cheapest in Sweden"], [kr(hhMed ?? 0), "median"]])}
+          [kr(lo.price), "cheapest in Sweden"], [hhMed ? kr(hhMed) : "—", "median 40 cl"]])}
   ${hhCaveat("en")}
   <h2>Cities</h2>
   ${cityRow("en")}
   <h2>Cheapest happy hour in the country</h2>
   <p>Ranked by price per centilitre, so 50 cl at 48 kr beats 40 cl at 45 kr.</p>
   ${hhTable(top, "en")}
+  ${tableNote("en", top.length, happy.length, null)}
   ${mapCta("en", { city: "Sweden" })}
   <p>See also <a href="${SITE}/blog/beer-prices-sweden/">beer prices in Sweden</a>.</p>
   ${enFaq.html}
@@ -1160,6 +1183,7 @@ for (const [c, hits] of outCities) {
   ${svCaveat}
   <h2>Billigast öl med uteservering i ${c.city}</h2>
   ${priceTable(hits.slice(0, 25), "sv", false)}
+  ${tableNote("sv", Math.min(25, hits.length), hits.length, kr(outMed ?? 0))}
   ${mapCta("sv", c)}
   <h2>Kostar det mer att sitta ute?</h2>
   <p>${outMed && c.median40
@@ -1193,6 +1217,7 @@ for (const [c, hits] of outCities) {
   ${enCaveat}
   <h2>Cheapest beer with outdoor seating in ${en}</h2>
   ${priceTable(hits.slice(0, 25), "en", false)}
+  ${tableNote("en", Math.min(25, hits.length), hits.length, kr(outMed ?? 0))}
   ${mapCta("en", c)}
   <h2>Does sitting outside cost more?</h2>
   <p>${outMed && c.median40
