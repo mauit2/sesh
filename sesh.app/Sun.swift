@@ -516,8 +516,30 @@ final class SunService: ObservableObject {
         _ = try? await supabase.functions.invoke(
             "sun-horizon", options: .init(body: B(venue_id: venueId.uuidString))
         ) as Data?
-        // Drop the cached horizon so the next visible-set pass refetches it.
+        // REFETCH NOW, not on the next pass. Dropping the cache entry and
+        // waiting for the map to ask again meant the pin kept showing the old
+        // sun until something else happened to trigger a rebuild — the
+        // correction looked like it hadn't worked.
         horizonCache[venueId] = nil
+        struct Q: Encodable { let p_ids: [UUID] }
+        if let rows: [SunVenue] = try? await supabase
+            .rpc("venue_sun_by_ids", params: Q(p_ids: [venueId]))
+            .execute().value, let fresh = rows.first {
+            horizonCache[venueId] = fresh
+            // Swap it into the published set in place, so readings rebuild and
+            // the pin redraws immediately.
+            if let i = venues.firstIndex(where: { $0.venueId == venueId }) {
+                var next = venues
+                next[i] = fresh
+                venues = next          // didSet -> rebuildReadings()
+            } else {
+                rebuildReadings()
+            }
+            // rebuildReadings caches on (time bucket, count, first id): a swap
+            // changes none of those, so nudge it past the guard.
+            cacheKey = ""
+            rebuildReadings()
+        }
         return true
     }
 }
@@ -608,13 +630,22 @@ struct SunPin: View {
                     }
                     if let onEdit {
                         Button(action: onEdit) {
-                            Text(reading.venue.facadeFromPeople || reading.venue.isOverride
-                                 ? "EDIT SPOT" : "WRONG SPOT?")
-                                .font(.system(size: 7, weight: .black, design: .monospaced))
-                                .tracking(1)
-                                .foregroundStyle(Color.ink)
-                                .padding(.horizontal, 7).padding(.vertical, 3)
-                                .background(Capsule().fill(tint.opacity(0.9)))
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.trianglehead.turn.up.right.circle.fill")
+                                    .font(.system(size: 10, weight: .bold))
+                                Text(reading.venue.facadeFromPeople || reading.venue.isOverride
+                                     ? "EDIT SPOT" : "WRONG SPOT?")
+                                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                                    .tracking(0.8)
+                            }
+                            .foregroundStyle(Color.ink)
+                            .padding(.horizontal, 11).padding(.vertical, 7)
+                            .background(Capsule().fill(tint))
+                            .shadow(color: Color.ink.opacity(0.5), radius: 3, y: 1)
+                            // A 7pt capsule was under Apple's 44pt minimum and
+                            // easy to miss entirely; this widens the tap target
+                            // without letting the card dominate the map.
+                            .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
                         .padding(.top, 2)
@@ -970,9 +1001,14 @@ struct SunTimeSlider: View {
 
 /// Sunniest-first list, the alternative to hunting the map.
 struct SunListSheet: View {
-    /// Already filtered to the vicinity of wherever you're looking — a list
-    /// mixing bars on two continents is not a "nearby" list.
+    /// Already filtered to within `radiusKm` of the PHONE — a list mixing bars
+    /// on two continents is not a "nearby" list, and neither is one centred on
+    /// wherever the map was last dragged.
     let readings: [SunReading]
+    /// False when there is no location fix, in which case the list cannot be
+    /// answered at all and we say that rather than showing something arbitrary.
+    var haveLocation: Bool = true
+    var radiusKm: Int = 5
     /// Where "nearby" is centred, named for the empty state.
     var placeName: String? = nil
     @ObservedObject var sun: SunService
@@ -993,13 +1029,22 @@ struct SunListSheet: View {
             Color.ink.ignoresSafeArea()
             VStack(spacing: 10) {
                 VStack(spacing: 3) {
-                    Text(searching ? "ANY BAR, ANYWHERE" : "IN THE SUN")
+                    Text(searching ? "ANY BAR, ANYWHERE" : "WITHIN \(radiusKm) KM OF YOU")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .tracking(3)
                         .foregroundStyle(Color.bronze)
                     Text(searching ? "Search results" : "Sunniest first")
                         .font(.system(size: 18, weight: .heavy, design: .rounded))
                         .foregroundStyle(Color.cream)
+                    if !searching {
+                        Text(haveLocation
+                             ? "Only bars near you — search below for anywhere else."
+                             : "Turn on location to see the bars around you, or search below.")
+                            .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.5))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                    }
                 }
                 .padding(.top, 20)
 
@@ -1152,12 +1197,20 @@ struct SunListSheet: View {
     }
 }
 
-/// "Which way does the seating face?" — the one fact the building model can't
-/// derive from vector tiles, asked of the person who is actually standing there.
+/// "Which way do you sit?" — the one fact the building model can't derive from
+/// vector tiles, asked of the person actually standing there.
 ///
-/// Eight compass points rather than a free dial: nobody knows their terrace
-/// faces 247°, and the facade candidates are spaced ~12 m apart around the
-/// footprint anyway, so finer input would be false precision.
+/// PRESENTED AS A COMPASS, NOT A LIST. The first version was a 4x2 grid of
+/// "N NE E SE / S SW W NW" chips with little rotated arrows, which asks the user
+/// to translate a physical direction into a bearing and then find that bearing
+/// in reading order. Nobody thinks that way about a terrace. This lays the eight
+/// points out where they actually are — north at the top, clockwise — so picking
+/// one is spatial rather than lexical.
+///
+/// AND IT SAYS WHAT EACH CHOICE MEANS. "West" is an abstraction; "afternoon and
+/// evening sun" is the thing the user can check against memory, which makes a
+/// wrong tap obvious before they commit. That mapping flips below the equator,
+/// so it is derived from the venue's own latitude rather than hardcoded.
 struct SunFacadeSheet: View {
     let venue: SunVenue
     @ObservedObject var sun: SunService
@@ -1170,10 +1223,31 @@ struct SunFacadeSheet: View {
         ("S", 180), ("SW", 225), ("W", 270), ("NW", 315),
     ]
 
+    /// What a facade in this direction means for sun, at this venue's latitude.
+    /// North of the equator the sun swings through the south; south of it,
+    /// through the north — so the whole mapping mirrors.
+    private func meaning(_ bearing: Int) -> String {
+        /// Smallest angle between two bearings, handling the 359/0 wrap.
+        func gap(_ a: Double, _ b: Double) -> Double {
+            abs(((a - b + 180).truncatingRemainder(dividingBy: 360) + 360)
+                .truncatingRemainder(dividingBy: 360) - 180)
+        }
+        // The sun's arc runs through the south up here and through the north
+        // below the equator, so THIS flips. East and west do not: the sun rises
+        // in the east everywhere.
+        let equatorward = venue.lat >= 0 ? 180.0 : 0.0
+        let b = Double(bearing)
+        if gap(b, equatorward) < 23 { return "Sun most of the day" }
+        if gap(b, equatorward) > 157 { return "Little or no direct sun" }
+        if gap(b, 90) < 68 { return "Morning sun" }
+        if gap(b, 270) < 68 { return "Afternoon and evening sun" }
+        return "Some sun, part of the day"
+    }
+
     var body: some View {
-        VStack(spacing: 16) {
-            VStack(spacing: 4) {
-                Text("WHERE DO YOU SIT?")
+        VStack(spacing: 14) {
+            VStack(spacing: 3) {
+                Text("WHICH WAY DO YOU SIT?")
                     .font(.system(size: 10, weight: .black, design: .monospaced))
                     .tracking(1.4)
                     .foregroundStyle(Color.bronze)
@@ -1182,43 +1256,40 @@ struct SunFacadeSheet: View {
                     .foregroundStyle(Color.cream)
                     .multilineTextAlignment(.center)
             }
-            Text("We work out the sun from the buildings around each bar, but we can't tell which side the seats are on — so we guess the sunniest one. Point us the right way and we'll redo it.")
+            Text("We read the sun off the buildings around each bar, but we can't tell which side the seats are on — so we assume the sunniest. Point us the right way and we'll redo it.")
                 .font(.system(size: 12.5, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(0.62))
                 .multilineTextAlignment(.center)
                 .lineSpacing(2)
+                .padding(.horizontal, 4)
 
-            LazyVGrid(columns: Array(repeating: GridItem(spacing: 8), count: 4), spacing: 8) {
-                ForEach(Self.points, id: \.1) { p in
-                    let on = picked == p.1
-                    Button { picked = p.1 } label: {
-                        VStack(spacing: 2) {
-                            Image(systemName: "location.north.fill")
-                                .font(.system(size: 13, weight: .black))
-                                .rotationEffect(.degrees(Double(p.1)))
-                            Text(p.0)
-                                .font(.system(size: 10, weight: .black, design: .monospaced))
-                        }
-                        .foregroundStyle(on ? Color.ink : Color.cream.opacity(0.8))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 11)
-                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(on ? Color(red: 1.0, green: 0.79, blue: 0.28)
-                                     : Color.cream.opacity(0.06)))
-                    }
-                    .buttonStyle(.plain)
+            compassRose
+
+            // What the current choice means, in words the user can check against
+            // their own memory of the place.
+            Group {
+                if let p = picked {
+                    Text(meaning(p).uppercased())
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(1.1)
+                        .foregroundStyle(Color(red: 1.0, green: 0.79, blue: 0.28))
+                } else {
+                    Text("TAP THE DIRECTION THE SEATS FACE")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(1.1)
+                        .foregroundStyle(Color.cream.opacity(0.42))
                 }
             }
+            .frame(height: 16)
 
             if let e = sun.facadeError {
-                Text(e).font(.system(size: 12, weight: .semibold)).foregroundStyle(Color(red: 0.91, green: 0.46, blue: 0.42))
+                Text(e).font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.91, green: 0.46, blue: 0.42))
             }
 
             Button {
                 guard let b = picked else { return }
-                Task {
-                    if await sun.reportFacade(venueId: venue.venueId, bearing: b) { onDone() }
-                }
+                Task { if await sun.reportFacade(venueId: venue.venueId, bearing: b) { onDone() } }
             } label: {
                 HStack(spacing: 7) {
                     if sun.reportingFacade { ProgressView().tint(Color.ink) }
@@ -1236,11 +1307,53 @@ struct SunFacadeSheet: View {
             .disabled(picked == nil || sun.reportingFacade)
             .opacity(picked == nil ? 0.4 : 1)
 
-            Text("Recomputed from real building heights, not from your answer — you're only telling us where to stand.")
+            Text("Still measured from real building heights — you're only telling us where to stand.")
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(0.38))
                 .multilineTextAlignment(.center)
         }
         .padding(20)
+    }
+
+    /// Eight points on a circle, north at the top, clockwise — the arrangement
+    /// they have in the world. The label sits where the direction is.
+    private var compassRose: some View {
+        GeometryReader { geo in
+            let side = min(geo.size.width, geo.size.height)
+            let r = side / 2 - 26
+            ZStack {
+                Circle()
+                    .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1)
+                    .frame(width: r * 2, height: r * 2)
+                Text("N")
+                    .font(.system(size: 8, weight: .black, design: .monospaced))
+                    .foregroundStyle(Color.cream.opacity(0.28))
+                    .offset(y: -r + 1)
+                ForEach(Self.points, id: \.1) { p in
+                    let on = picked == p.1
+                    let a = Double(p.1) * .pi / 180
+                    Button { picked = p.1 } label: {
+                        Text(p.0)
+                            .font(.system(size: 12, weight: .black, design: .monospaced))
+                            .foregroundStyle(on ? Color.ink : Color.cream.opacity(0.82))
+                            .frame(width: 46, height: 46)
+                            .background(
+                                Circle().fill(on ? Color(red: 1.0, green: 0.79, blue: 0.28)
+                                                 : Color.cream.opacity(0.07)))
+                            .overlay(Circle().strokeBorder(
+                                on ? Color.clear : Color.cream.opacity(0.12), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    // sin/cos this way round puts 0 deg at the top and runs
+                    // clockwise, matching a compass rather than the unit circle.
+                    .offset(x: sin(a) * r, y: -cos(a) * r)
+                }
+                Image(systemName: "chair.lounge.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Color.cream.opacity(0.3))
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .frame(height: 210)
     }
 }

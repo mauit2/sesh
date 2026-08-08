@@ -1778,10 +1778,12 @@ private struct OffersMapView: View {
         }
         .sheet(isPresented: $sunListOpen) {
             SunListSheet(
-                readings: sunNearbyReadings,
+                readings: sunListReadings ?? [],
+                haveLocation: sunListReadings != nil,
+                radiusKm: Int(Self.sunListRadius / 1000),
                 placeName: sunReference.name,
                 sun: sun,
-                centre: sunReference.coord,
+                centre: location.location?.coordinate ?? sunReference.coord,
                 onPick: { venue in
                     sun.pinned = venue
                     selectedSunId = venue.id
@@ -1931,6 +1933,29 @@ private struct OffersMapView: View {
     /// already the priced bars nearest the sun map's own centre, capped. What's
     /// drawn IS what's nearby, so the header counts exactly that.
     private var sunNearbyReadings: [SunReading] { sunReadings }
+
+    /// How far "near you" reaches in the Sun list.
+    private static let sunListRadius: CLLocationDistance = 5_000
+
+    /// The LIST is scoped to the phone's own location, not to the map. Two
+    /// different questions: the header counts what's drawn, the list answers
+    /// "where can I go right now". Keyed off GPS rather than a reference
+    /// derived from readings — deriving it from readings.first is precisely
+    /// what made the header read "1 in the sun" over a map full of gold pins.
+    ///
+    /// nil (no fix) means we cannot answer it, and the sheet says so instead of
+    /// quietly showing a list from wherever the map happens to be.
+    private var sunListReadings: [SunReading]? {
+        guard let here = location.location else { return nil }
+        return sunReadings.filter {
+            here.distance(from: CLLocation(latitude: $0.venue.lat,
+                                           longitude: $0.venue.lon)) <= Self.sunListRadius
+        }
+        .sorted {
+            if $0.isSunlit != $1.isSunlit { return $0.isSunlit }
+            return $0.remaining > $1.remaining
+        }
+    }
 
     /// The place the Sun screen is ABOUT — the venue you searched for, else
     /// wherever you are. Everything on this screen keys off it: the scene's
