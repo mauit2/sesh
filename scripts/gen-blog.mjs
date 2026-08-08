@@ -72,6 +72,7 @@ const rows = prices
   .map((p) => ({
     venue: p.venue_name,
     city: cityOf.get(p.venue_id) || null,
+    lat: p.lat, lon: p.lon,
     serving: p.serving,
     price: Number(p.price),
     cl: CL[p.serving] ?? null,
@@ -97,10 +98,14 @@ for (const r of rows) {
 
 function summarise(list) {
   const bars = new Set(list.map((r) => r.venue)).size;
+  // Mean position of the priced bars — where a "see this on the map" link
+  // should land. Good enough for a city frame; no need for a real centroid.
+  const lat = list.reduce((a, r) => a + (r.lat || 0), 0) / (list.length || 1);
+  const lon = list.reduce((a, r) => a + (r.lon || 0), 0) / (list.length || 1);
   const at40 = list.filter((r) => r.serving === "40");
   const rates = list.map((r) => r.price / r.cl);
   return {
-    bars,
+    bars, lat, lon,
     prices: list.length,
     cheapest40: at40.length ? Math.min(...at40.map((r) => r.price)) : null,
     median40: median(at40.map((r) => r.price)),
@@ -126,7 +131,7 @@ const updatedEn = new Date().toLocaleDateString("en-GB", { year: "numeric", mont
 
 // ---------------------------------------------------------------- shell
 
-function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body, jsonld }) {
+function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body, jsonld, switcher }) {
   return `<!DOCTYPE html>
 <html lang="${lang}">
 <head>
@@ -199,6 +204,17 @@ function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body
   td.p{font-weight:700;color:var(--whiskey);font-family:var(--mono);white-space:nowrap;}
   .rank{color:var(--bronze);font-family:var(--mono);width:1%;}
   .note{font-size:13px;color:var(--bronze);margin:10px 0 0;}
+  /* Price bands. A table of twelve numbers is hard to scan; a colour per band
+     makes "is this cheap" answerable at a glance, which is the actual question.
+     Thresholds are relative to the national median, so they stay meaningful as
+     prices drift rather than being frozen constants. */
+  td.p.b1{color:#7ec96b;} td.p.b2{color:#e8c34a;} td.p.b3{color:#e8843c;} td.p.b4{color:#e07a6a;}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;margin:14px 0 0;font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--bronze);}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+  .switch{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 26px;padding:0;list-style:none;}
+  .switch a{display:inline-block;font-size:12.5px;font-weight:600;text-decoration:none;color:var(--cream-dim);
+    background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:5px 11px;}
+  .switch a.on{background:var(--whiskey);border-color:var(--whiskey);color:#241503;}
   .cta{display:block;margin:34px 0;padding:19px 22px;background:var(--bg-elev);border:1px solid rgba(232,132,60,.34);border-radius:17px;text-decoration:none;color:var(--cream);}
   .cta b{display:block;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;margin-bottom:3px;}
   .cta span{font-size:14px;color:var(--cream-dim);}
@@ -222,11 +238,12 @@ ${jsonld ? `<script type="application/ld+json">${JSON.stringify(jsonld)}</script
   </header>
   <p class="kicker">${esc(kicker)}</p>
   <h1>${esc(h1)}</h1>
+${switcher || ""}
 ${body}
   <footer>
     ${lang === "sv"
-      ? `Priserna är inrapporterade av användare och visas som medianen av de senaste rapporterna per bar och storlek. Sesh ger ingen garanti för att ett pris gäller när du kommer dit — <a href="${SITE}/map/">rapportera gärna en ändring</a>. Drick måttfullt.`
-      : `Prices are reported by users and shown as the median of recent reports per bar and size. Sesh cannot guarantee a price still stands when you arrive — <a href="${SITE}/map/">report a change</a> if it has moved. Please drink responsibly.`}
+      ? `Sidan är avsedd för dig som är över 18 år. Priserna är inrapporterade av användare och visas som medianen av de senaste rapporterna per bar och storlek. Sesh ger ingen garanti för att ett pris gäller när du kommer dit — <a href="${SITE}/map/">rapportera gärna en ändring</a>. Drick måttfullt.`
+      : `This page is intended for readers of legal drinking age. Prices are reported by users and shown as the median of recent reports per bar and size. Sesh cannot guarantee a price still stands when you arrive — <a href="${SITE}/map/">report a change</a> if it has moved. Please drink responsibly.`}
     <br /><br />
     <a href="${SITE}/">Sesh</a> · <a href="${SITE}/map/">${lang === "sv" ? "Ölkartan" : "Beer map"}</a>
     · <a href="${SITE}/privacy/">${lang === "sv" ? "Integritet" : "Privacy"}</a>
@@ -237,18 +254,45 @@ ${body}
 `;
 }
 
+/// Band a rate against the national median: well under, under, over, well over.
+function band(rate) {
+  const m = national.medianRate;
+  if (rate <= m * 0.75) return "b1";
+  if (rate <= m) return "b2";
+  if (rate <= m * 1.25) return "b3";
+  return "b4";
+}
+
+function legend(lang) {
+  const m = national.medianRate;
+  const items = lang === "sv"
+    ? [["b1", `under ${perCl(m * 0.75)}`], ["b2", "under riksmedian"],
+       ["b3", "över riksmedian"], ["b4", `över ${perCl(m * 1.25)}`]]
+    : [["b1", `under ${perCl(m * 0.75)}`], ["b2", "below national median"],
+       ["b3", "above national median"], ["b4", `over ${perCl(m * 1.25)}`]];
+  const col = { b1: "#7ec96b", b2: "#e8c34a", b3: "#e8843c", b4: "#e07a6a" };
+  return `<div class="legend">${items.map(([b, t]) =>
+    `<span><i style="background:${col[b]}"></i>${esc(t)}</span>`).join("")}</div>`;
+}
+
 function priceTable(list, lang, showSize) {
   const head = lang === "sv"
-    ? `<tr><th></th><th>Bar</th>${showSize ? "<th>Storlek</th>" : ""}<th>Pris</th><th>Per cl</th></tr>`
+    ? `<tr><th></th><th>Krog</th>${showSize ? "<th>Storlek</th>" : ""}<th>Pris</th><th>Per cl</th></tr>`
     : `<tr><th></th><th>Bar</th>${showSize ? "<th>Size</th>" : ""}<th>Price</th><th>Per cl</th></tr>`;
-  const body = list.map((r, i) => `<tr>
+  const body = list.map((r, i) => {
+    const rate = r.price / r.cl;
+    // Each row links to the bar on the map. The article should feed the map,
+    // not dead-end in a table.
+    const href = `${SITE}/map/?lat=${(r.lat ?? 0).toFixed(5)}&lon=${(r.lon ?? 0).toFixed(5)}&city=${encodeURIComponent(r.city)}`;
+    return `<tr>
       <td class="rank">${i + 1}</td>
-      <td>${esc(r.venue)}</td>
+      <td><a href="${href}">${esc(r.venue)}</a></td>
       ${showSize ? `<td class="n">${SERVING_LABEL[r.serving]}</td>` : ""}
-      <td class="p">${kr(r.price)}</td>
-      <td class="n">${perCl(r.price / r.cl)}</td>
-    </tr>`).join("\n");
-  return `<div class="tw"><table>${head}\n${body}</table></div>`;
+      <td class="p ${band(rate)}">${kr(r.price)}</td>
+      <td class="n">${perCl(rate)}</td>
+    </tr>`;
+  }).join("\n");
+  return `<div class="tw"><table>${head}\n${body}</table></div>` + legend(lang);
 }
 
 function figs(items) {
@@ -266,7 +310,15 @@ const cityLinks = (lang, exclude) => `<ul class="chips">${cities
     return `<li><a href="${href}">${esc(nm)}</a></li>`;
   }).join("")}</ul>`;
 
-const mapCta = (lang) => `<a class="cta" href="${SITE}/map/">
+const switcher = (lang, current) => `<ul class="switch">${cities.map((c) => {
+  const nm = lang === "sv" ? c.city : (EN_NAME[c.city] || c.city);
+  const href = lang === "sv"
+    ? `${SITE}/blogg/billig-ol-${slugify(c.city)}/`
+    : `${SITE}/blog/cheapest-beer-${slugify(EN_NAME[c.city] || c.city)}/`;
+  return `<li><a class="${c.city === current ? "on" : ""}" href="${href}">${esc(nm)}</a></li>`;
+}).join("")}</ul>`;
+
+const mapCta = (lang, c) => `<a class="cta" href="${SITE}/map/${c ? `?lat=${c.lat.toFixed(5)}&lon=${c.lon.toFixed(5)}&city=${encodeURIComponent(c.city)}` : ""}">
     <b>${lang === "sv" ? "Se alla priser på kartan" : "See every price on the map"}</b>
     <span>${lang === "sv"
       ? "Zooma in på din stad, filtrera på storlek och se vilka barer som har sol just nu."
@@ -319,6 +371,7 @@ for (const c of cities) {
     desc: `Var är ölen billigast i ${c.city}? ${c.bars} barer med inrapporterade priser, stor stark från ${Math.round(c.cheapest40 ?? c.median40)} kr och topplista på pris per centiliter.`,
     kicker: `Ölpriser · ${c.city}`,
     h1: `Billigaste ölen i ${c.city}`,
+    switcher: switcher("sv", c.city),
     jsonld: ld(`Billigaste ölen i ${c.city}`, svUrl, `Ölpriser i ${c.city}`),
     body: `
   <p class="lede">Vi har inrapporterade ölpriser från <strong>${c.bars} barer</strong> i ${c.city}. Här är var stor starken är billigast — och var du får mest öl för pengarna räknat per centiliter.</p>
@@ -329,7 +382,7 @@ for (const c of cities) {
     [perCl(c.bestRate), "bästa pris per cl"],
     [String(c.bars), "barer med pris"],
   ])}
-  <p>Medianpriset i ${c.city} ligger på <strong>${perCl(c.medianRate)}</strong>, vilket är ${vsNatTxt("sv")}. Skillnaden mellan billigaste och dyraste ölen i stan är ${(c.worstRate / c.bestRate).toFixed(1)} gånger — det är alltså värt att veta vart man går.</p>
+  <p>Medianpriset i ${c.city} ligger på <strong>${perCl(c.medianRate)}</strong> (literpris ${Math.round(c.medianRate * 100)} kr/l), vilket är ${vsNatTxt("sv")}. Skillnaden mellan billigaste och dyraste ölen i stan är ${(c.worstRate / c.bestRate).toFixed(1)} gånger — det är alltså värt att veta vart man går.</p>
 
   <h2>Billigaste stor stark i ${c.city}</h2>
   <p>Stor stark betyder oftast 40 cl fatöl. Det är måttet folk jämför, så vi listar det separat.</p>
@@ -340,7 +393,7 @@ for (const c of cities) {
   <p>En billig öl i ett litet glas är inte billig. Räknar man om alla storlekar till kronor per centiliter ändras ordningen ofta helt: en 50 cl för 65 kr (${perCl(65 / 50)}) slår en 33 cl för 49 kr (${perCl(49 / 33)}).</p>
   ${priceTable(c.topValue, "sv", true)}
 
-  ${mapCta("sv")}
+  ${mapCta("sv", c)}
 
   <h2>Så räknar vi</h2>
   <p>Priserna kommer från användare i Sesh-appen och på ölkartan. För varje bar och storlek visar vi <em>medianen</em> av de senaste rapporterna, inte det senaste priset — ett enstaka felinmatat pris ska inte kunna styra listan. Bara priser i kronor och i storlekar vi kan räkna om per centiliter räknas med. Pint tolkas som 56,8 cl.</p>
@@ -358,6 +411,7 @@ for (const c of cities) {
     desc: `Where is beer cheapest in ${en}? Reported prices from ${c.bars} bars, a large draught from ${Math.round(c.cheapest40 ?? c.median40)} kr, plus a ranking by price per centilitre. Updated ${updatedEn}.`,
     kicker: `Beer prices · ${en}`,
     h1: `Cheapest beer in ${en}`,
+    switcher: switcher("en", c.city),
     jsonld: ld(`Cheapest beer in ${en}`, enUrl, `Beer prices in ${en}`),
     body: `
   <p class="lede">We have user-reported beer prices from <strong>${c.bars} bars</strong> in ${en}. Here is where a large draught costs least — and where you get the most beer for your money per centilitre.</p>
@@ -368,7 +422,7 @@ for (const c of cities) {
     [perCl(c.bestRate), "best price per cl"],
     [String(c.bars), "bars with a price"],
   ])}
-  <p>The median in ${en} is <strong>${perCl(c.medianRate)}</strong>, ${vsNatTxt("en")}. The gap between the cheapest and dearest beer in the city is ${(c.worstRate / c.bestRate).toFixed(1)}×, so it genuinely pays to know where you are going.</p>
+  <p>The median in ${en} is <strong>${perCl(c.medianRate)}</strong>, ${vsNatTxt("en")}. The gap between the cheapest and the most expensive beer in the city is ${(c.worstRate / c.bestRate).toFixed(1)}×, so it genuinely pays to know where you are going.</p>
 
   <h2>Cheapest large draught in ${en}</h2>
   <p>A Swedish "stor stark" is usually 40 cl of draught lager — the measure locals compare — so it gets its own table.</p>
@@ -379,7 +433,7 @@ for (const c of cities) {
   <p>A cheap beer in a small glass is not cheap. Converting every size to kronor per centilitre often reorders the list completely: a 50 cl at 65 kr (${perCl(65 / 50)}) beats a 33 cl at 49 kr (${perCl(49 / 33)}).</p>
   ${priceTable(c.topValue, "en", true)}
 
-  ${mapCta("en")}
+  ${mapCta("en", c)}
 
   <h2>How we work it out</h2>
   <p>Prices come from Sesh users in the app and on the beer map. For each bar and size we show the <em>median</em> of recent reports rather than the latest one, so a single mistyped price cannot swing a table. Only prices in kronor, in sizes we can convert per centilitre, are included; a pint is treated as 56.8 cl.</p>
@@ -476,7 +530,7 @@ write("blog/beer-prices-sweden", page({
     [EN_NAME[cheapCity.city] || cheapCity.city, "cheapest city"],
     [String(cities.length), "cities"],
   ])}
-  <p><strong>${EN_NAME[cheapCity.city] || cheapCity.city}</strong> is the cheapest city we cover at a median of ${perCl(cheapCity.medianRate)}, against ${perCl(dearCity.medianRate)} in ${EN_NAME[dearCity.city] || dearCity.city} — ${((dearCity.medianRate / cheapCity.medianRate - 1) * 100).toFixed(0)}% more for the same volume of beer.</p>
+  <p><strong>${EN_NAME[cheapCity.city] || cheapCity.city}</strong> is the cheapest city we cover at a median of ${perCl(cheapCity.medianRate)}, against ${perCl(dearCity.medianRate)} in ${EN_NAME[dearCity.city] || dearCity.city}, the most expensive — ${((dearCity.medianRate / cheapCity.medianRate - 1) * 100).toFixed(0)}% more for the same amount of beer.</p>
 
   <h2>Beer prices by city</h2>
   <p>Ranked by median price per centilitre, cheapest first.</p>
@@ -485,7 +539,7 @@ write("blog/beer-prices-sweden", page({
   ${mapCta("en")}
 
   <h2>How much is a beer in Sweden?</h2>
-  <p>The median across our data is ${perCl(national.medianRate)} — about ${kr(national.medianRate * 40)} for a 40 cl "stor stark", the standard large draught. The range is wide: ${perCl(national.bestRate)} to ${perCl(national.worstRate)}, a ${(national.worstRate / national.bestRate).toFixed(1)}× difference between the cheapest and dearest beer in the country.</p>
+  <p>The median across our data is ${perCl(national.medianRate)} — about ${kr(national.medianRate * 40)} for a 40 cl "stor stark", the standard large draught. The range is wide: ${perCl(national.bestRate)} to ${perCl(national.worstRate)}, a ${(national.worstRate / national.bestRate).toFixed(1)}× difference between the cheapest and the most expensive beer in the country.</p>
 
   <h2>How we work it out</h2>
   <p>Prices are reported by Sesh users. For each bar and size we show the median of recent reports. Only prices in kronor are included, and a pint is treated as 56.8 cl. Cities with fewer than ${MIN_BARS} bars do not get their own page — the sample is too thin to be useful.</p>

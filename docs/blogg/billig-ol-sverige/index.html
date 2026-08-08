@@ -70,6 +70,17 @@
   td.p{font-weight:700;color:var(--whiskey);font-family:var(--mono);white-space:nowrap;}
   .rank{color:var(--bronze);font-family:var(--mono);width:1%;}
   .note{font-size:13px;color:var(--bronze);margin:10px 0 0;}
+  /* Price bands. A table of twelve numbers is hard to scan; a colour per band
+     makes "is this cheap" answerable at a glance, which is the actual question.
+     Thresholds are relative to the national median, so they stay meaningful as
+     prices drift rather than being frozen constants. */
+  td.p.b1{color:#7ec96b;} td.p.b2{color:#e8c34a;} td.p.b3{color:#e8843c;} td.p.b4{color:#e07a6a;}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;margin:14px 0 0;font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--bronze);}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+  .switch{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 26px;padding:0;list-style:none;}
+  .switch a{display:inline-block;font-size:12.5px;font-weight:600;text-decoration:none;color:var(--cream-dim);
+    background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:5px 11px;}
+  .switch a.on{background:var(--whiskey);border-color:var(--whiskey);color:#241503;}
   .cta{display:block;margin:34px 0;padding:19px 22px;background:var(--bg-elev);border:1px solid rgba(232,132,60,.34);border-radius:17px;text-decoration:none;color:var(--cream);}
   .cta b{display:block;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;margin-bottom:3px;}
   .cta span{font-size:14px;color:var(--cream-dim);}
@@ -93,6 +104,7 @@
   </header>
   <p class="kicker">Ölpriser · Sverige</p>
   <h1>Billigaste ölen i Sverige</h1>
+
 
   <p class="lede">Inrapporterade ölpriser från <strong>752 barer</strong> i 12 svenska städer, jämförda på det enda sätt som är rättvist: kronor per centiliter.</p>
   <p class="stamp">Uppdaterad 8 augusti 2026 · 814 priser</p>
@@ -166,7 +178,7 @@
   <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-stockholm/">Stockholm</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-goteborg/">Göteborg</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-kalmar/">Kalmar</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-malmo/">Malmö</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-linkoping/">Linköping</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-orebro/">Örebro</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-landskrona/">Landskrona</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-norrkoping/">Norrköping</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-lund/">Lund</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-skelleftea/">Skellefteå</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-ostersund/">Östersund</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-lulea/">Luleå</a></li></ul>
 
   <footer>
-    Priserna är inrapporterade av användare och visas som medianen av de senaste rapporterna per bar och storlek. Sesh ger ingen garanti för att ett pris gäller när du kommer dit — <a href="https://seshapp.xyz/map/">rapportera gärna en ändring</a>. Drick måttfullt.
+    Sidan är avsedd för dig som är över 18 år. Priserna är inrapporterade av användare och visas som medianen av de senaste rapporterna per bar och storlek. Sesh ger ingen garanti för att ett pris gäller när du kommer dit — <a href="https://seshapp.xyz/map/">rapportera gärna en ändring</a>. Drick måttfullt.
     <br /><br />
     <a href="https://seshapp.xyz/">Sesh</a> · <a href="https://seshapp.xyz/map/">Ölkartan</a>
     · <a href="https://seshapp.xyz/privacy/">Integritet</a>

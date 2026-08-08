@@ -133,6 +133,7 @@
   <a class="brand" href="/">Sesh<span>.</span></a>
   <span class="count" id="count">loading…</span>
   <div class="spacer"></div>
+  <a class="icon-btn" href="/blogg/" style="text-decoration:none">📊 Ölpriser</a>
   <button class="icon-btn" id="listBtn">☰ List</button>
   <button class="icon-btn primary" id="addBtn">＋ Add price</button>
   <div class="seg" id="modeSeg">
@@ -373,11 +374,20 @@
 
   window.initMapKit=function(){ mapkit.init({authorizationCallback:function(done){done(TOKEN);}}); boot(); };
 
+  // Deep link from the price articles: /map/?lat=..&lon=..&city=Kalmar opens
+  // straight onto that city instead of auto-fitting to every pin in the world.
+  // Without it every article CTA dropped the reader on a map of Scandinavia.
+  var qp = new URLSearchParams(location.search);
+  var qLat = parseFloat(qp.get("lat")), qLon = parseFloat(qp.get("lon"));
+  if (!isFinite(qLat) || !isFinite(qLon)) { qLat = qLon = 0; }
+  var qCity = (qp.get("city") || "").slice(0, 40);
+
   function boot(){
     countEl=$("count");msgEl=$("msg");
+    if (qCity) document.title = "Ölpriser i " + qCity + " – Sesh";
     map=new mapkit.Map("map",{colorScheme:mapkit.Map.ColorSchemes.Dark,showsCompass:mapkit.FeatureVisibility.Hidden,
       showsScale:mapkit.FeatureVisibility.Hidden,showsZoomControl:true,showsMapTypeControl:false,isRotationEnabled:false,
-      center:new mapkit.Coordinate(57.70,11.96),cameraDistance:9000});
+      center:new mapkit.Coordinate(qLat||57.70,qLon||11.96),cameraDistance:qLat?4200:9000});
     search=new mapkit.Search({getsUserLocation:false});
     // Zoomed out, hundreds of DOM annotations made pan/zoom crawl. Native
     // clustering collapses them into count bubbles; zoom in and they split.
@@ -462,7 +472,9 @@
     }else{$("legend").style.display="none";
       dealData.forEach(function(d){var h=d.image_url?'<img class="art" src="'+esc(d.image_url)+'" alt="" />':'<div class="dot">🍺</div>';makePin(new mapkit.Coordinate(d.lat,d.lon),h,popupDeal(d));});
       countEl.textContent=dealData.length+(dealData.length===1?" deal":" deals");}
-    if(layerAnn.length){try{map.showItems(layerAnn,{animate:false,padding:new mapkit.Padding(100,60,60,60),minimumSpan:new mapkit.CoordinateSpan(0.01,0.01)});}catch(e){}}
+    // A deep link has already framed the city; auto-fitting would immediately
+    // zoom back out to every pin and undo it.
+    if(!qLat&&layerAnn.length){try{map.showItems(layerAnn,{animate:false,padding:new mapkit.Padding(100,60,60,60),minimumSpan:new mapkit.CoordinateSpan(0.01,0.01)});}catch(e){}}
   }
 
   function inView(r){var reg=map.region;if(!reg)return true;var c=reg.center,sp=reg.span;

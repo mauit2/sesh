@@ -70,6 +70,17 @@
   td.p{font-weight:700;color:var(--whiskey);font-family:var(--mono);white-space:nowrap;}
   .rank{color:var(--bronze);font-family:var(--mono);width:1%;}
   .note{font-size:13px;color:var(--bronze);margin:10px 0 0;}
+  /* Price bands. A table of twelve numbers is hard to scan; a colour per band
+     makes "is this cheap" answerable at a glance, which is the actual question.
+     Thresholds are relative to the national median, so they stay meaningful as
+     prices drift rather than being frozen constants. */
+  td.p.b1{color:#7ec96b;} td.p.b2{color:#e8c34a;} td.p.b3{color:#e8843c;} td.p.b4{color:#e07a6a;}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;margin:14px 0 0;font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--bronze);}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+  .switch{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 26px;padding:0;list-style:none;}
+  .switch a{display:inline-block;font-size:12.5px;font-weight:600;text-decoration:none;color:var(--cream-dim);
+    background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:5px 11px;}
+  .switch a.on{background:var(--whiskey);border-color:var(--whiskey);color:#241503;}
   .cta{display:block;margin:34px 0;padding:19px 22px;background:var(--bg-elev);border:1px solid rgba(232,132,60,.34);border-radius:17px;text-decoration:none;color:var(--cream);}
   .cta b{display:block;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;margin-bottom:3px;}
   .cta span{font-size:14px;color:var(--cream-dim);}
@@ -93,99 +104,100 @@
   </header>
   <p class="kicker">Beer prices · Stockholm</p>
   <h1>Cheapest beer in Stockholm</h1>
+<ul class="switch"><li><a class="on" href="https://seshapp.xyz/blog/cheapest-beer-stockholm/">Stockholm</a></li><li><a class="" href="https://seshapp.xyz/blog/cheapest-beer-gothenburg/">Gothenburg</a></li><li><a class="" href="https://seshapp.xyz/blog/cheapest-beer-kalmar/">Kalmar</a></li><li><a class="" href="https://seshapp.xyz/blog/cheapest-beer-malmo/">Malmö</a></li><li><a class="" href="https://seshapp.xyz/blog/cheapest-beer-linkoping/">Linköping</a></li><li><a class="" href="https://seshapp.xyz/blog/cheapest-beer-orebro/">Örebro</a></li><li><a class="" href="https://seshapp.xyz/blog/cheapest-beer-landskrona/">Landskrona</a></li><li><a class="" href="https://seshapp.xyz/blog/cheapest-beer-norrkoping/">Norrköping</a></li><li><a class="" href="https://seshapp.xyz/blog/cheapest-beer-lund/">Lund</a></li><li><a class="" href="https://seshapp.xyz/blog/cheapest-beer-skelleftea/">Skellefteå</a></li><li><a class="" href="https://seshapp.xyz/blog/cheapest-beer-ostersund/">Östersund</a></li><li><a class="" href="https://seshapp.xyz/blog/cheapest-beer-lulea/">Luleå</a></li></ul>
 
   <p class="lede">We have user-reported beer prices from <strong>415 bars</strong> in Stockholm. Here is where a large draught costs least — and where you get the most beer for your money per centilitre.</p>
   <p class="stamp">Updated 8 August 2026 · 418 prices</p>
   <div class="figs"><div class="fig"><b>37 kr</b><span>cheapest 40 cl</span></div><div class="fig"><b>76 kr</b><span>median, 40 cl</span></div><div class="fig"><b>0.78 kr/cl</b><span>best price per cl</span></div><div class="fig"><b>415</b><span>bars with a price</span></div></div>
-  <p>The median in Stockholm is <strong>1.90 kr/cl</strong>, 9% above the national median. The gap between the cheapest and dearest beer in the city is 4.5×, so it genuinely pays to know where you are going.</p>
+  <p>The median in Stockholm is <strong>1.90 kr/cl</strong>, 9% above the national median. The gap between the cheapest and the most expensive beer in the city is 4.5×, so it genuinely pays to know where you are going.</p>
 
   <h2>Cheapest large draught in Stockholm</h2>
   <p>A Swedish "stor stark" is usually 40 cl of draught lager — the measure locals compare — so it gets its own table.</p>
   <div class="tw"><table><tr><th></th><th>Bar</th><th>Price</th><th>Per cl</th></tr>
 <tr>
       <td class="rank">1</td>
-      <td>Crazy Horse Sveavägen</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.33856&lon=18.06092&city=Stockholm">Crazy Horse Sveavägen</a></td>
       
-      <td class="p">37 kr</td>
+      <td class="p b1">37 kr</td>
       <td class="n">0.93 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">2</td>
-      <td>Dovas Hornstull</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.31804&lon=18.03200&city=Stockholm">Dovas Hornstull</a></td>
       
-      <td class="p">39 kr</td>
+      <td class="p b1">39 kr</td>
       <td class="n">0.97 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">3</td>
-      <td>Brödernas Rörstrandsgatan</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.34038&lon=18.03127&city=Stockholm">Brödernas Rörstrandsgatan</a></td>
       
-      <td class="p">39 kr</td>
+      <td class="p b1">39 kr</td>
       <td class="n">0.97 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">4</td>
-      <td>Burgers No Name Bar</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.31295&lon=18.07477&city=Stockholm">Burgers No Name Bar</a></td>
       
-      <td class="p">39 kr</td>
+      <td class="p b1">39 kr</td>
       <td class="n">0.97 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">5</td>
-      <td>Bar 08</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.33842&lon=18.00636&city=Stockholm">Bar 08</a></td>
       
-      <td class="p">40 kr</td>
+      <td class="p b1">40 kr</td>
       <td class="n">1.00 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">6</td>
-      <td> Brazilia Restaurang</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.35326&lon=18.06515&city=Stockholm"> Brazilia Restaurang</a></td>
       
-      <td class="p">42 kr</td>
+      <td class="p b1">42 kr</td>
       <td class="n">1.05 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">7</td>
-      <td>The Station</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.36137&lon=17.96716&city=Stockholm">The Station</a></td>
       
-      <td class="p">42 kr</td>
+      <td class="p b1">42 kr</td>
       <td class="n">1.05 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">8</td>
-      <td>Maestro Kebab</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.33421&lon=18.05796&city=Stockholm">Maestro Kebab</a></td>
       
-      <td class="p">44 kr</td>
+      <td class="p b1">44 kr</td>
       <td class="n">1.10 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">9</td>
-      <td>Bistro 151</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.33757&lon=18.01607&city=Stockholm">Bistro 151</a></td>
       
-      <td class="p">44 kr</td>
+      <td class="p b1">44 kr</td>
       <td class="n">1.10 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">10</td>
-      <td>The Lounge Bar</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.33926&lon=18.05949&city=Stockholm">The Lounge Bar</a></td>
       
-      <td class="p">44 kr</td>
+      <td class="p b1">44 kr</td>
       <td class="n">1.10 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">11</td>
-      <td>Baras Imperium</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.31552&lon=18.07020&city=Stockholm">Baras Imperium</a></td>
       
-      <td class="p">45 kr</td>
+      <td class="p b1">45 kr</td>
       <td class="n">1.13 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">12</td>
-      <td>Baras Backe</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.31652&lon=18.07222&city=Stockholm">Baras Backe</a></td>
       
-      <td class="p">45 kr</td>
+      <td class="p b1">45 kr</td>
       <td class="n">1.13 kr/cl</td>
-    </tr></table></div>
+    </tr></table></div><div class="legend"><span><i style="background:#7ec96b"></i>under 1.31 kr/cl</span><span><i style="background:#e8c34a"></i>below national median</span><span><i style="background:#e8843c"></i>above national median</span><span><i style="background:#e07a6a"></i>over 2.19 kr/cl</span></div>
   <p class="note">Prices in Swedish kronor, median of recent reports per bar.</p>
 
   <h2>Best value — price per centilitre</h2>
@@ -193,62 +205,62 @@
   <div class="tw"><table><tr><th></th><th>Bar</th><th>Size</th><th>Price</th><th>Per cl</th></tr>
 <tr>
       <td class="rank">1</td>
-      <td>Nivå 22</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.33235&lon=18.02842&city=Stockholm">Nivå 22</a></td>
       <td class="n">50 cl</td>
-      <td class="p">39 kr</td>
+      <td class="p b1">39 kr</td>
       <td class="n">0.78 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">2</td>
-      <td>Black Elk</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.31524&lon=18.07092&city=Stockholm">Black Elk</a></td>
       <td class="n">50 cl</td>
-      <td class="p">39 kr</td>
+      <td class="p b1">39 kr</td>
       <td class="n">0.78 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">3</td>
-      <td>Crazy Horse Sveavägen</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.33856&lon=18.06092&city=Stockholm">Crazy Horse Sveavägen</a></td>
       <td class="n">40 cl</td>
-      <td class="p">37 kr</td>
+      <td class="p b1">37 kr</td>
       <td class="n">0.93 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">4</td>
-      <td>Dovas Hornstull</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.31804&lon=18.03200&city=Stockholm">Dovas Hornstull</a></td>
       <td class="n">40 cl</td>
-      <td class="p">39 kr</td>
+      <td class="p b1">39 kr</td>
       <td class="n">0.97 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">5</td>
-      <td>Brödernas Rörstrandsgatan</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.34038&lon=18.03127&city=Stockholm">Brödernas Rörstrandsgatan</a></td>
       <td class="n">40 cl</td>
-      <td class="p">39 kr</td>
+      <td class="p b1">39 kr</td>
       <td class="n">0.97 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">6</td>
-      <td>Burgers No Name Bar</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.31295&lon=18.07477&city=Stockholm">Burgers No Name Bar</a></td>
       <td class="n">40 cl</td>
-      <td class="p">39 kr</td>
+      <td class="p b1">39 kr</td>
       <td class="n">0.97 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">7</td>
-      <td>Ölhallen 1904</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.34194&lon=18.06012&city=Stockholm">Ölhallen 1904</a></td>
       <td class="n">50 cl</td>
-      <td class="p">49 kr</td>
+      <td class="p b1">49 kr</td>
       <td class="n">0.98 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">8</td>
-      <td>Bar 08</td>
+      <td><a href="https://seshapp.xyz/map/?lat=59.33842&lon=18.00636&city=Stockholm">Bar 08</a></td>
       <td class="n">40 cl</td>
-      <td class="p">40 kr</td>
+      <td class="p b1">40 kr</td>
       <td class="n">1.00 kr/cl</td>
-    </tr></table></div>
+    </tr></table></div><div class="legend"><span><i style="background:#7ec96b"></i>under 1.31 kr/cl</span><span><i style="background:#e8c34a"></i>below national median</span><span><i style="background:#e8843c"></i>above national median</span><span><i style="background:#e07a6a"></i>over 2.19 kr/cl</span></div>
 
-  <a class="cta" href="https://seshapp.xyz/map/">
+  <a class="cta" href="https://seshapp.xyz/map/?lat=59.32665&lon=18.06271&city=Stockholm">
     <b>See every price on the map</b>
     <span>Zoom to your city, filter by size, and see which bars are in the sun right now.</span>
   </a>
@@ -261,7 +273,7 @@
   <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-gothenburg/">Gothenburg</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-kalmar/">Kalmar</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-malmo/">Malmö</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-linkoping/">Linköping</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-orebro/">Örebro</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-landskrona/">Landskrona</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-norrkoping/">Norrköping</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-lund/">Lund</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-skelleftea/">Skellefteå</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-ostersund/">Östersund</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-lulea/">Luleå</a></li></ul>
 
   <footer>
-    Prices are reported by users and shown as the median of recent reports per bar and size. Sesh cannot guarantee a price still stands when you arrive — <a href="https://seshapp.xyz/map/">report a change</a> if it has moved. Please drink responsibly.
+    This page is intended for readers of legal drinking age. Prices are reported by users and shown as the median of recent reports per bar and size. Sesh cannot guarantee a price still stands when you arrive — <a href="https://seshapp.xyz/map/">report a change</a> if it has moved. Please drink responsibly.
     <br /><br />
     <a href="https://seshapp.xyz/">Sesh</a> · <a href="https://seshapp.xyz/map/">Beer map</a>
     · <a href="https://seshapp.xyz/privacy/">Privacy</a>
