@@ -1,0 +1,5 @@
+# seshapp.xyz
+User-agent: *
+Allow: /
+
+Sitemap: https://seshapp.xyz/sitemap.xml
