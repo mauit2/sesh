@@ -1303,17 +1303,24 @@ private struct OffersMapView: View {
     /// map's renderer while it's off-screen and re-runs the staleness-guarded
     /// refreshes on the way back in.
     var pageActive: Bool = true
-    /// True while the Sun map is warming its style hidden behind the MapKit
-    /// map. Only granted to users who have opened Sun before (persisted), so
-    /// people who never use it never pay the memory or the frames.
+    /// True during the brief window where the Sun map renders hidden to pull
+    /// its tiles. Mounting it parked loads and parses the style, but TILE
+    /// fetches are driven by the render loop, so it has to draw for a moment
+    /// to actually have something to show.
     @State private var sunPrewarming = false
+    /// Set the first time MapKit reports a settled camera — i.e. the map the
+    /// user is looking at is up. The Sun warm-up waits for this instead of a
+    /// blind timer: warming on mount made the hidden Mapbox style and tiles
+    /// compete with MapKit's FIRST tiles, and the visible map sat grey.
+    @State private var mapKitPainted = false
     /// What the map is actually showing. Pins are filtered to this rather than
     /// to a radius around YOU: the maps are deliberately global (zoom out to
     /// browse another city), but handing MapKit venues on another continent
     /// made it clamp them into the corner of the screen.
     @State private var visibleRegion: MKCoordinateRegion?
-    /// Latches true the first time Sun mode is opened. Gates whether the Mapbox
-    /// map exists at all, so users who never open Sun never pay to build it.
+    /// Latches true once the Mapbox map should exist. Set as soon as the map
+    /// page opens now — all three modes are built up front so switching is a
+    /// fade, not a load.
     @State private var sunEverShown = false
     /// Where search asked the camera to go.
     @State private var sunFocus: CLLocationCoordinate2D?
@@ -1508,6 +1515,7 @@ private struct OffersMapView: View {
             .onMapCameraChange(frequency: .onEnd) { ctx in
                 visibleRegion = ctx.region
                 rebuildPinModels()
+                if !mapKitPainted { mapKitPainted = true }
             }
             .opacity(mapMode == .sun ? 0 : 1)
             .allowsHitTesting(mapMode != .sun)
@@ -1644,30 +1652,35 @@ private struct OffersMapView: View {
             .presentationBackground(Color.ink)
         }
         .task {
-            // PREWARM Sun for people who actually use it. Mounting the Mapbox
-            // map parked would parse the style but never fetch tiles — tile
-            // requests are driven by the render loop — so it renders hidden
-            // for a few seconds, then the gate parks it. First-ever users
-            // still pay the style load on their first tap; there is no way to
-            // know they'll want it, and charging everyone memory for a mode
-            // they never open is the wrong default.
-            if UserDefaults.standard.bool(forKey: "sesh.sunUsed.v1"), !sunEverShown {
-                // AFTER the visible map has had its window. Starting the
-                // prewarm at page mount made the Mapbox style + tile fetch and
-                // four seconds of hidden rendering compete with MapKit's FIRST
-                // tile load — on cellular the map you're looking at sat grey
-                // while the one you weren't warmed up. The sun map can wait
-                // six seconds; nobody reaches the Sun toggle faster than that,
-                // and if they do, the normal on-demand load takes over below.
-                try? await Task.sleep(nanoseconds: 6_000_000_000)
-                guard !sunEverShown else { return }
-                sunEverShown = true
-                sunPrewarming = true
-                await sun.load(near: location.location?.coordinate
-                    ?? CLLocationCoordinate2D(latitude: 57.7016, longitude: 11.9668))
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                sunPrewarming = false
+            // WARM ALL THREE MODES ON OPEN, so every switch is a fade.
+            //
+            // Ordered, not simultaneous. The three costs compete for different
+            // things and only one of them is on screen:
+            //   1. Sun DATA is a network fetch — start it right away, it shares
+            //      nothing with MapKit's tiles but is needed before any pin can
+            //      be placed, and rebuilding readings for ~80 venues is real
+            //      work best done off the critical path.
+            //   2. The Mapbox map MOUNTS immediately but parked. That loads and
+            //      parses the style (the expensive part of a first Sun open)
+            //      without drawing a frame.
+            //   3. TILES need the render loop, so the map draws hidden for a
+            //      few seconds — but only after MapKit's camera has settled.
+            //      Doing this on mount is what made the visible map go grey.
+            let centre = location.location?.coordinate
+                ?? CLLocationCoordinate2D(latitude: 57.7016, longitude: 11.9668)
+            sunEverShown = true                 // style begins loading, parked
+            if sun.venues.isEmpty {
+                await sun.load(near: centre)    // data, in parallel with MapKit
             }
+            // Wait for the visible map, with a ceiling so a camera that never
+            // reports (no fix, no interaction) can't strand the warm-up.
+            for _ in 0..<40 where !mapKitPainted {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard mapMode != .sun else { return }   // already showing; no need
+            sunPrewarming = true
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            sunPrewarming = false
         }
         .task {
             recenter()
@@ -1697,11 +1710,9 @@ private struct OffersMapView: View {
         .onChange(of: venues.catalogStamp) { _, _ in rebuildPinModels() }
         .onChange(of: selectedServing) { _, _ in rebuildPinModels() }
         .onChange(of: mapMode) { _, mode in
-            if mode == .sun {
-                sunEverShown = true
-                // Remembered across launches: next session prewarms for them.
-                UserDefaults.standard.set(true, forKey: "sesh.sunUsed.v1")
-            }
+            // sunEverShown is already true from the warm-up; kept as a guard
+            // for the case where a switch somehow beats it.
+            if mode == .sun { sunEverShown = true }
             // DROP THE STALE VIEWPORT. onScreen() filters pins against
             // visibleRegion, which only MapKit's onMapCameraChange refreshes —
             // and the MapKit map is torn down while Sun is showing. Coming back,
