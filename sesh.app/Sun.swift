@@ -34,8 +34,24 @@ struct SunVenue: Decodable, Identifiable, Equatable {
     /// knowledge that the building model can't derive (a terrace tucked into
     /// a courtyard corner, say). The UI must not present it as modelled.
     let isOverride: Bool
+    /// Bearing the seating faces, agreed from user reports (migration 090).
+    /// nil means nobody has said, so the sunniest-facade guess was used.
+    let facadeBearing: Int?
+    /// How many people have reported it.
+    let facadeReports: Int
 
     var id: UUID { venueId }
+
+    /// True when the vantage point came from people rather than the optimistic
+    /// sunniest-facade guess.
+    var facadeFromPeople: Bool { facadeBearing != nil && facadeReports > 0 }
+
+    /// The reported direction as a compass point, for the pin's label.
+    var facadeCompass: String? {
+        guard let b = facadeBearing else { return nil }
+        let names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+        return names[Int(((Double(b) / 45).rounded())) % 8]
+    }
 
     /// The venue's OWN time zone. This is what makes the feature work
     /// worldwide: the sun maths is latitude-agnostic, but "today" and "sun till
@@ -70,6 +86,8 @@ struct SunVenue: Decodable, Identifiable, Equatable {
         case timeZoneId = "time_zone"
         case isOverride = "is_override"
         case horizonTenths = "horizon"
+        case facadeBearing = "facade_bearing"
+        case facadeReports = "facade_reports"
     }
 
     init(from decoder: Decoder) throws {
@@ -85,6 +103,8 @@ struct SunVenue: Decodable, Identifiable, Equatable {
         prominence = try c.decodeIfPresent(Int.self, forKey: .prominence) ?? 60
         timeZoneId = try c.decodeIfPresent(String.self, forKey: .timeZoneId)
         isOverride = try c.decodeIfPresent(Bool.self, forKey: .isOverride) ?? false
+        facadeBearing = try c.decodeIfPresent(Int.self, forKey: .facadeBearing)
+        facadeReports = try c.decodeIfPresent(Int.self, forKey: .facadeReports) ?? 0
     }
 }
 
@@ -588,7 +608,8 @@ struct SunPin: View {
                     }
                     if let onEdit {
                         Button(action: onEdit) {
-                            Text(reading.venue.isOverride ? "EDIT SPOT" : "WRONG SPOT?")
+                            Text(reading.venue.facadeFromPeople || reading.venue.isOverride
+                                 ? "EDIT SPOT" : "WRONG SPOT?")
                                 .font(.system(size: 7, weight: .black, design: .monospaced))
                                 .tracking(1)
                                 .foregroundStyle(Color.ink)
@@ -598,7 +619,17 @@ struct SunPin: View {
                         .buttonStyle(.plain)
                         .padding(.top, 2)
                     }
-                    if reading.venue.isOverride {
+                    if reading.venue.facadeFromPeople, let dir = reading.venue.facadeCompass {
+                        // Checked before isOverride: a facade report is the
+                        // route users actually have, and it was previously
+                        // invisible — corrections showed no sign of landing.
+                        Text(reading.venue.facadeReports == 1
+                             ? "SEATS FACE \(dir) · 1 REPORT"
+                             : "SEATS FACE \(dir) · \(reading.venue.facadeReports) REPORTS")
+                            .font(.system(size: 6.5, weight: .bold, design: .monospaced))
+                            .tracking(1)
+                            .foregroundStyle(Color(red: 1.0, green: 0.79, blue: 0.28))
+                    } else if reading.venue.isOverride {
                         Text("SET BY HAND")
                             .font(.system(size: 6.5, weight: .bold, design: .monospaced))
                             .tracking(1)
