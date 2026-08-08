@@ -8,14 +8,14 @@
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
 <title>Billigaste ölen i Sverige 2026 – stad för stad</title>
-<meta name="description" content="Vad kostar en öl i Sverige? 752 barer i 12 städer, pris per centiliter och vilken stad som är billigast. Uppdaterad 8 augusti 2026." />
+<meta name="description" content="Vad kostar en öl i Sverige? 750 barer i 12 städer, pris per centiliter och vilken stad som är billigast. Uppdaterad 8 augusti 2026." />
 <link rel="canonical" href="https://seshapp.xyz/blogg/billig-ol-sverige/" />
 <link rel="alternate" hreflang="sv" href="https://seshapp.xyz/blogg/billig-ol-sverige/" />
 <link rel="alternate" hreflang="en" href="https://seshapp.xyz/blog/beer-prices-sweden/" />
 <link rel="alternate" hreflang="x-default" href="https://seshapp.xyz/blog/beer-prices-sweden/" />
 <meta property="og:type" content="article" />
 <meta property="og:title" content="Billigaste ölen i Sverige 2026 – stad för stad" />
-<meta property="og:description" content="Vad kostar en öl i Sverige? 752 barer i 12 städer, pris per centiliter och vilken stad som är billigast. Uppdaterad 8 augusti 2026." />
+<meta property="og:description" content="Vad kostar en öl i Sverige? 750 barer i 12 städer, pris per centiliter och vilken stad som är billigast. Uppdaterad 8 augusti 2026." />
 <meta property="og:url" content="https://seshapp.xyz/blogg/billig-ol-sverige/" />
 <meta property="og:site_name" content="Sesh" />
 <meta name="twitter:card" content="summary" />
@@ -56,10 +56,17 @@
   p{margin:0 0 15px;}
   .figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin:26px 0 8px;}
   .fig{background:var(--bg-elev);border:1px solid var(--line);border-radius:15px;padding:14px 15px;}
-  /* nowrap + a clamped size: "0.91 kr/cl" wrapped onto two lines at 26px and
-     knocked the card grid out of alignment. */
-  .fig b{display:block;font-family:"Fraunces",Georgia,serif;font-size:clamp(19px,4.4vw,26px);
-    font-weight:900;letter-spacing:-.02em;line-height:1.15;white-space:nowrap;}
+  /* The value must never wrap or overflow, and the page ships NO JavaScript
+     (the CSP has no script-src at all), so it cannot be fit at runtime. The
+     generator picks a step from the string length instead — "Gothenburg" needs
+     a smaller size than "12" and both have to sit in the same card. */
+  .fig b{display:block;font-family:"Fraunces",Georgia,serif;font-weight:900;
+    letter-spacing:-.02em;line-height:1.15;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;}
+  .fig b.s1{font-size:clamp(22px,5.2vw,28px);}   /* up to 4 chars: "12", "30 kr" */
+  .fig b.s2{font-size:clamp(19px,4.4vw,24px);}   /* to 8:  "1.75 kr/cl" */
+  .fig b.s3{font-size:clamp(16px,3.6vw,20px);}   /* to 11: "Gothenburg" */
+  .fig b.s4{font-size:clamp(14px,3vw,17px);}     /* longer: "Skellefteå" + */
   .fig span{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze);}
   .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:16px 0 6px;border:1px solid var(--line);border-radius:15px;background:var(--bg-elev);}
   table{width:100%;border-collapse:collapse;font-size:14.5px;min-width:420px;}
@@ -70,6 +77,9 @@
   td.p{font-weight:700;color:var(--whiskey);font-family:var(--mono);white-space:nowrap;}
   .rank{color:var(--bronze);font-family:var(--mono);width:1%;}
   .note{font-size:13px;color:var(--bronze);margin:10px 0 0;}
+  .caveat{margin:24px 0;padding:15px 18px;border-left:2px solid var(--whiskey);
+    background:var(--bg-elev);border-radius:0 13px 13px 0;font-size:14.5px;color:var(--cream-dim);}
+  .caveat b{color:var(--cream);}
   /* Price bands. A table of twelve numbers is hard to scan; a colour per band
      makes "is this cheap" answerable at a glance, which is the actual question.
      Thresholds are relative to the national median, so they stay meaningful as
@@ -81,10 +91,25 @@
   .switch a{display:inline-block;font-size:12.5px;font-weight:600;text-decoration:none;color:var(--cream-dim);
     background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:5px 11px;}
   .switch a.on{background:var(--whiskey);border-color:var(--whiskey);color:#241503;}
+  .crumbs{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--bronze);margin:0 0 14px;}
+  .crumbs a{color:var(--bronze);text-decoration:none;}
+  .crumbs span{color:var(--cream-dim);}
   .cta{display:block;margin:34px 0;padding:19px 22px;background:var(--bg-elev);border:1px solid rgba(232,132,60,.34);border-radius:17px;text-decoration:none;color:var(--cream);}
   .cta b{display:block;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;margin-bottom:3px;}
   .cta span{font-size:14px;color:var(--cream-dim);}
   .chips{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0;padding:0;list-style:none;}
+  .chips .chip-on{display:inline-block;font-size:13.5px;font-weight:600;color:#241503;
+    background:var(--whiskey);border:1px solid var(--whiskey);border-radius:999px;padding:7px 13px;}
+  /* The hub's city directory: one card per city, its variant pages as chips.
+     This IS the navigation the hub exists for, so it gets real presence. */
+  .citygrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin:18px 0 0;}
+  .citycard{background:var(--bg-elev);border:1px solid var(--line);border-radius:15px;padding:15px 16px;}
+  .citycard h3{margin:0 0 2px;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;letter-spacing:-.015em;}
+  .citycard .cityname{color:var(--cream);text-decoration:none;}
+  .citycard .cityname:hover{color:var(--whiskey);}
+  .citycard .meta{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze);margin:0 0 4px;}
+  .citycard .chips{margin-top:8px;gap:5px;}
+  .citycard .chips a,.citycard .chips .chip-on{font-size:11.5px;padding:4px 10px;}
   .chips a{display:inline-block;font-size:13.5px;font-weight:600;text-decoration:none;color:var(--cream);
     background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:7px 13px;}
   footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--bronze);}
@@ -106,9 +131,9 @@
   <h1>Billigaste ölen i Sverige</h1>
 
 
-  <p class="lede">Inrapporterade ölpriser från <strong>752 barer</strong> i 12 svenska städer, jämförda på det enda sätt som är rättvist: kronor per centiliter.</p>
-  <p class="stamp">Uppdaterad 8 augusti 2026 · 814 priser</p>
-  <div class="figs"><div class="fig"><b>1.75 kr/cl</b><span>riksmedian</span></div><div class="fig"><b>30 kr</b><span>billigaste stor stark</span></div><div class="fig"><b>Göteborg</b><span>billigaste staden</span></div><div class="fig"><b>12</b><span>städer</span></div></div>
+  <p class="lede">Inrapporterade ölpriser från <strong>750 barer</strong> i 12 svenska städer, jämförda på det enda sätt som är rättvist: kronor per centiliter.</p>
+  <p class="stamp">Uppdaterad 8 augusti 2026 · 812 priser</p>
+  <div class="figs"><div class="fig"><b class="s3" title="1.75 kr/cl">1.75 kr/cl</b><span>riksmedian</span></div><div class="fig"><b class="s1" title="30 kr">30 kr</b><span>billigaste stor stark</span></div><div class="fig"><b class="s2" title="Göteborg">Göteborg</b><span>billigaste staden</span></div><div class="fig"><b class="s1" title="12">12</b><span>städer</span></div></div>
   <p><strong>Göteborg</strong> är billigast av städerna vi täcker på 1.48 kr/cl i median, mot 1.98 kr/cl i Skellefteå — 34 % dyrare för samma mängd öl.</p>
 
   <h2>Ölpriser per stad</h2>

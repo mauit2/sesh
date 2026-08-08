@@ -8,14 +8,14 @@
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
 <title>Ölpriser i Sverige – stad för stad | Sesh</title>
-<meta name="description" content="Vad kostar ölen där du bor? Inrapporterade priser från 752 barer i 12 städer." />
+<meta name="description" content="Vad kostar ölen där du bor? Inrapporterade priser från 750 barer i 12 städer." />
 <link rel="canonical" href="https://seshapp.xyz/blogg/" />
 <link rel="alternate" hreflang="sv" href="https://seshapp.xyz/blogg/" />
 <link rel="alternate" hreflang="en" href="https://seshapp.xyz/blog/" />
 <link rel="alternate" hreflang="x-default" href="https://seshapp.xyz/blog/" />
 <meta property="og:type" content="article" />
 <meta property="og:title" content="Ölpriser i Sverige – stad för stad | Sesh" />
-<meta property="og:description" content="Vad kostar ölen där du bor? Inrapporterade priser från 752 barer i 12 städer." />
+<meta property="og:description" content="Vad kostar ölen där du bor? Inrapporterade priser från 750 barer i 12 städer." />
 <meta property="og:url" content="https://seshapp.xyz/blogg/" />
 <meta property="og:site_name" content="Sesh" />
 <meta name="twitter:card" content="summary" />
@@ -56,10 +56,17 @@
   p{margin:0 0 15px;}
   .figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin:26px 0 8px;}
   .fig{background:var(--bg-elev);border:1px solid var(--line);border-radius:15px;padding:14px 15px;}
-  /* nowrap + a clamped size: "0.91 kr/cl" wrapped onto two lines at 26px and
-     knocked the card grid out of alignment. */
-  .fig b{display:block;font-family:"Fraunces",Georgia,serif;font-size:clamp(19px,4.4vw,26px);
-    font-weight:900;letter-spacing:-.02em;line-height:1.15;white-space:nowrap;}
+  /* The value must never wrap or overflow, and the page ships NO JavaScript
+     (the CSP has no script-src at all), so it cannot be fit at runtime. The
+     generator picks a step from the string length instead — "Gothenburg" needs
+     a smaller size than "12" and both have to sit in the same card. */
+  .fig b{display:block;font-family:"Fraunces",Georgia,serif;font-weight:900;
+    letter-spacing:-.02em;line-height:1.15;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;}
+  .fig b.s1{font-size:clamp(22px,5.2vw,28px);}   /* up to 4 chars: "12", "30 kr" */
+  .fig b.s2{font-size:clamp(19px,4.4vw,24px);}   /* to 8:  "1.75 kr/cl" */
+  .fig b.s3{font-size:clamp(16px,3.6vw,20px);}   /* to 11: "Gothenburg" */
+  .fig b.s4{font-size:clamp(14px,3vw,17px);}     /* longer: "Skellefteå" + */
   .fig span{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze);}
   .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:16px 0 6px;border:1px solid var(--line);border-radius:15px;background:var(--bg-elev);}
   table{width:100%;border-collapse:collapse;font-size:14.5px;min-width:420px;}
@@ -70,6 +77,9 @@
   td.p{font-weight:700;color:var(--whiskey);font-family:var(--mono);white-space:nowrap;}
   .rank{color:var(--bronze);font-family:var(--mono);width:1%;}
   .note{font-size:13px;color:var(--bronze);margin:10px 0 0;}
+  .caveat{margin:24px 0;padding:15px 18px;border-left:2px solid var(--whiskey);
+    background:var(--bg-elev);border-radius:0 13px 13px 0;font-size:14.5px;color:var(--cream-dim);}
+  .caveat b{color:var(--cream);}
   /* Price bands. A table of twelve numbers is hard to scan; a colour per band
      makes "is this cheap" answerable at a glance, which is the actual question.
      Thresholds are relative to the national median, so they stay meaningful as
@@ -81,10 +91,25 @@
   .switch a{display:inline-block;font-size:12.5px;font-weight:600;text-decoration:none;color:var(--cream-dim);
     background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:5px 11px;}
   .switch a.on{background:var(--whiskey);border-color:var(--whiskey);color:#241503;}
+  .crumbs{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--bronze);margin:0 0 14px;}
+  .crumbs a{color:var(--bronze);text-decoration:none;}
+  .crumbs span{color:var(--cream-dim);}
   .cta{display:block;margin:34px 0;padding:19px 22px;background:var(--bg-elev);border:1px solid rgba(232,132,60,.34);border-radius:17px;text-decoration:none;color:var(--cream);}
   .cta b{display:block;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;margin-bottom:3px;}
   .cta span{font-size:14px;color:var(--cream-dim);}
   .chips{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0;padding:0;list-style:none;}
+  .chips .chip-on{display:inline-block;font-size:13.5px;font-weight:600;color:#241503;
+    background:var(--whiskey);border:1px solid var(--whiskey);border-radius:999px;padding:7px 13px;}
+  /* The hub's city directory: one card per city, its variant pages as chips.
+     This IS the navigation the hub exists for, so it gets real presence. */
+  .citygrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin:18px 0 0;}
+  .citycard{background:var(--bg-elev);border:1px solid var(--line);border-radius:15px;padding:15px 16px;}
+  .citycard h3{margin:0 0 2px;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;letter-spacing:-.015em;}
+  .citycard .cityname{color:var(--cream);text-decoration:none;}
+  .citycard .cityname:hover{color:var(--whiskey);}
+  .citycard .meta{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze);margin:0 0 4px;}
+  .citycard .chips{margin-top:8px;gap:5px;}
+  .citycard .chips a,.citycard .chips .chip-on{font-size:11.5px;padding:4px 10px;}
   .chips a{display:inline-block;font-size:13.5px;font-weight:600;text-decoration:none;color:var(--cream);
     background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:7px 13px;}
   footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--bronze);}
@@ -106,12 +131,77 @@
   <h1>Vad kostar ölen?</h1>
 
 
-  <p class="lede">Vi samlar in ölpriser från barer i hela Sverige och jämför dem per centiliter, inte per glas. Just nu 752 barer i 12 städer.</p>
+  <p class="lede">Vi samlar in ölpriser från barer i hela Sverige och jämför dem per centiliter, inte per glas. Just nu 750 barer i 12 städer.</p>
   <p class="stamp">Uppdaterad 8 augusti 2026</p>
-  <h2>Hela landet</h2>
-  <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-sverige/">Billigaste ölen i Sverige</a></li></ul>
-  <h2>Städer</h2>
-  <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-stockholm/">Stockholm</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-goteborg/">Göteborg</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-kalmar/">Kalmar</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-malmo/">Malmö</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-linkoping/">Linköping</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-orebro/">Örebro</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-landskrona/">Landskrona</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-norrkoping/">Norrköping</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-lund/">Lund</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-skelleftea/">Skellefteå</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-ostersund/">Östersund</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-lulea/">Luleå</a></li></ul>
+  <h2>Hela Sverige</h2>
+  <ul class="chips">
+    <li><a href="https://seshapp.xyz/blogg/billig-ol-sverige/">Billigaste ölen i Sverige</a></li>
+    <li><a href="https://seshapp.xyz/blogg/happy-hour-sverige/">Happy hour i Sverige</a></li>
+  </ul>
+  <h2>Välj din stad</h2>
+  <p>Varje stad har sin egen prissida. Städer med tillräckligt mycket data har också listor för öl under 50 och 60 kr, uteserveringar med billig öl och happy hour.</p>
+  <div class="citygrid">
+    <div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blogg/billig-ol-stockholm/">Stockholm</a></h3>
+      <p class="meta">415 barer · från 37 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-stockholm/">Alla ölpriser</a></li><li><a href="https://seshapp.xyz/blogg/ol-under-50-kr-stockholm/">Under 50 kr</a></li><li><a href="https://seshapp.xyz/blogg/ol-under-60-kr-stockholm/">Under 60 kr</a></li><li><a href="https://seshapp.xyz/blogg/uteservering-billig-ol-stockholm/">Uteserveringar</a></li><li><a href="https://seshapp.xyz/blogg/happy-hour-stockholm/">Happy hour</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blogg/billig-ol-goteborg/">Göteborg</a></h3>
+      <p class="meta">112 barer · från 39 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-goteborg/">Alla ölpriser</a></li><li><a href="https://seshapp.xyz/blogg/ol-under-50-kr-goteborg/">Under 50 kr</a></li><li><a href="https://seshapp.xyz/blogg/ol-under-60-kr-goteborg/">Under 60 kr</a></li><li><a href="https://seshapp.xyz/blogg/uteservering-billig-ol-goteborg/">Uteserveringar</a></li><li><a href="https://seshapp.xyz/blogg/happy-hour-goteborg/">Happy hour</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blogg/billig-ol-kalmar/">Kalmar</a></h3>
+      <p class="meta">40 barer · från 55 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-kalmar/">Alla ölpriser</a></li><li><a href="https://seshapp.xyz/blogg/uteservering-billig-ol-kalmar/">Uteserveringar</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blogg/billig-ol-malmo/">Malmö</a></h3>
+      <p class="meta">39 barer · från 39 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-malmo/">Alla ölpriser</a></li><li><a href="https://seshapp.xyz/blogg/ol-under-50-kr-malmo/">Under 50 kr</a></li><li><a href="https://seshapp.xyz/blogg/ol-under-60-kr-malmo/">Under 60 kr</a></li><li><a href="https://seshapp.xyz/blogg/uteservering-billig-ol-malmo/">Uteserveringar</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blogg/billig-ol-linkoping/">Linköping</a></h3>
+      <p class="meta">23 barer · från 46 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-linkoping/">Alla ölpriser</a></li><li><a href="https://seshapp.xyz/blogg/ol-under-60-kr-linkoping/">Under 60 kr</a></li><li><a href="https://seshapp.xyz/blogg/uteservering-billig-ol-linkoping/">Uteserveringar</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blogg/billig-ol-orebro/">Örebro</a></h3>
+      <p class="meta">22 barer · från 49 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-orebro/">Alla ölpriser</a></li><li><a href="https://seshapp.xyz/blogg/uteservering-billig-ol-orebro/">Uteserveringar</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blogg/billig-ol-landskrona/">Landskrona</a></h3>
+      <p class="meta">19 barer · från 60 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-landskrona/">Alla ölpriser</a></li><li><a href="https://seshapp.xyz/blogg/uteservering-billig-ol-landskrona/">Uteserveringar</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blogg/billig-ol-norrkoping/">Norrköping</a></h3>
+      <p class="meta">17 barer · från 30 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-norrkoping/">Alla ölpriser</a></li><li><a href="https://seshapp.xyz/blogg/ol-under-60-kr-norrkoping/">Under 60 kr</a></li><li><a href="https://seshapp.xyz/blogg/uteservering-billig-ol-norrkoping/">Uteserveringar</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blogg/billig-ol-lund/">Lund</a></h3>
+      <p class="meta">14 barer · från 46 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-lund/">Alla ölpriser</a></li><li><a href="https://seshapp.xyz/blogg/uteservering-billig-ol-lund/">Uteserveringar</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blogg/billig-ol-skelleftea/">Skellefteå</a></h3>
+      <p class="meta">13 barer · från 49 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-skelleftea/">Alla ölpriser</a></li><li><a href="https://seshapp.xyz/blogg/uteservering-billig-ol-skelleftea/">Uteserveringar</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blogg/billig-ol-ostersund/">Östersund</a></h3>
+      <p class="meta">13 barer · från 49 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-ostersund/">Alla ölpriser</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blogg/billig-ol-lulea/">Luleå</a></h3>
+      <p class="meta">11 barer · från 49 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-lulea/">Alla ölpriser</a></li></ul>
+    </div>
+  </div>
   <a class="cta" href="https://seshapp.xyz/map/">
     <b>Se alla priser på kartan</b>
     <span>Zooma in på din stad, filtrera på storlek och se vilka barer som har sol just nu.</span>

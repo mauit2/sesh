@@ -8,14 +8,14 @@
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
 <title>Beer prices in Sweden, city by city | Sesh</title>
-<meta name="description" content="What does beer cost where you are? Reported prices from 752 bars across 12 Swedish cities." />
+<meta name="description" content="What does beer cost where you are? Reported prices from 750 bars across 12 Swedish cities." />
 <link rel="canonical" href="https://seshapp.xyz/blog/" />
 <link rel="alternate" hreflang="en" href="https://seshapp.xyz/blog/" />
 <link rel="alternate" hreflang="sv" href="https://seshapp.xyz/blogg/" />
 <link rel="alternate" hreflang="x-default" href="https://seshapp.xyz/blog/" />
 <meta property="og:type" content="article" />
 <meta property="og:title" content="Beer prices in Sweden, city by city | Sesh" />
-<meta property="og:description" content="What does beer cost where you are? Reported prices from 752 bars across 12 Swedish cities." />
+<meta property="og:description" content="What does beer cost where you are? Reported prices from 750 bars across 12 Swedish cities." />
 <meta property="og:url" content="https://seshapp.xyz/blog/" />
 <meta property="og:site_name" content="Sesh" />
 <meta name="twitter:card" content="summary" />
@@ -56,10 +56,17 @@
   p{margin:0 0 15px;}
   .figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin:26px 0 8px;}
   .fig{background:var(--bg-elev);border:1px solid var(--line);border-radius:15px;padding:14px 15px;}
-  /* nowrap + a clamped size: "0.91 kr/cl" wrapped onto two lines at 26px and
-     knocked the card grid out of alignment. */
-  .fig b{display:block;font-family:"Fraunces",Georgia,serif;font-size:clamp(19px,4.4vw,26px);
-    font-weight:900;letter-spacing:-.02em;line-height:1.15;white-space:nowrap;}
+  /* The value must never wrap or overflow, and the page ships NO JavaScript
+     (the CSP has no script-src at all), so it cannot be fit at runtime. The
+     generator picks a step from the string length instead — "Gothenburg" needs
+     a smaller size than "12" and both have to sit in the same card. */
+  .fig b{display:block;font-family:"Fraunces",Georgia,serif;font-weight:900;
+    letter-spacing:-.02em;line-height:1.15;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;}
+  .fig b.s1{font-size:clamp(22px,5.2vw,28px);}   /* up to 4 chars: "12", "30 kr" */
+  .fig b.s2{font-size:clamp(19px,4.4vw,24px);}   /* to 8:  "1.75 kr/cl" */
+  .fig b.s3{font-size:clamp(16px,3.6vw,20px);}   /* to 11: "Gothenburg" */
+  .fig b.s4{font-size:clamp(14px,3vw,17px);}     /* longer: "Skellefteå" + */
   .fig span{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze);}
   .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:16px 0 6px;border:1px solid var(--line);border-radius:15px;background:var(--bg-elev);}
   table{width:100%;border-collapse:collapse;font-size:14.5px;min-width:420px;}
@@ -70,6 +77,9 @@
   td.p{font-weight:700;color:var(--whiskey);font-family:var(--mono);white-space:nowrap;}
   .rank{color:var(--bronze);font-family:var(--mono);width:1%;}
   .note{font-size:13px;color:var(--bronze);margin:10px 0 0;}
+  .caveat{margin:24px 0;padding:15px 18px;border-left:2px solid var(--whiskey);
+    background:var(--bg-elev);border-radius:0 13px 13px 0;font-size:14.5px;color:var(--cream-dim);}
+  .caveat b{color:var(--cream);}
   /* Price bands. A table of twelve numbers is hard to scan; a colour per band
      makes "is this cheap" answerable at a glance, which is the actual question.
      Thresholds are relative to the national median, so they stay meaningful as
@@ -81,10 +91,25 @@
   .switch a{display:inline-block;font-size:12.5px;font-weight:600;text-decoration:none;color:var(--cream-dim);
     background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:5px 11px;}
   .switch a.on{background:var(--whiskey);border-color:var(--whiskey);color:#241503;}
+  .crumbs{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--bronze);margin:0 0 14px;}
+  .crumbs a{color:var(--bronze);text-decoration:none;}
+  .crumbs span{color:var(--cream-dim);}
   .cta{display:block;margin:34px 0;padding:19px 22px;background:var(--bg-elev);border:1px solid rgba(232,132,60,.34);border-radius:17px;text-decoration:none;color:var(--cream);}
   .cta b{display:block;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;margin-bottom:3px;}
   .cta span{font-size:14px;color:var(--cream-dim);}
   .chips{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0;padding:0;list-style:none;}
+  .chips .chip-on{display:inline-block;font-size:13.5px;font-weight:600;color:#241503;
+    background:var(--whiskey);border:1px solid var(--whiskey);border-radius:999px;padding:7px 13px;}
+  /* The hub's city directory: one card per city, its variant pages as chips.
+     This IS the navigation the hub exists for, so it gets real presence. */
+  .citygrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin:18px 0 0;}
+  .citycard{background:var(--bg-elev);border:1px solid var(--line);border-radius:15px;padding:15px 16px;}
+  .citycard h3{margin:0 0 2px;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;letter-spacing:-.015em;}
+  .citycard .cityname{color:var(--cream);text-decoration:none;}
+  .citycard .cityname:hover{color:var(--whiskey);}
+  .citycard .meta{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze);margin:0 0 4px;}
+  .citycard .chips{margin-top:8px;gap:5px;}
+  .citycard .chips a,.citycard .chips .chip-on{font-size:11.5px;padding:4px 10px;}
   .chips a{display:inline-block;font-size:13.5px;font-weight:600;text-decoration:none;color:var(--cream);
     background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:7px 13px;}
   footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--bronze);}
@@ -106,12 +131,77 @@
   <h1>What does beer cost?</h1>
 
 
-  <p class="lede">We collect beer prices from bars across Sweden and compare them per centilitre rather than per glass. Currently 752 bars across 12 cities.</p>
+  <p class="lede">We collect beer prices from bars across Sweden and compare them per centilitre rather than per glass. Currently 750 bars across 12 cities.</p>
   <p class="stamp">Updated 8 August 2026</p>
-  <h2>Nationwide</h2>
-  <ul class="chips"><li><a href="https://seshapp.xyz/blog/beer-prices-sweden/">Beer prices in Sweden</a></li></ul>
-  <h2>Cities</h2>
-  <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-stockholm/">Stockholm</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-gothenburg/">Gothenburg</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-kalmar/">Kalmar</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-malmo/">Malmö</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-linkoping/">Linköping</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-orebro/">Örebro</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-landskrona/">Landskrona</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-norrkoping/">Norrköping</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-lund/">Lund</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-skelleftea/">Skellefteå</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-ostersund/">Östersund</a></li><li><a href="https://seshapp.xyz/blog/cheapest-beer-lulea/">Luleå</a></li></ul>
+  <h2>All of Sweden</h2>
+  <ul class="chips">
+    <li><a href="https://seshapp.xyz/blog/beer-prices-sweden/">Beer prices in Sweden</a></li>
+    <li><a href="https://seshapp.xyz/blog/happy-hour-sweden/">Happy hour in Sweden</a></li>
+  </ul>
+  <h2>Pick your city</h2>
+  <p>Every city has its own price page. Cities with enough data also get lists for beer under 50 and 60 kr, outdoor seating with cheap beer, and happy hour.</p>
+  <div class="citygrid">
+    <div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blog/cheapest-beer-stockholm/">Stockholm</a></h3>
+      <p class="meta">415 bars · from 37 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-stockholm/">All beer prices</a></li><li><a href="https://seshapp.xyz/blog/beer-under-50-kr-stockholm/">Under 50 kr</a></li><li><a href="https://seshapp.xyz/blog/beer-under-60-kr-stockholm/">Under 60 kr</a></li><li><a href="https://seshapp.xyz/blog/outdoor-seating-cheap-beer-stockholm/">Outdoor seating</a></li><li><a href="https://seshapp.xyz/blog/happy-hour-stockholm/">Happy hour</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blog/cheapest-beer-gothenburg/">Gothenburg</a></h3>
+      <p class="meta">112 bars · from 39 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-gothenburg/">All beer prices</a></li><li><a href="https://seshapp.xyz/blog/beer-under-50-kr-gothenburg/">Under 50 kr</a></li><li><a href="https://seshapp.xyz/blog/beer-under-60-kr-gothenburg/">Under 60 kr</a></li><li><a href="https://seshapp.xyz/blog/outdoor-seating-cheap-beer-gothenburg/">Outdoor seating</a></li><li><a href="https://seshapp.xyz/blog/happy-hour-gothenburg/">Happy hour</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blog/cheapest-beer-kalmar/">Kalmar</a></h3>
+      <p class="meta">40 bars · from 55 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-kalmar/">All beer prices</a></li><li><a href="https://seshapp.xyz/blog/outdoor-seating-cheap-beer-kalmar/">Outdoor seating</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blog/cheapest-beer-malmo/">Malmö</a></h3>
+      <p class="meta">39 bars · from 39 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-malmo/">All beer prices</a></li><li><a href="https://seshapp.xyz/blog/beer-under-50-kr-malmo/">Under 50 kr</a></li><li><a href="https://seshapp.xyz/blog/beer-under-60-kr-malmo/">Under 60 kr</a></li><li><a href="https://seshapp.xyz/blog/outdoor-seating-cheap-beer-malmo/">Outdoor seating</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blog/cheapest-beer-linkoping/">Linköping</a></h3>
+      <p class="meta">23 bars · from 46 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-linkoping/">All beer prices</a></li><li><a href="https://seshapp.xyz/blog/beer-under-60-kr-linkoping/">Under 60 kr</a></li><li><a href="https://seshapp.xyz/blog/outdoor-seating-cheap-beer-linkoping/">Outdoor seating</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blog/cheapest-beer-orebro/">Örebro</a></h3>
+      <p class="meta">22 bars · from 49 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-orebro/">All beer prices</a></li><li><a href="https://seshapp.xyz/blog/outdoor-seating-cheap-beer-orebro/">Outdoor seating</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blog/cheapest-beer-landskrona/">Landskrona</a></h3>
+      <p class="meta">19 bars · from 60 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-landskrona/">All beer prices</a></li><li><a href="https://seshapp.xyz/blog/outdoor-seating-cheap-beer-landskrona/">Outdoor seating</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blog/cheapest-beer-norrkoping/">Norrköping</a></h3>
+      <p class="meta">17 bars · from 30 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-norrkoping/">All beer prices</a></li><li><a href="https://seshapp.xyz/blog/beer-under-60-kr-norrkoping/">Under 60 kr</a></li><li><a href="https://seshapp.xyz/blog/outdoor-seating-cheap-beer-norrkoping/">Outdoor seating</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blog/cheapest-beer-lund/">Lund</a></h3>
+      <p class="meta">14 bars · from 46 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-lund/">All beer prices</a></li><li><a href="https://seshapp.xyz/blog/outdoor-seating-cheap-beer-lund/">Outdoor seating</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blog/cheapest-beer-skelleftea/">Skellefteå</a></h3>
+      <p class="meta">13 bars · from 49 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-skelleftea/">All beer prices</a></li><li><a href="https://seshapp.xyz/blog/outdoor-seating-cheap-beer-skelleftea/">Outdoor seating</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blog/cheapest-beer-ostersund/">Östersund</a></h3>
+      <p class="meta">13 bars · from 49 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-ostersund/">All beer prices</a></li></ul>
+    </div>
+<div class="citycard">
+      <h3><a class="cityname" href="https://seshapp.xyz/blog/cheapest-beer-lulea/">Luleå</a></h3>
+      <p class="meta">11 bars · from 49 kr</p>
+      <ul class="chips"><li><a href="https://seshapp.xyz/blog/cheapest-beer-lulea/">All beer prices</a></li></ul>
+    </div>
+  </div>
   <a class="cta" href="https://seshapp.xyz/map/">
     <b>See every price on the map</b>
     <span>Zoom to your city, filter by size, and see which bars are in the sun right now.</span>

@@ -56,10 +56,17 @@
   p{margin:0 0 15px;}
   .figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin:26px 0 8px;}
   .fig{background:var(--bg-elev);border:1px solid var(--line);border-radius:15px;padding:14px 15px;}
-  /* nowrap + a clamped size: "0.91 kr/cl" wrapped onto two lines at 26px and
-     knocked the card grid out of alignment. */
-  .fig b{display:block;font-family:"Fraunces",Georgia,serif;font-size:clamp(19px,4.4vw,26px);
-    font-weight:900;letter-spacing:-.02em;line-height:1.15;white-space:nowrap;}
+  /* The value must never wrap or overflow, and the page ships NO JavaScript
+     (the CSP has no script-src at all), so it cannot be fit at runtime. The
+     generator picks a step from the string length instead — "Gothenburg" needs
+     a smaller size than "12" and both have to sit in the same card. */
+  .fig b{display:block;font-family:"Fraunces",Georgia,serif;font-weight:900;
+    letter-spacing:-.02em;line-height:1.15;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;}
+  .fig b.s1{font-size:clamp(22px,5.2vw,28px);}   /* up to 4 chars: "12", "30 kr" */
+  .fig b.s2{font-size:clamp(19px,4.4vw,24px);}   /* to 8:  "1.75 kr/cl" */
+  .fig b.s3{font-size:clamp(16px,3.6vw,20px);}   /* to 11: "Gothenburg" */
+  .fig b.s4{font-size:clamp(14px,3vw,17px);}     /* longer: "Skellefteå" + */
   .fig span{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze);}
   .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:16px 0 6px;border:1px solid var(--line);border-radius:15px;background:var(--bg-elev);}
   table{width:100%;border-collapse:collapse;font-size:14.5px;min-width:420px;}
@@ -70,6 +77,9 @@
   td.p{font-weight:700;color:var(--whiskey);font-family:var(--mono);white-space:nowrap;}
   .rank{color:var(--bronze);font-family:var(--mono);width:1%;}
   .note{font-size:13px;color:var(--bronze);margin:10px 0 0;}
+  .caveat{margin:24px 0;padding:15px 18px;border-left:2px solid var(--whiskey);
+    background:var(--bg-elev);border-radius:0 13px 13px 0;font-size:14.5px;color:var(--cream-dim);}
+  .caveat b{color:var(--cream);}
   /* Price bands. A table of twelve numbers is hard to scan; a colour per band
      makes "is this cheap" answerable at a glance, which is the actual question.
      Thresholds are relative to the national median, so they stay meaningful as
@@ -81,16 +91,33 @@
   .switch a{display:inline-block;font-size:12.5px;font-weight:600;text-decoration:none;color:var(--cream-dim);
     background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:5px 11px;}
   .switch a.on{background:var(--whiskey);border-color:var(--whiskey);color:#241503;}
+  .crumbs{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--bronze);margin:0 0 14px;}
+  .crumbs a{color:var(--bronze);text-decoration:none;}
+  .crumbs span{color:var(--cream-dim);}
   .cta{display:block;margin:34px 0;padding:19px 22px;background:var(--bg-elev);border:1px solid rgba(232,132,60,.34);border-radius:17px;text-decoration:none;color:var(--cream);}
   .cta b{display:block;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;margin-bottom:3px;}
   .cta span{font-size:14px;color:var(--cream-dim);}
   .chips{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0;padding:0;list-style:none;}
+  .chips .chip-on{display:inline-block;font-size:13.5px;font-weight:600;color:#241503;
+    background:var(--whiskey);border:1px solid var(--whiskey);border-radius:999px;padding:7px 13px;}
+  /* The hub's city directory: one card per city, its variant pages as chips.
+     This IS the navigation the hub exists for, so it gets real presence. */
+  .citygrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin:18px 0 0;}
+  .citycard{background:var(--bg-elev);border:1px solid var(--line);border-radius:15px;padding:15px 16px;}
+  .citycard h3{margin:0 0 2px;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;letter-spacing:-.015em;}
+  .citycard .cityname{color:var(--cream);text-decoration:none;}
+  .citycard .cityname:hover{color:var(--whiskey);}
+  .citycard .meta{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze);margin:0 0 4px;}
+  .citycard .chips{margin-top:8px;gap:5px;}
+  .citycard .chips a,.citycard .chips .chip-on{font-size:11.5px;padding:4px 10px;}
   .chips a{display:inline-block;font-size:13.5px;font-weight:600;text-decoration:none;color:var(--cream);
     background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:7px 13px;}
   footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--bronze);}
   footer a{color:var(--bronze);}
 </style>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Billigaste ölen i Kalmar","description":"Ölpriser i Kalmar","dateModified":"2026-08-08","inLanguage":"sv-SE","mainEntityOfPage":{"@type":"WebPage","@id":"https://seshapp.xyz/blogg/billig-ol-kalmar/"},"publisher":{"@type":"Organization","name":"Sesh","url":"https://seshapp.xyz"},"about":{"@type":"Place","name":"Kalmar"}}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Var är ölen billigast i Kalmar?","acceptedAnswer":{"@type":"Answer","text":"Kalmar Superbowl har det lägsta priset vi har inrapporterat, 55 kr för 40 cl. Räknat per centiliter är Escape room Kalmar &amp; Barcade bäst på 1.18 kr/cl."}},{"@type":"Question","name":"Vad kostar en stor stark i Kalmar?","acceptedAnswer":{"@type":"Answer","text":"Medianen för 40 cl ligger på 78 kr. Billigast vi sett är 55 kr."}},{"@type":"Question","name":"Vad är literpriset på öl i Kalmar?","acceptedAnswer":{"@type":"Answer","text":"Medianen motsvarar 188 kr per liter, alltså 1.88 kr/cl. Bästa literpriset i stan är 118 kr/l."}},{"@type":"Question","name":"Varför jämför ni per centiliter?","acceptedAnswer":{"@type":"Answer","text":"Eftersom glasstorlekarna skiljer sig. En 33 cl för 49 kr är dyrare per öl än en 50 cl för 65 kr, även om siffran på menyn är lägre. Per centiliter blir jämförelsen rättvis."}},{"@type":"Question","name":"Hur ofta uppdateras priserna?","acceptedAnswer":{"@type":"Answer","text":"Sidan byggs om från de senaste rapporterna — den här versionen är från 8 augusti 2026. Vi visar medianen av de senaste rapporterna per bar och storlek, inte det senaste priset."}},{"@type":"Question","name":"Kan jag rapportera ett pris själv?","acceptedAnswer":{"@type":"Answer","text":"Ja. Sök upp baren på ölkartan och lägg in priset, eller gör det i Sesh-appen. Det syns på kartan direkt och på den här sidan nästa gång den byggs."}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Sesh","item":"https://seshapp.xyz/"},{"@type":"ListItem","position":2,"name":"Ölpriser","item":"https://seshapp.xyz/blogg/"},{"@type":"ListItem","position":3,"name":"Kalmar"}]}</script>
 </head>
 <body>
 <div class="wrap">
@@ -104,11 +131,11 @@
   </header>
   <p class="kicker">Ölpriser · Kalmar</p>
   <h1>Billigaste ölen i Kalmar</h1>
-<ul class="switch"><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-stockholm/">Stockholm</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-goteborg/">Göteborg</a></li><li><a class="on" href="https://seshapp.xyz/blogg/billig-ol-kalmar/">Kalmar</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-malmo/">Malmö</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-linkoping/">Linköping</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-orebro/">Örebro</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-landskrona/">Landskrona</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-norrkoping/">Norrköping</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-lund/">Lund</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-skelleftea/">Skellefteå</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-ostersund/">Östersund</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-lulea/">Luleå</a></li></ul>
+<p class="crumbs"><a href="https://seshapp.xyz/">Sesh</a> › <a href="https://seshapp.xyz/blogg/">Ölpriser</a> › <span>Kalmar</span></p><ul class="switch"><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-stockholm/">Stockholm</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-goteborg/">Göteborg</a></li><li><a class="on" href="https://seshapp.xyz/blogg/billig-ol-kalmar/">Kalmar</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-malmo/">Malmö</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-linkoping/">Linköping</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-orebro/">Örebro</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-landskrona/">Landskrona</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-norrkoping/">Norrköping</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-lund/">Lund</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-skelleftea/">Skellefteå</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-ostersund/">Östersund</a></li><li><a class="" href="https://seshapp.xyz/blogg/billig-ol-lulea/">Luleå</a></li></ul>
 
   <p class="lede">Vi har inrapporterade ölpriser från <strong>40 barer</strong> i Kalmar. Här är var stor starken är billigast — och var du får mest öl för pengarna räknat per centiliter.</p>
   <p class="stamp">Uppdaterad 8 augusti 2026 · 40 priser</p>
-  <div class="figs"><div class="fig"><b>55 kr</b><span>billigaste stor stark</span></div><div class="fig"><b>78 kr</b><span>median, 40 cl</span></div><div class="fig"><b>1.18 kr/cl</b><span>bästa pris per cl</span></div><div class="fig"><b>40</b><span>barer med pris</span></div></div>
+  <div class="figs"><div class="fig"><b class="s1" title="55 kr">55 kr</b><span>billigaste stor stark</span></div><div class="fig"><b class="s1" title="78 kr">78 kr</b><span>median, 40 cl</span></div><div class="fig"><b class="s3" title="1.18 kr/cl">1.18 kr/cl</b><span>bästa pris per cl</span></div><div class="fig"><b class="s1" title="40">40</b><span>barer med pris</span></div></div>
   <p>Medianpriset i Kalmar ligger på <strong>1.88 kr/cl</strong> (literpris 188 kr/l), vilket är 7 % över riksmedianen. Skillnaden mellan billigaste och dyraste ölen i stan är 2.0 gånger — det är alltså värt att veta vart man går.</p>
 
   <h2>Billigaste stor stark i Kalmar</h2>
@@ -116,88 +143,88 @@
   <div class="tw"><table><tr><th></th><th>Krog</th><th>Pris</th><th>Per cl</th></tr>
 <tr>
       <td class="rank">1</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.67077&lon=16.33812&city=Kalmar">Kalmar Superbowl</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.67077&lon=16.33812&v=f4be56bd-5700-4206-95ee-d4356bfc0288&s=40&city=Kalmar">Kalmar Superbowl</a></td>
       
       <td class="p b2">55 kr</td>
       <td class="n">1.38 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">2</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.65951&lon=16.36275&city=Kalmar">WUD Bistro</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.65951&lon=16.36275&v=12111111-93b7-42e0-b437-83dce8598286&s=40&city=Kalmar">WUD Bistro</a></td>
       
       <td class="p b2">59 kr</td>
       <td class="n">1.48 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">3</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66380&lon=16.36224&city=Kalmar">Taco Bar</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66380&lon=16.36224&v=242394da-ed11-4673-bdad-51c5a501262c&s=40&city=Kalmar">Taco Bar</a></td>
       
       <td class="p b2">59 kr</td>
       <td class="n">1.48 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">4</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66302&lon=16.36206&city=Kalmar">P&amp;S Bar och Bistro</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66302&lon=16.36206&v=aeaca25c-9d01-4984-ad6c-bf9353b00f64&s=40&city=Kalmar">P&amp;S Bar och Bistro</a></td>
       
       <td class="p b2">65 kr</td>
       <td class="n">1.63 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">5</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66568&lon=16.35553&city=Kalmar">Kallskänken</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66568&lon=16.35553&v=36659f35-c8f0-4982-8ea0-eb158958245a&s=40&city=Kalmar">Kallskänken</a></td>
       
       <td class="p b2">69 kr</td>
       <td class="n">1.73 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">6</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66378&lon=16.36190&city=Kalmar">Event Center Knock em Down</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66378&lon=16.36190&v=837d3e86-6530-400c-8a81-95db219238e5&s=40&city=Kalmar">Event Center Knock em Down</a></td>
       
       <td class="p b2">69 kr</td>
       <td class="n">1.73 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">7</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66362&lon=16.36139&city=Kalmar">McCool&#39;s Bar</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66251&lon=16.36104&v=79c5870d-e8a0-4023-97e3-848b2822f477&s=40&city=Kalmar">O&#39;Learys</a></td>
       
       <td class="p b3">74 kr</td>
       <td class="n">1.85 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">8</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66195&lon=16.36236&city=Kalmar">Stammis Pub &amp; Restaurang</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66195&lon=16.36236&v=35a62b56-c78b-4140-ad23-c568ec0c22e6&s=40&city=Kalmar">Stammis Pub &amp; Restaurang</a></td>
       
       <td class="p b3">74 kr</td>
       <td class="n">1.85 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">9</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66251&lon=16.36104&city=Kalmar">O&#39;Learys</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66362&lon=16.36139&v=31d0e3ad-45f0-46ee-bc4a-314a65a73d55&s=40&city=Kalmar">McCool&#39;s Bar</a></td>
       
       <td class="p b3">74 kr</td>
       <td class="n">1.85 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">10</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66345&lon=16.36082&city=Kalmar">Loccos</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66345&lon=16.36082&v=b538858a-e9d7-4d2b-b499-bdbff12ba189&s=40&city=Kalmar">Loccos</a></td>
       
       <td class="p b3">75 kr</td>
       <td class="n">1.88 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">11</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66051&lon=16.35581&city=Kalmar">Byttan i Parken</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66051&lon=16.35581&v=d9051941-befe-405c-bb8d-f6b0c56220f6&s=40&city=Kalmar">Byttan i Parken</a></td>
       
       <td class="p b3">75 kr</td>
       <td class="n">1.88 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">12</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66232&lon=16.36212&city=Kalmar">Restaurang Larmgatan 10</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66232&lon=16.36212&v=f0e77138-39ab-4cfd-b16b-0fe6e848f8e4&s=40&city=Kalmar">Restaurang Larmgatan 10</a></td>
       
       <td class="p b3">76 kr</td>
       <td class="n">1.90 kr/cl</td>
-    </tr></table></div><div class="legend"><span><i style="background:#7ec96b"></i>under 1.31 kr/cl</span><span><i style="background:#e8c34a"></i>under riksmedian</span><span><i style="background:#e8843c"></i>över riksmedian</span><span><i style="background:#e07a6a"></i>över 2.19 kr/cl</span></div>
+    </tr></table></div><div class="legend"><span><i style="background:#7ec96b"></i>under 1.32 kr/cl</span><span><i style="background:#e8c34a"></i>under riksmedian</span><span><i style="background:#e8843c"></i>över riksmedian</span><span><i style="background:#e07a6a"></i>över 2.19 kr/cl</span></div>
   <p class="note">Priser i kronor, median av de senaste rapporterna per bar.</p>
 
   <h2>Mest öl för pengarna – pris per centiliter</h2>
@@ -205,71 +232,87 @@
   <div class="tw"><table><tr><th></th><th>Krog</th><th>Storlek</th><th>Pris</th><th>Per cl</th></tr>
 <tr>
       <td class="rank">1</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66517&lon=16.36152&city=Kalmar">Escape room Kalmar &amp; Barcade</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66517&lon=16.36152&v=396f3cb5-fa8f-4f0c-b3ed-3639db965f0c&s=50&city=Kalmar">Escape room Kalmar &amp; Barcade</a></td>
       <td class="n">50 cl</td>
       <td class="p b1">59 kr</td>
       <td class="n">1.18 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">2</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.67077&lon=16.33812&city=Kalmar">Kalmar Superbowl</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.67077&lon=16.33812&v=f4be56bd-5700-4206-95ee-d4356bfc0288&s=40&city=Kalmar">Kalmar Superbowl</a></td>
       <td class="n">40 cl</td>
       <td class="p b2">55 kr</td>
       <td class="n">1.38 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">3</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66034&lon=16.36200&city=Kalmar">Älgburgare</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66034&lon=16.36200&v=285b520a-2fd6-405f-baa7-d09a22997609&s=50&city=Kalmar">Älgburgare</a></td>
       <td class="n">50 cl</td>
       <td class="p b2">69 kr</td>
       <td class="n">1.38 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">4</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.65951&lon=16.36275&city=Kalmar">WUD Bistro</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.65951&lon=16.36275&v=12111111-93b7-42e0-b437-83dce8598286&s=40&city=Kalmar">WUD Bistro</a></td>
       <td class="n">40 cl</td>
       <td class="p b2">59 kr</td>
       <td class="n">1.48 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">5</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66380&lon=16.36224&city=Kalmar">Taco Bar</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66380&lon=16.36224&v=242394da-ed11-4673-bdad-51c5a501262c&s=40&city=Kalmar">Taco Bar</a></td>
       <td class="n">40 cl</td>
       <td class="p b2">59 kr</td>
       <td class="n">1.48 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">6</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66424&lon=16.36101&city=Kalmar">Ming Palace</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66424&lon=16.36101&v=805b8e14-cc33-42cb-88e6-7a8ec5b283ac&s=50&city=Kalmar">Ming Palace</a></td>
       <td class="n">50 cl</td>
       <td class="p b2">75 kr</td>
       <td class="n">1.50 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">7</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.66302&lon=16.36206&city=Kalmar">P&amp;S Bar och Bistro</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.66302&lon=16.36206&v=aeaca25c-9d01-4984-ad6c-bf9353b00f64&s=40&city=Kalmar">P&amp;S Bar och Bistro</a></td>
       <td class="n">40 cl</td>
       <td class="p b2">65 kr</td>
       <td class="n">1.63 kr/cl</td>
     </tr>
 <tr>
       <td class="rank">8</td>
-      <td><a href="https://seshapp.xyz/map/?lat=56.65509&lon=16.36623&city=Kalmar">Café Lotsutkiken</a></td>
+      <td><a href="https://seshapp.xyz/map/?lat=56.65509&lon=16.36623&v=ed67876e-7c01-42ba-a44d-aaf599f1d24a&s=50&city=Kalmar">Café Lotsutkiken</a></td>
       <td class="n">50 cl</td>
       <td class="p b2">82 kr</td>
       <td class="n">1.64 kr/cl</td>
-    </tr></table></div><div class="legend"><span><i style="background:#7ec96b"></i>under 1.31 kr/cl</span><span><i style="background:#e8c34a"></i>under riksmedian</span><span><i style="background:#e8843c"></i>över riksmedian</span><span><i style="background:#e07a6a"></i>över 2.19 kr/cl</span></div>
+    </tr></table></div><div class="legend"><span><i style="background:#7ec96b"></i>under 1.32 kr/cl</span><span><i style="background:#e8c34a"></i>under riksmedian</span><span><i style="background:#e8843c"></i>över riksmedian</span><span><i style="background:#e07a6a"></i>över 2.19 kr/cl</span></div>
 
   <a class="cta" href="https://seshapp.xyz/map/?lat=56.66292&lon=16.36112&city=Kalmar">
     <b>Se alla priser på kartan</b>
     <span>Zooma in på din stad, filtrera på storlek och se vilka barer som har sol just nu.</span>
   </a>
 
+  <h2>Vanliga frågor</h2><h3>Var är ölen billigast i Kalmar?</h3>
+  <p>Kalmar Superbowl har det lägsta priset vi har inrapporterat, 55 kr för 40 cl. Räknat per centiliter är Escape room Kalmar &amp; Barcade bäst på 1.18 kr/cl.</p>
+  <h3>Vad kostar en stor stark i Kalmar?</h3>
+  <p>Medianen för 40 cl ligger på 78 kr. Billigast vi sett är 55 kr.</p>
+  <h3>Vad är literpriset på öl i Kalmar?</h3>
+  <p>Medianen motsvarar 188 kr per liter, alltså 1.88 kr/cl. Bästa literpriset i stan är 118 kr/l.</p>
+  <h3>Varför jämför ni per centiliter?</h3>
+  <p>Eftersom glasstorlekarna skiljer sig. En 33 cl för 49 kr är dyrare per öl än en 50 cl för 65 kr, även om siffran på menyn är lägre. Per centiliter blir jämförelsen rättvis.</p>
+  <h3>Hur ofta uppdateras priserna?</h3>
+  <p>Sidan byggs om från de senaste rapporterna — den här versionen är från 8 augusti 2026. Vi visar medianen av de senaste rapporterna per bar och storlek, inte det senaste priset.</p>
+  <h3>Kan jag rapportera ett pris själv?</h3>
+  <p>Ja. Sök upp baren på ölkartan och lägg in priset, eller gör det i Sesh-appen. Det syns på kartan direkt och på den här sidan nästa gång den byggs.</p>
+
   <h2>Så räknar vi</h2>
   <p>Priserna kommer från användare i Sesh-appen och på ölkartan. För varje bar och storlek visar vi <em>medianen</em> av de senaste rapporterna, inte det senaste priset — ett enstaka felinmatat pris ska inte kunna styra listan. Bara priser i kronor och i storlekar vi kan räkna om per centiliter räknas med. Pint tolkas som 56,8 cl.</p>
   <p>Priser ändras och happy hour räknas inte in. Ser du ett pris som inte stämmer kan du <a href="https://seshapp.xyz/map/">rapportera det på kartan</a> — det uppdaterar den här sidan nästa gång den byggs.</p>
 
+  <h2>Mer om ölen i Kalmar</h2>
+  <ul class="chips"><li><span class="chip-on">Alla ölpriser</span></li><li><a href="https://seshapp.xyz/blogg/uteservering-billig-ol-kalmar/">Uteserveringar</a></li></ul>
   <h2>Ölpriser i andra städer</h2>
+  <p>Se även <a href="https://seshapp.xyz/blogg/billig-ol-sverige/">billigaste ölen i Sverige</a>, med alla städer rangordnade efter literpris.</p>
   <ul class="chips"><li><a href="https://seshapp.xyz/blogg/billig-ol-stockholm/">Stockholm</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-goteborg/">Göteborg</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-malmo/">Malmö</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-linkoping/">Linköping</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-orebro/">Örebro</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-landskrona/">Landskrona</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-norrkoping/">Norrköping</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-lund/">Lund</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-skelleftea/">Skellefteå</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-ostersund/">Östersund</a></li><li><a href="https://seshapp.xyz/blogg/billig-ol-lulea/">Luleå</a></li></ul>
 
   <footer>
