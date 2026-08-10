@@ -481,6 +481,11 @@
   .r.s1{transition-delay:.08s}.r.s2{transition-delay:.16s}
   .r.s3{transition-delay:.24s}.r.s4{transition-delay:.32s}
 
+  /* Fraunces ships a 9–144pt optical-size axis; without this the browser
+     may serve every size the same drawing. Let the face change shape with
+     size, the way it was designed to. */
+  h1,h2,h3,.brand{font-optical-sizing:auto;}
+
   @media (prefers-reduced-motion: reduce){
     html{scroll-behavior:auto;}
     .orb,.dot::after,h1 em,.cue span{animation:none;}

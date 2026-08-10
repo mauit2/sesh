@@ -114,6 +114,28 @@
     background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:7px 13px;}
   footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--bronze);}
   footer a{color:var(--bronze);}
+
+  /* Fluid-interface pass (apple-design), within this page's constraint of
+     ZERO JavaScript: press feedback on pointer-down, a visible keyboard
+     focus everywhere, Fraunces' optical-size axis actually enabled, and
+     fallbacks for reduced motion and raised contrast. */
+  h1,h2,.brand,.fig b,.cta b{font-optical-sizing:auto;}
+  .chips a,.switch a,.cta,.top nav a{transition:transform .1s ease-out;display:inline-block;}
+  .cta{display:block;}
+  .chips a:hover,.switch a:hover:not(.on){border-color:rgba(243,233,216,.3);}
+  .cta:hover{border-color:rgba(232,132,60,.6);}
+  .top nav a:hover{color:var(--whiskey);}
+  .chips a:active,.switch a:active{transform:scale(.96);}
+  .cta:active{transform:scale(.99);}
+  .tw a:hover{text-decoration:underline;}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--whiskey);outline-offset:2px;border-radius:4px;}
+  @media (prefers-reduced-motion: reduce){
+    .chips a,.switch a,.cta,.top nav a{transition:none;}
+    .chips a:active,.switch a:active,.cta:active{transform:none;}
+  }
+  @media (prefers-contrast: more){
+    :root{--line:rgba(243,233,216,.4);--cream-dim:#e6dcc8;--bronze:#cdb896;}
+  }
 </style>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Beer under 60 kr in Stockholm","dateModified":"2026-08-10","inLanguage":"en","mainEntityOfPage":{"@type":"WebPage","@id":"https://seshapp.xyz/blog/beer-under-60-kr-stockholm/"},"publisher":{"@type":"Organization","name":"Sesh","url":"https://seshapp.xyz"}}</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"ItemList","name":"Beer under 60 kr in Stockholm","numberOfItems":94,"itemListElement":[{"@type":"ListItem","position":1,"name":"Crazy Horse Sveavägen"},{"@type":"ListItem","position":2,"name":"Dovas Hornstull"},{"@type":"ListItem","position":3,"name":"Burgers No Name Bar"},{"@type":"ListItem","position":4,"name":"Brödernas Rörstrandsgatan"},{"@type":"ListItem","position":5,"name":"Bar 08"},{"@type":"ListItem","position":6,"name":" Brazilia Restaurang"},{"@type":"ListItem","position":7,"name":"The Station"},{"@type":"ListItem","position":8,"name":"Bistro 151"},{"@type":"ListItem","position":9,"name":"Maestro Kebab"},{"@type":"ListItem","position":10,"name":"The Lounge Bar"},{"@type":"ListItem","position":11,"name":"Lion Bar Hornstull"},{"@type":"ListItem","position":12,"name":"Baras Backe"},{"@type":"ListItem","position":13,"name":"Lion Bar Mariatorget"},{"@type":"ListItem","position":14,"name":"Bara enkelt"},{"@type":"ListItem","position":15,"name":"Baras Imperium"},{"@type":"ListItem","position":16,"name":"Bara 2.Noll"},{"@type":"ListItem","position":17,"name":"Indira"},{"@type":"ListItem","position":18,"name":"The Central Bar - Götgatan"},{"@type":"ListItem","position":19,"name":"Holidays American Bar"},{"@type":"ListItem","position":20,"name":"Continental Bar"}]}</script>

@@ -311,6 +311,28 @@ function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body
     background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:7px 13px;}
   footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--bronze);}
   footer a{color:var(--bronze);}
+
+  /* Fluid-interface pass (apple-design), within this page's constraint of
+     ZERO JavaScript: press feedback on pointer-down, a visible keyboard
+     focus everywhere, Fraunces' optical-size axis actually enabled, and
+     fallbacks for reduced motion and raised contrast. */
+  h1,h2,.brand,.fig b,.cta b{font-optical-sizing:auto;}
+  .chips a,.switch a,.cta,.top nav a{transition:transform .1s ease-out;display:inline-block;}
+  .cta{display:block;}
+  .chips a:hover,.switch a:hover:not(.on){border-color:rgba(243,233,216,.3);}
+  .cta:hover{border-color:rgba(232,132,60,.6);}
+  .top nav a:hover{color:var(--whiskey);}
+  .chips a:active,.switch a:active{transform:scale(.96);}
+  .cta:active{transform:scale(.99);}
+  .tw a:hover{text-decoration:underline;}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--whiskey);outline-offset:2px;border-radius:4px;}
+  @media (prefers-reduced-motion: reduce){
+    .chips a,.switch a,.cta,.top nav a{transition:none;}
+    .chips a:active,.switch a:active,.cta:active{transform:none;}
+  }
+  @media (prefers-contrast: more){
+    :root{--line:rgba(243,233,216,.4);--cream-dim:#e6dcc8;--bronze:#cdb896;}
+  }
 </style>
 ${jsonld ? (Array.isArray(jsonld) ? jsonld : [jsonld])
     .map((d) => `<script type="application/ld+json">${JSON.stringify(d)}</script>`).join("\n") : ""}

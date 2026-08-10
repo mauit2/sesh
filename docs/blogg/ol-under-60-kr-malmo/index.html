@@ -114,6 +114,28 @@
     background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:7px 13px;}
   footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--bronze);}
   footer a{color:var(--bronze);}
+
+  /* Fluid-interface pass (apple-design), within this page's constraint of
+     ZERO JavaScript: press feedback on pointer-down, a visible keyboard
+     focus everywhere, Fraunces' optical-size axis actually enabled, and
+     fallbacks for reduced motion and raised contrast. */
+  h1,h2,.brand,.fig b,.cta b{font-optical-sizing:auto;}
+  .chips a,.switch a,.cta,.top nav a{transition:transform .1s ease-out;display:inline-block;}
+  .cta{display:block;}
+  .chips a:hover,.switch a:hover:not(.on){border-color:rgba(243,233,216,.3);}
+  .cta:hover{border-color:rgba(232,132,60,.6);}
+  .top nav a:hover{color:var(--whiskey);}
+  .chips a:active,.switch a:active{transform:scale(.96);}
+  .cta:active{transform:scale(.99);}
+  .tw a:hover{text-decoration:underline;}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--whiskey);outline-offset:2px;border-radius:4px;}
+  @media (prefers-reduced-motion: reduce){
+    .chips a,.switch a,.cta,.top nav a{transition:none;}
+    .chips a:active,.switch a:active,.cta:active{transform:none;}
+  }
+  @media (prefers-contrast: more){
+    :root{--line:rgba(243,233,216,.4);--cream-dim:#e6dcc8;--bronze:#cdb896;}
+  }
 </style>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Öl under 60 kr i Malmö","dateModified":"2026-08-10","inLanguage":"sv-SE","mainEntityOfPage":{"@type":"WebPage","@id":"https://seshapp.xyz/blogg/ol-under-60-kr-malmo/"},"publisher":{"@type":"Organization","name":"Sesh","url":"https://seshapp.xyz"}}</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"ItemList","name":"Öl under 60 kr i Malmö","numberOfItems":7,"itemListElement":[{"@type":"ListItem","position":1,"name":"Surf Shack"},{"@type":"ListItem","position":2,"name":"Asia Village"},{"@type":"ListItem","position":3,"name":"Bastard Burgers"},{"@type":"ListItem","position":4,"name":"Surf Shack"},{"@type":"ListItem","position":5,"name":"Urban Turban"},{"@type":"ListItem","position":6,"name":"Lion Bar"},{"@type":"ListItem","position":7,"name":"V Italiano Moderno"}]}</script>

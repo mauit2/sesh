@@ -114,6 +114,28 @@
     background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;padding:7px 13px;}
   footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--bronze);}
   footer a{color:var(--bronze);}
+
+  /* Fluid-interface pass (apple-design), within this page's constraint of
+     ZERO JavaScript: press feedback on pointer-down, a visible keyboard
+     focus everywhere, Fraunces' optical-size axis actually enabled, and
+     fallbacks for reduced motion and raised contrast. */
+  h1,h2,.brand,.fig b,.cta b{font-optical-sizing:auto;}
+  .chips a,.switch a,.cta,.top nav a{transition:transform .1s ease-out;display:inline-block;}
+  .cta{display:block;}
+  .chips a:hover,.switch a:hover:not(.on){border-color:rgba(243,233,216,.3);}
+  .cta:hover{border-color:rgba(232,132,60,.6);}
+  .top nav a:hover{color:var(--whiskey);}
+  .chips a:active,.switch a:active{transform:scale(.96);}
+  .cta:active{transform:scale(.99);}
+  .tw a:hover{text-decoration:underline;}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--whiskey);outline-offset:2px;border-radius:4px;}
+  @media (prefers-reduced-motion: reduce){
+    .chips a,.switch a,.cta,.top nav a{transition:none;}
+    .chips a:active,.switch a:active,.cta:active{transform:none;}
+  }
+  @media (prefers-contrast: more){
+    :root{--line:rgba(243,233,216,.4);--cream-dim:#e6dcc8;--bronze:#cdb896;}
+  }
 </style>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Cheapest beer in Gothenburg","description":"Beer prices in Gothenburg","dateModified":"2026-08-10","inLanguage":"en","mainEntityOfPage":{"@type":"WebPage","@id":"https://seshapp.xyz/blog/cheapest-beer-gothenburg/"},"publisher":{"@type":"Organization","name":"Sesh","url":"https://seshapp.xyz"},"about":{"@type":"Place","name":"Gothenburg"}}</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Where is beer cheapest in Gothenburg?","acceptedAnswer":{"@type":"Answer","text":"Shotluckan has the lowest price reported to us, 39 kr for 40 cl. Per centilitre, BENNE Pastabar is best value at 0.91 kr/cl."}},{"@type":"Question","name":"How much is a beer in Gothenburg?","acceptedAnswer":{"@type":"Answer","text":"The median for a 40 cl draught is 59 kr, and the cheapest we have seen is 39 kr."}},{"@type":"Question","name":"What is the price per litre of beer in Gothenburg?","acceptedAnswer":{"@type":"Answer","text":"The median works out at 148 kr per litre, or 1.48 kr/cl. The best rate in the city is 91 kr/l."}},{"@type":"Question","name":"Why compare per centilitre?","acceptedAnswer":{"@type":"Answer","text":"Because glass sizes differ. A 33 cl at 49 kr costs more per unit of beer than a 50 cl at 65 kr, even though the menu price is lower. Per centilitre makes the comparison fair."}},{"@type":"Question","name":"How often are prices updated?","acceptedAnswer":{"@type":"Answer","text":"The page is rebuilt from the latest reports — this version is from 10 August 2026. We show the median of recent reports per bar and size rather than the most recent price."}},{"@type":"Question","name":"Can I report a price myself?","acceptedAnswer":{"@type":"Answer","text":"Yes. Find the bar on the beer map and add the price, or do it in the Sesh app. It shows on the map immediately and on this page the next time it is built."}}]}</script>

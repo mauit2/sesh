@@ -129,6 +129,89 @@
   .pin .cluster{position:absolute;left:0;top:0;transform:translate(-50%,-50%);min-width:34px;height:34px;border-radius:50%;
     background:var(--ink-elev);border:2px solid var(--whiskey);color:var(--cream);display:flex;align-items:center;justify-content:center;
     font-weight:800;font-size:12px;padding:0 6px;box-shadow:0 3px 10px rgba(0,0,0,.5);}
+
+  /* ------------------------------------------------------------------ */
+  /* Fluid-interface pass (apple-design). Four ideas, applied site-wide: */
+  /* feedback on pointer-DOWN, chrome as translucent material the map    */
+  /* shows through, surfaces that materialize from their trigger rather  */
+  /* than hard-cutting in, and honest fallbacks for reduced motion /     */
+  /* transparency / contrast.                                            */
+  /* ------------------------------------------------------------------ */
+
+  /* Response: the press is the feedback, and it's instant. Only          */
+  /* transform transitions — background changes snap, as a press should. */
+  .icon-btn,.seg button,.sizes button,.chips button,.modal .go,.modal .cancel,
+  .sunbar .now,.drawer .dh .x,.row,.rres{transition:transform .1s ease-out;}
+  .icon-btn:active,.seg button:active,.sizes button:active,.chips button:active,
+  .sunbar .now:active,.drawer .dh .x:active{transform:scale(.95);}
+  .modal .go:active:not([disabled]),.modal .cancel:active{transform:scale(.98);}
+  .row:active,.rres:active{transform:scale(.985);}
+
+  .icon-btn:hover{border-color:rgba(245,237,224,.3);}
+  .icon-btn.primary:hover{filter:brightness(1.06);}
+  .seg button:hover:not(.on){opacity:1;}
+  .sizes button:hover:not(.on){border-color:rgba(245,237,224,.3);opacity:1;}
+  .chips button:hover:not(.on){border-color:rgba(245,237,224,.3);opacity:1;}
+  .row:hover{background:rgba(245,237,216,.07);}
+  .modal .go:hover:not([disabled]){filter:brightness(1.06);}
+  .modal .cancel:hover,.drawer .dh .x:hover,.sunbar .now:hover{opacity:1;}
+
+  button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{
+    outline:2px solid var(--whiskey);outline-offset:2px;}
+
+  /* Materials: the map glows through the chrome. Small chips get a light */
+  /* blur; the drawer and modal — bigger surfaces — read thicker, with    */
+  /* stronger blur and the deep shadows they already carry.               */
+  .icon-btn,.seg,.sizes button{background:rgba(11,10,8,.62);
+    -webkit-backdrop-filter:blur(12px) saturate(1.2);backdrop-filter:blur(12px) saturate(1.2);}
+  .icon-btn.primary{background:var(--whiskey);}
+  .seg button{background:none;}
+  .sizes button.on,.icon-btn.primary{-webkit-backdrop-filter:none;backdrop-filter:none;}
+  .legend,.sunbar{background:rgba(11,10,8,.68);
+    -webkit-backdrop-filter:blur(16px) saturate(1.2);backdrop-filter:blur(16px) saturate(1.2);}
+  .drawer{background:rgba(11,10,8,.8);
+    -webkit-backdrop-filter:blur(26px) saturate(1.3);backdrop-filter:blur(26px) saturate(1.3);}
+  .modal{background:rgba(19,17,14,.86);
+    -webkit-backdrop-filter:blur(26px) saturate(1.3);backdrop-filter:blur(26px) saturate(1.3);}
+
+  /* Spatial consistency: surfaces arrive from their trigger. Both modals */
+  /* open from the header's right side, so they materialize downward from */
+  /* the top-right; the toast rises from the bottom edge it lives on.     */
+  /* Scale + fade together = a material arriving, not a cut.              */
+  @keyframes matIn{from{opacity:0;transform:scale(.96) translateY(-8px);}to{opacity:1;transform:none;}}
+  @keyframes scrimIn{from{opacity:0;}to{opacity:1;}}
+  @keyframes toastIn{from{opacity:0;transform:translate(-50%,10px);}to{opacity:1;transform:translate(-50%,0);}}
+  .backdrop.open{animation:scrimIn .15s ease-out;}
+  .backdrop.open .modal{transform-origin:top right;animation:matIn .2s cubic-bezier(.32,.72,.28,1);}
+  .toast.on{animation:toastIn .22s cubic-bezier(.32,.72,.28,1);}
+
+  /* Typography: Fraunces ships an optical-size axis — use it. Large      */
+  /* numerals want tighter tracking than the 30px default gave them.      */
+  .brand{font-optical-sizing:auto;}
+  .callout .big{letter-spacing:-.02em;}
+
+  /* Honest fallbacks — three independent signals, three answers.        */
+  @media (prefers-reduced-motion: reduce){
+    .drawer{transition:none;}
+    .backdrop.open,.backdrop.open .modal,.toast.on{animation:none;}
+    .icon-btn,.seg button,.sizes button,.chips button,.modal .go,.modal .cancel,
+    .sunbar .now,.drawer .dh .x,.row,.rres{transition:none;}
+    .icon-btn:active,.seg button:active,.sizes button:active,.chips button:active,
+    .sunbar .now:active,.drawer .dh .x:active,.modal .go:active:not([disabled]),
+    .modal .cancel:active,.row:active,.rres:active{transform:none;filter:brightness(1.15);}
+  }
+  @media (prefers-reduced-transparency: reduce){
+    .icon-btn,.seg,.sizes button,.legend,.sunbar,.drawer,.modal{
+      -webkit-backdrop-filter:none;backdrop-filter:none;}
+    .icon-btn,.seg,.sizes button{background:rgba(11,10,8,.94);}
+    .legend,.sunbar{background:rgba(11,10,8,.96);}
+    .drawer,.modal{background:var(--ink);}
+  }
+  @media (prefers-contrast: more){
+    :root{--line:rgba(245,237,224,.4);}
+    .icon-btn,.seg,.sizes button,.legend,.sunbar,.drawer,.modal{
+      -webkit-backdrop-filter:none;backdrop-filter:none;background:var(--ink);}
+  }
 </style>
 </head>
 <body>
