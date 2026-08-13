@@ -217,7 +217,10 @@ final class SessionService: ObservableObject {
         max(members.count + ghosts.count, 1)
     }
 
-    func liveBAC(for profileId: UUID, now: Date = Date()) -> Double {
+    /// `overriding` substitutes hypothetical consumed-times by drink id —
+    /// the pace card's live preview runs THIS function, so the number it
+    /// shows is exactly what applying would produce.
+    func liveBAC(for profileId: UUID, now: Date = Date(), overriding: [UUID: Date] = [:]) -> Double {
         guard let profile = memberProfiles[profileId] else { return 0 }
         let bodyGrams = profile.weightKg * 1000
         let denom = bodyGrams * profile.sex.r
@@ -231,7 +234,7 @@ final class SessionService: ObservableObject {
             let isShared = d.shared
             guard isMine || isShared else { return nil }
             let grams = isShared ? d.grams / Double(n) : d.grams
-            return (d.createdAt, grams)
+            return (overriding[d.id] ?? d.createdAt, grams)
         }.sorted { $0.0 < $1.0 }
 
         // 2) Walk forward applying continuous decay between events.
@@ -989,8 +992,9 @@ final class SessionService: ObservableObject {
     /// stamps `live = true`. Plan and live drinks are mutually exclusive
     /// per row so the two ledgers never bleed into each other even when
     /// both stores happen to track the same underlying session.
-    func addDrink(_ option: DrinkOption, shared: Bool = false, consumedAt: Date? = nil) async {
-        guard let sid = session?.id, let uid = myId else { return }
+    @discardableResult
+    func addDrink(_ option: DrinkOption, shared: Bool = false, consumedAt: Date? = nil) async -> UUID? {
+        guard let sid = session?.id, let uid = myId else { return nil }
         do {
             let inserted: SessionDrink
             if let consumedAt {
@@ -1042,6 +1046,28 @@ final class SessionService: ObservableObject {
                     .select().single().execute().value
             }
             drinks.append(inserted)
+            return inserted.id
+        } catch {
+            await refresh()
+            return nil
+        }
+    }
+
+    /// Rewrite when one of MY drinks was consumed — the pace prompt's
+    /// spread (RLS "drinks: self update", 097: own rows only). The local
+    /// row is patched too so the BAC curve moves without waiting a poll.
+    func restampMyDrink(id: UUID, to date: Date) async {
+        guard let uid = myId else { return }
+        struct Patch: Encodable { let created_at: String }
+        do {
+            try await supabase.from("session_drinks")
+                .update(Patch(created_at: ISO8601DateFormatter().string(from: date)))
+                .eq("id", value: id.uuidString.lowercased())
+                .eq("profile_id", value: uid.uuidString.lowercased())
+                .execute()
+            if let i = drinks.firstIndex(where: { $0.id == id }) {
+                drinks[i].createdAt = date
+            }
         } catch {
             await refresh()
         }

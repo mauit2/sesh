@@ -534,7 +534,9 @@ struct SessionDrink: Codable, Identifiable, Equatable, Hashable {
     let drinkName: String
     let volumeMl: Double
     let abv: Double
-    let createdAt: Date
+    /// Mutable for one reason: the pace prompt re-stamps a burst of
+    /// back-to-back logs to when they were actually drunk (097).
+    var createdAt: Date
     var shared: Bool = false
     /// Whether this drink belongs to the Live Sesh ledger or the regular
     /// (manual-duration) ledger. The two are intentionally separate so

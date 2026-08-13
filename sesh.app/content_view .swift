@@ -1009,9 +1009,27 @@ final class LiveSeshState: ObservableObject {
         save()
     }
 
-    func add(_ option: DrinkOption, at consumedAt: Date = Date()) {
+    @discardableResult
+    func add(_ option: DrinkOption, at consumedAt: Date = Date()) -> UUID {
         if startedAt == nil { startedAt = consumedAt }
-        drinks.append(LiveDrink(option: option, consumedAt: consumedAt))
+        let d = LiveDrink(option: option, consumedAt: consumedAt)
+        drinks.append(d)
+        save()
+        return d.id
+    }
+
+    /// Rewrite when a drink was consumed — the pace prompt's spread. The
+    /// struct is immutable by design, so the entry is rebuilt in place;
+    /// re-sorting keeps the timeline (and the chronological BAC walk,
+    /// which assumes order) honest after stamps move backwards.
+    func restamp(_ id: UUID, to date: Date) {
+        guard let i = drinks.firstIndex(where: { $0.id == id }) else { return }
+        let old = drinks[i]
+        drinks[i] = LiveDrink(id: old.id, option: old.option(), consumedAt: date)
+        drinks.sort { $0.consumedAt < $1.consumedAt }
+        if let first = drinks.first, let started = startedAt, first.consumedAt < started {
+            startedAt = first.consumedAt
+        }
         save()
     }
 
@@ -1044,11 +1062,16 @@ final class LiveSeshState: ObservableObject {
     /// negative. The per-drink-clamp approach undercounts dramatically
     /// in long sessions because early drinks vanish from the sum well
     /// before the body has actually processed them.
-    func bac(profile: Profile, now: Date = Date()) -> Double {
+    /// `overriding` substitutes hypothetical consumed-times by drink id —
+    /// the pace card's live preview runs THIS function, so what it shows
+    /// is exactly what applying would produce, by construction.
+    func bac(profile: Profile, now: Date = Date(), overriding: [UUID: Date] = [:]) -> Double {
         let bodyGrams = profile.weightKg * 1000
         let denom = bodyGrams * profile.sex.r
         guard denom > 0 else { return 0 }
-        let sorted = drinks.sorted { $0.consumedAt < $1.consumedAt }
+        let sorted = drinks
+            .map { d in overriding[d.id].map { LiveDrink(id: d.id, option: d.option(), consumedAt: $0) } ?? d }
+            .sorted { $0.consumedAt < $1.consumedAt }
         var bac: Double = 0
         var lastEvent: Date? = nil
         for d in sorted where d.consumedAt <= now {
@@ -5710,7 +5733,7 @@ private struct SessionView: View {
         if planGroup.isActive {
             let shared = shareMode
             // Plan ledger: store stamps live=false from its scope.
-            let t: Task<Void, Never> = Task { await planGroup.addDrink(option, shared: shared) }
+            let t: Task<Void, Never> = Task { _ = await planGroup.addDrink(option, shared: shared) }
             _ = t
         } else {
             localOrder.append(OrderItem(option: option))
@@ -6997,7 +7020,7 @@ private struct SessionView: View {
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
                                 recents.record(option)
                                 if planGroup.isActive {
-                                    let t: Task<Void, Never> = Task { await planGroup.addDrink(option, shared: shared) }
+                                    let t: Task<Void, Never> = Task { _ = await planGroup.addDrink(option, shared: shared) }
                                     _ = t
                                 } else {
                                     localOrder.append(OrderItem(option: option))
@@ -13169,16 +13192,162 @@ private struct LiveSeshView: View {
     /// `shareMode` toggle decides whether the drink goes onto the user's
     /// personal tab or into the shared round pool. Always records the
     /// pick in `recents` so quick-add can adapt.
+    /// Transient "Round of X — logged for N people" line under the dock.
+    @State private var roundConfirmation: String?
+
     private func logDrink(_ option: DrinkOption) {
         recents.record(option)
         if inGroup {
             let isShared = shareMode
+            if isShared {
+                // One round per arm: disarm immediately so the NEXT tap is
+                // personal again, and say out loud what just happened.
+                let heads = max(group.members.count + group.ghosts.count, 1)
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) {
+                    shareMode = false
+                    roundConfirmation = heads == 1
+                        ? "Round of \(option.name) — logged for you"
+                        : "Round of \(option.name) — logged for \(heads) people"
+                }
+                Task {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    await MainActor.run {
+                        withAnimation(.easeOut(duration: 0.25)) { roundConfirmation = nil }
+                    }
+                }
+            }
             // Live store stamps live=true from its scope.
-            let t: Task<Void, Never> = Task { await group.addDrink(option, shared: isShared) }
+            Task {
+                if let id = await group.addDrink(option, shared: isShared), !isShared {
+                    // Shared rounds are excluded from pacing: the round is a
+                    // deliberate act, and its rows belong to everyone.
+                    await MainActor.run { noteBurst(id, option) }
+                }
+            }
+        } else {
+            noteBurst(live.add(option), option)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Drink pacing. The most common logging mistake is catching up: three
+    // taps back to back for beers that were actually drunk over an hour,
+    // which the BAC model reads as slamming all three this second and
+    // spikes. Rapid successive logs are exactly that signature, so they
+    // raise a card that asks over how long — and re-stamps the drinks
+    // across the answer, which fixes the CURVE rather than just the label.
+    // ------------------------------------------------------------------
+
+    /// The current rapid-log run, oldest first — id plus what was poured,
+    /// so the card's own stepper can add another of the same.
+    @State private var burstDrinks: [(id: UUID, option: DrinkOption)] = []
+    @State private var lastLogAt: Date?
+    @State private var paceCardShown = false
+    /// Slider value in minutes; 0 = "all just now" (leave stamps alone).
+    @State private var paceMinutes: Double = 0
+
+    private var burstIds: [UUID] { burstDrinks.map(\.id) }
+
+    /// Two logs within this window count as one burst.
+    private static let burstGap: TimeInterval = 90
+
+    /// The stamps applyPace would write for a given window — shared with
+    /// the preview so the number shown IS the number you get.
+    private func paceStamps(minutes: Double, now: Date = Date()) -> [UUID: Date] {
+        let n = burstIds.count
+        let window = minutes * 60
+        guard n >= 1, window > 0 else { return [:] }
+        // One drink: it simply happened `window` ago. Several: first at the
+        // start of the window, latest at now — the shape of catching up.
+        guard n >= 2 else { return [burstIds[0]: now.addingTimeInterval(-window)] }
+        let step = window / Double(n - 1)
+        var out: [UUID: Date] = [:]
+        for (i, id) in burstIds.enumerated() {
+            out[id] = now.addingTimeInterval(-window + step * Double(i))
+        }
+        return out
+    }
+
+    /// BAC now if the burst were spread over `minutes` — same walk the
+    /// header runs, with hypothetical stamps substituted.
+    private func previewBAC(minutes: Double, now: Date = Date()) -> Double {
+        let overrides = paceStamps(minutes: minutes, now: now)
+        if inGroup {
+            return group.liveBAC(for: profile.id, now: now, overriding: overrides)
+        }
+        return live.bac(profile: profile, now: now, overriding: overrides)
+    }
+
+    private func noteBurst(_ id: UUID, _ option: DrinkOption) {
+        let now = Date()
+        if let last = lastLogAt, now.timeIntervalSince(last) < Self.burstGap {
+            burstDrinks.append((id, option))
+            if burstDrinks.count >= 2 {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    paceCardShown = true
+                }
+            }
+        } else {
+            burstDrinks = [(id, option)]
+            // A fresh burst gets a fresh answer; don't inherit last night's.
+            paceMinutes = 0
+        }
+        lastLogAt = now
+    }
+
+    private func dismissPaceCard() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { paceCardShown = false }
+        burstDrinks = []
+    }
+
+    /// The card's own "+": pour another of the burst's latest drink without
+    /// leaving the card — the scrim blocks the dock, and a 5-beer catch-up
+    /// shouldn't require dismissing the question it raised.
+    private func burstAddAnother() {
+        guard let last = burstDrinks.last else { return }
+        recents.record(last.option)
+        if inGroup {
+            Task {
+                if let id = await group.addDrink(last.option, shared: false) {
+                    await MainActor.run {
+                        burstDrinks.append((id, last.option))
+                        lastLogAt = Date()
+                    }
+                }
+            }
+        } else {
+            burstDrinks.append((live.add(last.option), last.option))
+            lastLogAt = Date()
+        }
+    }
+
+    /// The card's "−": undo the burst's latest pour. Group removal targets
+    /// "my most recent of this option", which by construction is the burst
+    /// drink itself.
+    private func burstRemoveLast() {
+        guard burstDrinks.count > 1, let last = burstDrinks.popLast() else { return }
+        if inGroup {
+            let t: Task<Void, Never> = Task { await group.removeMyLast(of: last.option, shared: false) }
             _ = t
         } else {
-            live.add(option)
+            live.remove(last.id)
         }
+    }
+
+    /// Spread the burst evenly across [now − minutes, now]: first drink at
+    /// the start of the window, latest at now — the shape of catching up.
+    private func applyPace() {
+        let stamps = paceStamps(minutes: paceMinutes)
+        guard !stamps.isEmpty else { dismissPaceCard(); return }
+        for (id, stamp) in stamps {
+            if inGroup {
+                let t: Task<Void, Never> = Task { await group.restampMyDrink(id: id, to: stamp) }
+                _ = t
+            } else {
+                live.restamp(id, to: stamp)
+            }
+        }
+        dismissPaceCard()
     }
 
     /// Removes the most recent drink of an option (group: my drinks only).
@@ -13272,6 +13441,21 @@ private struct LiveSeshView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 quickAddDock
+            }
+            // The pace prompt is a real decision about the night's data, so
+            // it gets the centre of the screen — scrim, big numbers, and a
+            // live before → after readout while the slider moves.
+            .overlay {
+                if paceCardShown {
+                    ZStack {
+                        Color.black.opacity(0.55).ignoresSafeArea()
+                            .onTapGesture { }   // scrim absorbs taps; decide via buttons
+                        paceCard
+                            .frame(maxWidth: 380)
+                            .padding(.horizontal, 20)
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                }
             }
         }
         .preferredColorScheme(.dark)
@@ -13448,7 +13632,7 @@ private struct LiveSeshView: View {
                 volumeML: item.volumeML,
                 abv: item.abv
             )
-            Task { await group.addDrink(opt, shared: false) }
+            Task { _ = await group.addDrink(opt, shared: false) }
         }
     }
 
@@ -14125,10 +14309,16 @@ private struct LiveSeshView: View {
         recents.record(g.option)
         if inGroup {
             let isShared = g.isShared
-            let t: Task<Void, Never> = Task { await group.addDrink(g.option, shared: isShared) }
-            _ = t
+            // The timeline's "+" is a logging path like any other, so it
+            // feeds the same burst accounting — rapid +++ on a row used to
+            // silently skip the pace question the quick tiles would ask.
+            Task {
+                if let id = await group.addDrink(g.option, shared: isShared), !isShared {
+                    await MainActor.run { noteBurst(id, g.option) }
+                }
+            }
         } else {
-            live.add(g.option)
+            noteBurst(live.add(g.option), g.option)
         }
     }
 
@@ -14209,14 +14399,261 @@ private struct LiveSeshView: View {
 
     // MARK: quick-add dock
 
+    private func paceWindowLabel(_ minutes: Double) -> String {
+        let m = Int(minutes)
+        if m == 0 { return "ALL JUST NOW" }
+        if m < 60 { return "OVER THE LAST \(m) MIN" }
+        let h = m / 60, r = m % 60
+        return r == 0 ? "OVER THE LAST \(h) H" : "OVER THE LAST \(h) H \(r) MIN"
+    }
+
+    /// The catch-up prompt: centred, scrimmed, with a live before → after
+    /// readout driven by the same walk the header uses — so the effect of
+    /// a pace is visible BEFORE it's applied, and a small spread honestly
+    /// showing a small dip reads as physiology, not as a broken slider.
+    private var paceCard: some View {
+        let bacNow = currentBAC(now: Date())
+        let bacIf = previewBAC(minutes: paceMinutes)
+        // The raw walk is %-scale; the display honors the user's unit
+        // setting exactly like the big RIGHT NOW number does. Hardcoding
+        // "‰" here once produced 0.22‰ under a header saying 2.20‰.
+        let unit = bacUnit == .promille ? "‰" : "%"
+        return VStack(spacing: 16) {
+            VStack(spacing: 4) {
+                Text(burstDrinks.count == 1
+                     ? "1 DRINK IN THIS RUN"
+                     : "\(burstDrinks.count) DRINKS BACK TO BACK")
+                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                    .tracking(1.8)
+                    .foregroundStyle(Color.whiskey)
+                Text("Did they really go down just now?")
+                    .font(.system(size: 21, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .multilineTextAlignment(.center)
+                Text("If you're catching up on drinks from earlier, set how far back the first one goes.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.6))
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 2)
+            }
+
+            // Before → after, recomputed live as the slider moves.
+            HStack(spacing: 14) {
+                VStack(spacing: 2) {
+                    Text("AS LOGGED")
+                        .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                        .tracking(1.4).foregroundStyle(Color.bronze)
+                    Text(bacUnit.formatted(bacNow) + unit)
+                        .font(.system(size: 26, weight: .heavy, design: .rounded).monospacedDigit())
+                        .foregroundStyle(Color.cream.opacity(0.55))
+                }
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.whiskey)
+                VStack(spacing: 2) {
+                    Text("AT THIS PACE")
+                        .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                        .tracking(1.4).foregroundStyle(Color.bronze)
+                    Text(bacUnit.formatted(bacIf) + unit)
+                        .font(.system(size: 26, weight: .heavy, design: .rounded).monospacedDigit())
+                        .foregroundStyle(Color.whiskey)
+                        .contentTransition(.numericText(value: bacIf))
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.cream.opacity(0.05)))
+
+            // Adjust the run without leaving the card — the scrim blocks the
+            // dock, and "actually it was five" must not require starting over.
+            // Styled exactly like a timeline row (glyph, name, size · ABV,
+            // − n + pill) so the card reads as "this row of your night".
+            if let last = burstDrinks.last {
+                HStack(spacing: 12) {
+                    DrinkGlyph(option: last.option, size: 22)
+                        .frame(width: 38, height: 38)
+                        .background(Circle().fill(Color.smoke))
+                        .overlay(Circle().strokeBorder(Color.whiskey.opacity(0.25), lineWidth: 1))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(last.option.name)
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .lineLimit(1)
+                        Text(last.option.detail)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .tracking(0.4)
+                            .foregroundStyle(Color.cream.opacity(0.5))
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    HStack(spacing: 0) {
+                        Button(action: { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { burstRemoveLast() } }) {
+                            Image(systemName: "minus")
+                                .font(.system(size: 12, weight: .black, design: .rounded))
+                                .foregroundStyle(burstDrinks.count > 1 ? Color.cream.opacity(0.8) : Color.cream.opacity(0.25))
+                                .frame(width: 34, height: 32)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PressScaleStyle())
+                        .disabled(burstDrinks.count <= 1)
+
+                        Text("\(burstDrinks.count)")
+                            .font(.system(size: 15, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .monospacedDigit()
+                            .frame(minWidth: 22)
+                            .contentTransition(.numericText(value: Double(burstDrinks.count)))
+
+                        Button(action: { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { burstAddAnother() } }) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 12, weight: .black, design: .rounded))
+                                .foregroundStyle(Color.ink)
+                                .frame(width: 34, height: 32)
+                                .background(Color.whiskey)
+                                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+                    .padding(3)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.cream.opacity(0.05)))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.cream.opacity(0.035)))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.cream.opacity(0.07), lineWidth: 1))
+            }
+
+            VStack(spacing: 6) {
+                Slider(value: $paceMinutes, in: 0...180, step: 5)
+                    .tint(Color.whiskey)
+                Text(paceWindowLabel(paceMinutes))
+                    .font(.system(size: 12, weight: .black, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.cream.opacity(0.85))
+                    .contentTransition(.numericText(value: paceMinutes))
+            }
+
+            Button {
+                paceMinutes == 0 ? dismissPaceCard() : applyPace()
+            } label: {
+                Text(paceMinutes == 0 ? "YES — ALL JUST NOW" : "THAT'S THE PACE")
+                    .font(.system(size: 13.5, weight: .black, design: .monospaced))
+                    .tracking(1.3)
+                    .foregroundStyle(Color.ink)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.whiskey))
+            }
+            .buttonStyle(PressScaleStyle())
+
+            // Set expectations at the moment they'd otherwise break: an
+            // hour of spread ≈ one hour of clearing, nothing more.
+            Text("Your body clears ≈ \(bacUnit == .promille ? "0.15 ‰" : "0.015 %") an hour — spreading drinks out matters over hours, not minutes. Best reading: log each drink as you open it.")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.5))
+                .multilineTextAlignment(.center)
+                .lineSpacing(2)
+        }
+        .padding(20)
+        .background(RoundedRectangle(cornerRadius: 24, style: .continuous)
+            .fill(Color.inkElev))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
+            .strokeBorder(Color.whiskey.opacity(0.5), lineWidth: 1))
+        .overlay(alignment: .topTrailing) {
+            Button { dismissPaceCard() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.cream.opacity(0.55))
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(Color.cream.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .padding(10)
+        }
+        .shadow(color: .black.opacity(0.55), radius: 24, y: 8)
+    }
+
     private var quickAddDock: some View {
         VStack(spacing: 10) {
-            // Share-mode toggle: only visible in a group. Lets the user
-            // switch quick-add behaviour between "just me" and "shared
-            // round" without having to dive into the menu sheet.
+            // Share-a-round, redesigned as ARMED-PER-ROUND. The old sticky
+            // toggle was the confusion: people flipped it, forgot, and every
+            // later beer silently logged for the whole table. Now SHARE A
+            // ROUND arms exactly one tap — a banner says in words what that
+            // tap will do and for how many people, the tap logs the round
+            // and disarms itself, and a confirmation names what happened.
             if inGroup {
-                LiveShareModePicker(shareMode: $shareMode, memberCount: group.members.count)
+                let heads = max(group.members.count + group.ghosts.count, 1)
+                if shareMode {
+                    HStack(spacing: 10) {
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.ink)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("ROUND ARMED")
+                                .font(.system(size: 9, weight: .black, design: .monospaced))
+                                .tracking(1.6).foregroundStyle(Color.ink.opacity(0.7))
+                            Text(heads == 1
+                                 ? "Next tap logs one just for you — no one else here yet"
+                                 : "Next tap logs one for all \(heads) of you")
+                                .font(.system(size: 12.5, weight: .heavy, design: .rounded))
+                                .foregroundStyle(Color.ink)
+                        }
+                        Spacer()
+                        Button {
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { shareMode = false }
+                        } label: {
+                            Text("CANCEL")
+                                .font(.system(size: 10, weight: .black, design: .monospaced))
+                                .tracking(1.2)
+                                .foregroundStyle(Color.ink)
+                                .padding(.horizontal, 10).padding(.vertical, 6)
+                                .background(Capsule().fill(Color.ink.opacity(0.15)))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 13).padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.whiskey))
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
+                } else if let confirmed = roundConfirmation {
+                    Label(confirmed, systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 11.5, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.whiskey)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.whiskey.opacity(0.12)))
+                        .transition(.opacity)
+                } else {
+                    HStack {
+                        Spacer()
+                        Button {
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { shareMode = true }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "person.2.fill")
+                                    .font(.system(size: 9.5, weight: .bold, design: .rounded))
+                                Text("BUYING A ROUND?")
+                                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                                    .tracking(1.2)
+                            }
+                            .foregroundStyle(Color.cream.opacity(0.55))
+                            .padding(.horizontal, 11).padding(.vertical, 7)
+                            .background(Capsule().fill(Color.cream.opacity(0.06)))
+                            .overlay(Capsule().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
             }
 
             HStack(spacing: 8) {
