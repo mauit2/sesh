@@ -19,6 +19,10 @@ struct DMMessage: Codable, Identifiable, Equatable {
     let storyPath: String?
     let createdAt: Date
     var readAt: Date?
+    /// Trigger-maintained (migration 096); the incremental poll cursor.
+    /// nil only for locally-constructed optimistic rows — the default keeps
+    /// the memberwise init unchanged for every optimistic construction site.
+    var updatedAt: Date? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, kind, body
@@ -28,6 +32,7 @@ struct DMMessage: Codable, Identifiable, Equatable {
         case storyPath = "story_path"
         case createdAt = "created_at"
         case readAt = "read_at"
+        case updatedAt = "updated_at"
     }
 
     /// Thumbnail of the story this message reacted to — renders while the
@@ -102,20 +107,54 @@ final class DMService: ObservableObject {
         messages = []
     }
 
+    /// High-water mark of dm_messages.updated_at we've seen. The poll asks
+    /// only for rows newer than this, so an idle 20 s tick costs a few bytes
+    /// instead of re-downloading the whole 500-message window — which it did,
+    /// three times a minute, for every user with the app open (096).
+    private var syncedTo: Date?
+
     func refresh() async {
         guard let me = myId else { return }
         let mine = me.uuidString.lowercased()
         do {
-            let rows: [DMMessage] = try await supabase.from("dm_messages")
-                .select()
-                .or("sender_id.eq.\(mine),recipient_id.eq.\(mine)")
-                .order("created_at", ascending: false)
-                .limit(500)
-                .execute()
-                .value
-            messages = rows.reversed()
+            let changed: [DMMessage]
+            if let since = syncedTo, !messages.isEmpty {
+                // ISO cursor carries milliseconds against Postgres' micros —
+                // rounds DOWN, so the worst case is refetching one already-
+                // merged row, never missing one. Same contract as 088.
+                let iso = ISO8601DateFormatter()
+                iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                changed = try await supabase.from("dm_messages")
+                    .select()
+                    .or("sender_id.eq.\(mine),recipient_id.eq.\(mine)")
+                    .gt("updated_at", value: iso.string(from: since))
+                    .order("updated_at", ascending: true)
+                    .limit(500)
+                    .execute()
+                    .value
+                if !changed.isEmpty {
+                    // Merge by id: read receipts arrive as updates to rows we
+                    // already hold, new messages as fresh ids.
+                    var byId = Dictionary(uniqueKeysWithValues: messages.map { ($0.id, $0) })
+                    for m in changed { byId[m.id] = m }
+                    messages = byId.values.sorted { $0.createdAt < $1.createdAt }
+                }
+            } else {
+                let rows: [DMMessage] = try await supabase.from("dm_messages")
+                    .select()
+                    .or("sender_id.eq.\(mine),recipient_id.eq.\(mine)")
+                    .order("created_at", ascending: false)
+                    .limit(500)
+                    .execute()
+                    .value
+                messages = rows.reversed()
+                changed = rows
+            }
+            if let top = changed.compactMap(\.updatedAt).max() {
+                syncedTo = max(syncedTo ?? .distantPast, top)
+            }
 
-            let partners = Set(rows.map { $0.senderId == me ? $0.recipientId : $0.senderId })
+            let partners = Set(changed.map { $0.senderId == me ? $0.recipientId : $0.senderId })
                 .subtracting(profilesById.keys)
             if !partners.isEmpty {
                 let ps: [Profile] = try await supabase
@@ -143,6 +182,11 @@ final class DMService: ObservableObject {
     private func insert(_ row: InsertRow, optimistic: DMMessage) async {
         messages.append(optimistic)
         _ = try? await supabase.from("dm_messages").insert(row).execute()
+        // The optimistic row carries a LOCAL id; the server assigns its own.
+        // The old full-array refresh replaced it wholesale, but the
+        // incremental merge (096) keeps unknown ids — so drop the stand-in
+        // explicitly before the refetch brings in the real row.
+        messages.removeAll { $0.id == optimistic.id }
         await refresh()
     }
 

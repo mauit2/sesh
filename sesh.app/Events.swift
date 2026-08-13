@@ -360,8 +360,14 @@ final class EventsService: ObservableObject {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
-                // 45s — event invites also push; no need to poll every 15s.
-                try? await Task.sleep(nanoseconds: 45_000_000_000)
+                // 120s. Each tick re-downloads events + members + any new
+                // profiles (~9 KB and growing with usage), and the urgent
+                // paths don't need it: invites arrive as pushes, and every
+                // accept/decline/edit in the UI calls refresh() directly.
+                // The poll only exists to catch OTHER people's RSVP changes
+                // while you happen to be staring at the roster — 2 minutes
+                // is plenty for that.
+                try? await Task.sleep(nanoseconds: 120_000_000_000)
             }
         }
     }
