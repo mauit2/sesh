@@ -334,17 +334,21 @@ function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body
     :root{--line:rgba(243,233,216,.4);--cream-dim:#e6dcc8;--bronze:#cdb896;}
   }
 
-  /* sejdel dimples — the mug's glass as a living background */
-  .dimples{position:fixed;inset:-160px;pointer-events:none;z-index:0;opacity:.06;
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='92' height='104'%3E%3Cdefs%3E%3CradialGradient id='g' cx='40%' cy='35%' r='75%'%3E%3Cstop offset='0%' stop-color='%23e8843c' stop-opacity='.5'/%3E%3Cstop offset='100%' stop-color='%23e8843c' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg stroke-linecap='round' fill='none'%3E%3Ccircle cx='23' cy='26' r='19' fill='url(%23g)'/%3E%3Cpath d='M5.3 22.9A18 18 0 0 1 36.8 14.4' stroke='%23f3e9d8' stroke-opacity='.5' stroke-width='1.6'/%3E%3Cpath d='M40.7 29.1A18 18 0 0 1 6.1 32.2' stroke='%230a0603' stroke-opacity='.7' stroke-width='2.2'/%3E%3Ccircle cx='69' cy='78' r='19' fill='url(%23g)'/%3E%3Cpath d='M51.3 74.9A18 18 0 0 1 82.8 66.4' stroke='%23f3e9d8' stroke-opacity='.5' stroke-width='1.6'/%3E%3Cpath d='M86.7 81.1A18 18 0 0 1 52.1 84.2' stroke='%230a0603' stroke-opacity='.7' stroke-width='2.2'/%3E%3C/g%3E%3C/svg%3E");
-    background-size:92px 104px;animation:dimpledrift 46s linear infinite;will-change:transform;}
-  @keyframes dimpledrift{from{transform:translate3d(0,0,0)}to{transform:translate3d(-92px,-104px,0)}}
+  /* sejdel dimples — pressed glass in two depth layers (parallax drift) */
+  .dimples{position:fixed;inset:-220px;pointer-events:none;z-index:0;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='136'%3E%3Cdefs%3E%3CradialGradient id='g' cx='36%' cy='30%' r='78%'%3E%3Cstop offset='0%' stop-color='%23f7ecd8' stop-opacity='.75'/%3E%3Cstop offset='16%' stop-color='%23eda45f' stop-opacity='.45'/%3E%3Cstop offset='48%' stop-color='%23b06a30' stop-opacity='.22'/%3E%3Cstop offset='82%' stop-color='%23140b04' stop-opacity='.55'/%3E%3Cstop offset='100%' stop-color='%23140b04' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none' stroke-linecap='round'%3E%3Ccircle cx='30' cy='34' r='27.5' stroke='%230a0603' stroke-opacity='.5' stroke-width='2.5'/%3E%3Ccircle cx='30' cy='34' r='26' fill='url(%23g)'/%3E%3Cpath d='M50.2 45.7A25 25 0 0 1 17.5 55.6' stroke='%23f3e9d8' stroke-opacity='.3' stroke-width='1.5'/%3E%3Ccircle cx='90' cy='102' r='27.5' stroke='%230a0603' stroke-opacity='.5' stroke-width='2.5'/%3E%3Ccircle cx='90' cy='102' r='26' fill='url(%23g)'/%3E%3Cpath d='M110.2 113.7A25 25 0 0 1 77.5 123.6' stroke='%23f3e9d8' stroke-opacity='.3' stroke-width='1.5'/%3E%3C/g%3E%3C/svg%3E");will-change:transform;}
+  .dim-far{opacity:.11;background-size:72px 82px;filter:blur(1.6px);
+    animation:dimpledriftf 76s linear infinite;}
+  .dim-near{opacity:.18;background-size:132px 150px;
+    animation:dimpledriftn 38s linear infinite;}
+  @keyframes dimpledriftf{from{transform:translate3d(0,0,0)}to{transform:translate3d(-72px,-82px,0)}}
+  @keyframes dimpledriftn{from{transform:translate3d(0,0,0)}to{transform:translate3d(-132px,-150px,0)}}
   @media (prefers-reduced-motion: reduce){.dimples{animation:none}}
 </style>
 ${jsonld ? (Array.isArray(jsonld) ? jsonld : [jsonld])
     .map((d) => `<script type="application/ld+json">${JSON.stringify(d)}</script>`).join("\n") : ""}
 </head>
-<body><div class="dimples" aria-hidden="true"></div>
+<body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
 <div class="wrap">
   <header class="top">
     <a class="brand" href="${SITE}/">Sejdel<span>.</span></a>

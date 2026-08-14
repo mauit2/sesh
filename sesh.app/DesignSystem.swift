@@ -165,13 +165,15 @@ struct DimpleDriftBackground: View {
     var strength: Double = 0.10
     /// Drift speed in points/second. Keep gentle — this is ambience.
     var speed: Double = 5
+    /// Scales dimple size and pitch: <1 reads as a farther glass layer.
+    var scale: CGFloat = 1
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
             Canvas { ctx, size in
-                let tileW: CGFloat = 92          // horizontal dimple pitch
-                let tileH: CGFloat = 52          // row pitch (staggered)
-                let r: CGFloat = 19
+                let tileW: CGFloat = 92 * scale  // horizontal dimple pitch
+                let tileH: CGFloat = 52 * scale  // row pitch (staggered)
+                let r: CGFloat = 19 * scale
                 let t = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate
                 let dx = CGFloat((t * speed).truncatingRemainder(dividingBy: Double(tileW)))
                 let dy = CGFloat((t * speed * 1.13).truncatingRemainder(dividingBy: Double(tileH * 2)))
