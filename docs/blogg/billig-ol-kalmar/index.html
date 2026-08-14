@@ -140,22 +140,21 @@
   /* sejdel dimples — concave pressed glass, two depth layers */
   .dimples{position:fixed;inset:-260px;pointer-events:none;z-index:-1;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='204'%3E%3Cdefs%3E%3CradialGradient id='g' cx='63%' cy='67%' r='75%'%3E%3Cstop offset='0%' stop-color='%23f0c084' stop-opacity='.55'/%3E%3Cstop offset='35%' stop-color='%23c98136' stop-opacity='.28'/%3E%3Cstop offset='75%' stop-color='%23120a04' stop-opacity='.6'/%3E%3Cstop offset='100%' stop-color='%23120a04' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none' stroke-linecap='round'%3E%3Ccircle cx='45' cy='51' r='34' fill='url(%23g)'/%3E%3Cpath d='M14.1 53.7A31 31 0 0 1 62.8 25.6' stroke='%230a0603' stroke-opacity='.65' stroke-width='3'/%3E%3Cpath d='M75.9 48.4A31 31 0 0 1 32.3 78.2' stroke='%23f3e0c0' stroke-opacity='.42' stroke-width='1.6'/%3E%3Ccircle cx='135' cy='153' r='34' fill='url(%23g)'/%3E%3Cpath d='M104.1 155.7A31 31 0 0 1 152.8 127.6' stroke='%230a0603' stroke-opacity='.65' stroke-width='3'/%3E%3Cpath d='M165.9 150.4A31 31 0 0 1 122.3 180.2' stroke='%23f3e0c0' stroke-opacity='.42' stroke-width='1.6'/%3E%3C/g%3E%3C/svg%3E");will-change:transform;}
-  .dim-far{opacity:.13;background-size:104px 118px;filter:blur(1.8px);
+  .dim-far{opacity:.10;background-size:176px 200px;filter:blur(1.8px);
     animation:dimpledriftf 84s linear infinite;}
-  .dim-near{opacity:.24;background-size:190px 216px;
+  .dim-near{opacity:.24;background-size:300px 341px;
     animation:dimpledriftn 44s linear infinite;}
-  @keyframes dimpledriftf{from{transform:translate3d(0,0,0)}to{transform:translate3d(-104px,-118px,0)}}
-  @keyframes dimpledriftn{from{transform:translate3d(0,0,0)}to{transform:translate3d(-190px,-216px,0)}}
+  @keyframes dimpledriftf{from{transform:translate3d(0,0,0)}to{transform:translate3d(-176px,-200px,0)}}
+  @keyframes dimpledriftn{from{transform:translate3d(0,0,0)}to{transform:translate3d(-300px,-341px,0)}}
   @media (prefers-reduced-motion: reduce){.dimples{animation:none}}
-  /* readability: fade the texture behind the content column */
-  .dimple-scrim{position:fixed;inset:0;pointer-events:none;z-index:-1;
-    background:linear-gradient(90deg,rgba(20,15,11,0) 0%,rgba(20,15,11,.30) 30%,rgba(20,15,11,.42) 50%,rgba(20,15,11,.30) 70%,rgba(20,15,11,0) 100%);}
+  /* readability: feathered pool of ink behind every text container */
+  .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
 </style>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Billigaste ölen i Kalmar","description":"Ölpriser i Kalmar","dateModified":"2026-08-14","inLanguage":"sv-SE","mainEntityOfPage":{"@type":"WebPage","@id":"https://sejdel.com/blogg/billig-ol-kalmar/"},"publisher":{"@type":"Organization","name":"Sejdel","url":"https://sejdel.com"},"about":{"@type":"Place","name":"Kalmar"}}</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Var är ölen billigast i Kalmar?","acceptedAnswer":{"@type":"Answer","text":"Kalmar Superbowl har det lägsta priset vi har inrapporterat, 55 kr för 40 cl. Räknat per centiliter är Escape room Kalmar &amp; Barcade bäst på 1.18 kr/cl."}},{"@type":"Question","name":"Vad kostar en stor stark i Kalmar?","acceptedAnswer":{"@type":"Answer","text":"Medianen för 40 cl ligger på 78 kr. Billigast vi sett är 55 kr."}},{"@type":"Question","name":"Vad är literpriset på öl i Kalmar?","acceptedAnswer":{"@type":"Answer","text":"Medianen motsvarar 188 kr per liter, alltså 1.88 kr/cl. Bästa literpriset i stan är 118 kr/l."}},{"@type":"Question","name":"Varför jämför ni per centiliter?","acceptedAnswer":{"@type":"Answer","text":"Eftersom glasstorlekarna skiljer sig. En 33 cl för 49 kr är dyrare per öl än en 50 cl för 65 kr, även om siffran på menyn är lägre. Per centiliter blir jämförelsen rättvis."}},{"@type":"Question","name":"Hur ofta uppdateras priserna?","acceptedAnswer":{"@type":"Answer","text":"Sidan byggs om från de senaste rapporterna — den här versionen är från 14 augusti 2026. Vi visar medianen av de senaste rapporterna per bar och storlek, inte det senaste priset."}},{"@type":"Question","name":"Kan jag rapportera ett pris själv?","acceptedAnswer":{"@type":"Answer","text":"Ja. Sök upp baren på ölkartan och lägg in priset, eller gör det i Sejdel-appen. Det syns på kartan direkt och på den här sidan nästa gång den byggs."}}]}</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Sejdel","item":"https://sejdel.com/"},{"@type":"ListItem","position":2,"name":"Ölpriser","item":"https://sejdel.com/blogg/"},{"@type":"ListItem","position":3,"name":"Kalmar"}]}</script>
 </head>
-<body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div><div class="dimple-scrim" aria-hidden="true"></div>
+<body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
 <div class="wrap">
   <header class="top">
     <a class="brand" href="https://sejdel.com/">Sejdel<span>.</span></a>
