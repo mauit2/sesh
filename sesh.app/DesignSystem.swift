@@ -171,9 +171,9 @@ struct DimpleDriftBackground: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
             Canvas { ctx, size in
-                let tileW: CGFloat = 92 * scale  // horizontal dimple pitch
-                let tileH: CGFloat = 52 * scale  // row pitch (staggered)
-                let r: CGFloat = 19 * scale
+                let tileW: CGFloat = 128 * scale // horizontal dimple pitch
+                let tileH: CGFloat = 72 * scale  // row pitch (staggered)
+                let r: CGFloat = 25 * scale
                 let t = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate
                 let dx = CGFloat((t * speed).truncatingRemainder(dividingBy: Double(tileW)))
                 let dy = CGFloat((t * speed * 1.13).truncatingRemainder(dividingBy: Double(tileH * 2)))
@@ -185,23 +185,23 @@ struct DimpleDriftBackground: View {
                     var x = -tileW + stagger + dx
                     while x < size.width + tileW {
                         let c = CGPoint(x: x, y: y)
-                        // Glass dent: faint amber body, bright crescent where
-                        // light enters (top-left), dark crescent opposite.
+                        // Concave dent: the rim shades the upper-left inner
+                        // wall; light pools on the lower-right wall.
                         let body = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
                         ctx.fill(body, with: .radialGradient(
-                            Gradient(colors: [Color.whiskey.opacity(0.28), Color.whiskey.opacity(0.02)]),
-                            center: CGPoint(x: c.x - r * 0.25, y: c.y - r * 0.3),
+                            Gradient(colors: [Color.whiskey.opacity(0.30), Color.whiskey.opacity(0.02)]),
+                            center: CGPoint(x: c.x + r * 0.28, y: c.y + r * 0.32),
                             startRadius: 0, endRadius: r * 1.15))
-                        var lit = Path()
-                        lit.addArc(center: c, radius: r - 1,
-                                   startAngle: .degrees(120), endAngle: .degrees(255), clockwise: false)
-                        ctx.stroke(lit, with: .color(Color.foam.opacity(0.5)),
-                                   style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
                         var shade = Path()
-                        shade.addArc(center: c, radius: r - 0.5,
-                                     startAngle: .degrees(300), endAngle: .degrees(75), clockwise: false)
-                        ctx.stroke(shade, with: .color(Color.stout.opacity(0.8)),
-                                   style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                        shade.addArc(center: c, radius: r - 1,
+                                     startAngle: .degrees(175), endAngle: .degrees(305), clockwise: false)
+                        ctx.stroke(shade, with: .color(Color.stout.opacity(0.85)),
+                                   style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
+                        var lit = Path()
+                        lit.addArc(center: c, radius: r - 0.5,
+                                   startAngle: .degrees(355), endAngle: .degrees(115), clockwise: false)
+                        ctx.stroke(lit, with: .color(Color.foam.opacity(0.45)),
+                                   style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
                         x += tileW
                     }
                     row += 1

@@ -137,23 +137,26 @@
     :root{--line:rgba(243,233,216,.4);--cream-dim:#e6dcc8;--bronze:#cdb896;}
   }
 
-  /* sejdel dimples — pressed glass in two depth layers (parallax drift) */
-  .dimples{position:fixed;inset:-220px;pointer-events:none;z-index:0;
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='136'%3E%3Cdefs%3E%3CradialGradient id='g' cx='36%' cy='30%' r='78%'%3E%3Cstop offset='0%' stop-color='%23f7ecd8' stop-opacity='.75'/%3E%3Cstop offset='16%' stop-color='%23eda45f' stop-opacity='.45'/%3E%3Cstop offset='48%' stop-color='%23b06a30' stop-opacity='.22'/%3E%3Cstop offset='82%' stop-color='%23140b04' stop-opacity='.55'/%3E%3Cstop offset='100%' stop-color='%23140b04' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none' stroke-linecap='round'%3E%3Ccircle cx='30' cy='34' r='27.5' stroke='%230a0603' stroke-opacity='.5' stroke-width='2.5'/%3E%3Ccircle cx='30' cy='34' r='26' fill='url(%23g)'/%3E%3Cpath d='M50.2 45.7A25 25 0 0 1 17.5 55.6' stroke='%23f3e9d8' stroke-opacity='.3' stroke-width='1.5'/%3E%3Ccircle cx='90' cy='102' r='27.5' stroke='%230a0603' stroke-opacity='.5' stroke-width='2.5'/%3E%3Ccircle cx='90' cy='102' r='26' fill='url(%23g)'/%3E%3Cpath d='M110.2 113.7A25 25 0 0 1 77.5 123.6' stroke='%23f3e9d8' stroke-opacity='.3' stroke-width='1.5'/%3E%3C/g%3E%3C/svg%3E");will-change:transform;}
-  .dim-far{opacity:.11;background-size:72px 82px;filter:blur(1.6px);
-    animation:dimpledriftf 76s linear infinite;}
-  .dim-near{opacity:.18;background-size:132px 150px;
-    animation:dimpledriftn 38s linear infinite;}
-  @keyframes dimpledriftf{from{transform:translate3d(0,0,0)}to{transform:translate3d(-72px,-82px,0)}}
-  @keyframes dimpledriftn{from{transform:translate3d(0,0,0)}to{transform:translate3d(-132px,-150px,0)}}
+  /* sejdel dimples — concave pressed glass, two depth layers */
+  .dimples{position:fixed;inset:-260px;pointer-events:none;z-index:-1;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='204'%3E%3Cdefs%3E%3CradialGradient id='g' cx='63%' cy='67%' r='75%'%3E%3Cstop offset='0%' stop-color='%23f0c084' stop-opacity='.4'/%3E%3Cstop offset='35%' stop-color='%23c98136' stop-opacity='.2'/%3E%3Cstop offset='75%' stop-color='%23120a04' stop-opacity='.5'/%3E%3Cstop offset='100%' stop-color='%23120a04' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none' stroke-linecap='round'%3E%3Ccircle cx='45' cy='51' r='34' fill='url(%23g)'/%3E%3Cpath d='M14.1 53.7A31 31 0 0 1 62.8 25.6' stroke='%230a0603' stroke-opacity='.55' stroke-width='3'/%3E%3Cpath d='M75.9 48.4A31 31 0 0 1 32.3 78.2' stroke='%23f3e0c0' stroke-opacity='.32' stroke-width='1.6'/%3E%3Ccircle cx='135' cy='153' r='34' fill='url(%23g)'/%3E%3Cpath d='M104.1 155.7A31 31 0 0 1 152.8 127.6' stroke='%230a0603' stroke-opacity='.55' stroke-width='3'/%3E%3Cpath d='M165.9 150.4A31 31 0 0 1 122.3 180.2' stroke='%23f3e0c0' stroke-opacity='.32' stroke-width='1.6'/%3E%3C/g%3E%3C/svg%3E");will-change:transform;}
+  .dim-far{opacity:.09;background-size:104px 118px;filter:blur(1.8px);
+    animation:dimpledriftf 84s linear infinite;}
+  .dim-near{opacity:.16;background-size:190px 216px;
+    animation:dimpledriftn 44s linear infinite;}
+  @keyframes dimpledriftf{from{transform:translate3d(0,0,0)}to{transform:translate3d(-104px,-118px,0)}}
+  @keyframes dimpledriftn{from{transform:translate3d(0,0,0)}to{transform:translate3d(-190px,-216px,0)}}
   @media (prefers-reduced-motion: reduce){.dimples{animation:none}}
+  /* readability: fade the texture behind the content column */
+  .dimple-scrim{position:fixed;inset:0;pointer-events:none;z-index:-1;
+    background:linear-gradient(90deg,rgba(20,15,11,0) 0%,rgba(20,15,11,.5) 22%,rgba(20,15,11,.68) 50%,rgba(20,15,11,.5) 78%,rgba(20,15,11,0) 100%);}
 </style>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Happy hour i Göteborg","dateModified":"2026-08-14","inLanguage":"sv-SE","mainEntityOfPage":{"@type":"WebPage","@id":"https://sejdel.com/blogg/happy-hour-goteborg/"},"publisher":{"@type":"Organization","name":"Sejdel","url":"https://sejdel.com"}}</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"ItemList","name":"Happy hour i Göteborg","numberOfItems":16,"itemListElement":[{"@type":"ListItem","position":1,"name":"Deli deli food and wine"},{"@type":"ListItem","position":2,"name":"Rockbaren"},{"@type":"ListItem","position":3,"name":"Domi Bar & Café"},{"@type":"ListItem","position":4,"name":"Old Town"},{"@type":"ListItem","position":5,"name":"Café Linné Coffee & Food"},{"@type":"ListItem","position":6,"name":"Blind Mango Bar"},{"@type":"ListItem","position":7,"name":"La Cave"},{"@type":"ListItem","position":8,"name":"Bar Etzy"},{"@type":"ListItem","position":9,"name":"The Queen"},{"@type":"ListItem","position":10,"name":"Bar Maria"},{"@type":"ListItem","position":11,"name":"Tugg Burgers"},{"@type":"ListItem","position":12,"name":"Werners Bistro"},{"@type":"ListItem","position":13,"name":"Gæst"},{"@type":"ListItem","position":14,"name":"The Golden Days"},{"@type":"ListItem","position":15,"name":"Biljardpalatset"},{"@type":"ListItem","position":16,"name":"Benjamins Bistro Café"}]}</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Vilka tider är happy hour i Göteborg?","acceptedAnswer":{"@type":"Answer","text":"Det varierar från krog till krog. I Sverige ligger happy hour oftast på tidig kvällstid på vardagar, men varje ställe sätter sina egna timmar och ändrar dem ofta. Vi listar vilka barer som har happy hour och vad ölen kostar — tiderna publicerar vi inte förrän de är inrapporterade, eftersom ett felaktigt klockslag är värre än inget."}},{"@type":"Question","name":"Var är happy hour billigast i Göteborg?","acceptedAnswer":{"@type":"Answer","text":"Rockbaren har det lägsta happy hour-priset vi har, 36 kr för 40 cl — 0.90 kr/cl."}},{"@type":"Question","name":"Hur mycket sparar man på happy hour?","acceptedAnswer":{"@type":"Answer","text":"Medianen bland happy hour-priserna för stor stark (40 cl) i Göteborg är 50 kr, mot 59 kr för en vanlig stor stark i staden. Det är ungefär 15 % lägre."}},{"@type":"Question","name":"Hur många krogar har happy hour i Göteborg?","acceptedAnswer":{"@type":"Answer","text":"Vi har happy hour-pris för 16 krogar i Göteborg. Det är de vi har rapporter på, inte alla som finns — hittar du en till, lägg in den i appen."}}]}</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Sejdel","item":"https://sejdel.com/"},{"@type":"ListItem","position":2,"name":"Ölpriser","item":"https://sejdel.com/blogg/"},{"@type":"ListItem","position":3,"name":"Happy hour i Göteborg"}]}</script>
 </head>
-<body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
+<body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div><div class="dimple-scrim" aria-hidden="true"></div>
 <div class="wrap">
   <header class="top">
     <a class="brand" href="https://sejdel.com/">Sejdel<span>.</span></a>
