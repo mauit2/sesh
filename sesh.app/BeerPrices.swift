@@ -35,6 +35,14 @@ enum BeerPriceScale {
 }
 
 extension BeerCurrency {
+    /// ISO country for a coordinate, or nil when geocoding fails. Drives the
+    /// region-adaptive default serving (16 oz over the US/Canada).
+    static func isoNear(_ coordinate: CLLocationCoordinate2D) async -> String? {
+        let geo = CLGeocoder()
+        let loc = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        return try? await geo.reverseGeocodeLocation(loc).first?.isoCountryCode
+    }
+
     /// Resolve the local currency for a coordinate by reverse-geocoding to its
     /// country. Falls back to the device currency on failure.
     static func near(_ coordinate: CLLocationCoordinate2D) async -> String {
@@ -212,7 +220,7 @@ struct BeerPriceDetailCard: View {
                 Button { onPickServing(sp.servingSize) } label: {
                     HStack(spacing: 10) {
                         Circle().fill(BeerPriceScale.color(sp.price, cheapest: cheapest(sp))).frame(width: 10, height: 10)
-                        Text(sp.servingSize.label)
+                        Text(sp.servingLabel)
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.cream)
                         Spacer()
@@ -519,7 +527,7 @@ struct BeerPriceListSheet: View {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         let here = location.location
             ?? fallbackOrigin.map { CLLocation(latitude: $0.latitude, longitude: $0.longitude) }
-        return venues.venuesWithBeerPrice(serving: serving)
+        return venues.venuesWithDisplayablePrice(serving: serving)
             // The BROWSE list is bars near you (or, with no fix yet, near what
             // the map shows); a typed SEARCH reaches the whole catalog —
             // "Bar Etzy" should find Gothenburg from Stockholm, and "…Berlin"
@@ -530,7 +538,7 @@ struct BeerPriceListSheet: View {
                 let d = CLLocation(latitude: v.lat, longitude: v.lon).distance(from: here)
                 return d <= VenueService.dealsRadiusMeters
             }
-            .compactMap { v in venues.beerPrice(for: v, serving: serving).map { (v, $0) } }
+            .compactMap { v in venues.displayBeerPrice(for: v, serving: serving).map { (v, $0) } }
             .filter { q.isEmpty || $0.venue.name.lowercased().contains(q)
                          || $0.venue.displayLocation.lowercased().contains(q) }
             .sorted { $0.price.price < $1.price.price }

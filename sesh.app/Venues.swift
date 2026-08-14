@@ -131,6 +131,9 @@ struct MapKitVenueResult: Identifiable, Hashable {
     let city: String?
     let lat: Double
     let lon: Double
+    /// ISO-3166 alpha-2 from the placemark, when Apple knows it. Written to
+    /// venues.country on creation so the row lands in the right catalog.
+    var isoCountry: String? = nil
 
     /// Distance in metres from the search center, when known. Surfaced
     /// so the UI can show "0.4 km" next to each result without doing
@@ -184,6 +187,7 @@ struct MapKitVenueResult: Identifiable, Hashable {
             self.address = nil
         }
         self.city = placemark.locality
+        self.isoCountry = placemark.isoCountryCode
         self.lat = coord.latitude
         self.lon = coord.longitude
         if let origin {
@@ -379,13 +383,16 @@ final class VenueService: ObservableObject {
         let savedAt: Date
         /// Highest venues.updated_at this cache contains — the sync cursor.
         var syncedTo: Date? = nil
+        /// Which country this snapshot holds (migration 101). A cache from
+        /// another country must not seed the catalog.
+        var country: String? = nil
     }
 
     // nonisolated: the read and the write both run off the main actor on
     // purpose — decoding ~2000 venues on the main thread would be its own jank.
     private nonisolated static var catalogCacheURL: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("venue-catalog-v1.json")
+            .appendingPathComponent("venue-catalog-v2.json")
     }
 
     /// Coders are built where they're used rather than stored — JSONEncoder
@@ -406,6 +413,7 @@ final class VenueService: ObservableObject {
     @MainActor
     private func applyCatalogCache(_ blob: CatalogCache) {
         guard venues.isEmpty else { return }
+        guard blob.country == activeCountry else { return }
         venues = blob.venues
         specialsByVenue = Dictionary(grouping: blob.specials, by: \.venueId)
         offersByVenue = Dictionary(grouping: blob.offers, by: \.venueId)
@@ -430,7 +438,8 @@ final class VenueService: ObservableObject {
             offers: offersByVenue.values.flatMap { $0 },
             prices: beerPricesByVenue.values.flatMap { $0 },
             savedAt: catalogFullPullAt ?? Date(),
-            syncedTo: catalogSyncedTo
+            syncedTo: catalogSyncedTo,
+            country: activeCountry
         )
         Task.detached(priority: .utility) {
             let e = JSONEncoder()
@@ -496,9 +505,10 @@ final class VenueService: ObservableObject {
             let pageSize = 1000
             var offset = 0
             while true {
+                struct P: Encodable { let p_limit: Int; let p_offset: Int; let p_country: String }
                 let page: [VenueBeerPrice] = try await supabase
                     .rpc("venue_beer_prices",
-                         params: ["p_limit": pageSize, "p_offset": offset])
+                         params: P(p_limit: pageSize, p_offset: offset, p_country: activeCountry))
                     .execute()
                     .value
                 rows.append(contentsOf: page)
@@ -520,6 +530,62 @@ final class VenueService: ObservableObject {
 
     /// When prices were last pulled successfully; nil until the first fetch.
     private var lastPricesAt: Date? = nil
+
+    // MARK: - Country scope (migration 101)
+
+    /// The one country whose catalog is loaded. Persisted so the app opens
+    /// where it was; the first GPS fix takes over unless the user has
+    /// explicitly picked a country this session.
+    @Published private(set) var activeCountry: String =
+        UserDefaults.standard.string(forKey: "sesh.activeCountry.v1")
+        ?? Locale.current.region?.identifier ?? "SE"
+    /// True after the user picks a country in the browser — the GPS
+    /// auto-follow stands down for the rest of the session.
+    private(set) var countryPinnedThisSession = false
+
+    struct CountryStat: Decodable, Identifiable {
+        let country: String
+        let venues: Int
+        let priced: Int
+        let outdoor: Int
+        let minLat: Double, maxLat: Double, minLon: Double, maxLon: Double
+        var id: String { country }
+        enum CodingKeys: String, CodingKey {
+            case country, venues, priced, outdoor
+            case minLat = "min_lat", maxLat = "max_lat"
+            case minLon = "min_lon", maxLon = "max_lon"
+        }
+    }
+
+    /// Every country we hold data for, with counts and bounds — the browser.
+    func loadCountryIndex() async -> [CountryStat] {
+        (try? await supabase.rpc("country_index").execute().value) ?? []
+    }
+
+    /// Swap the whole catalog to another country. Hard swap on purpose —
+    /// the point of scoping is that the old country's 2600 venues do NOT
+    /// stay resident when you browse Italy.
+    func switchCountry(_ iso: String, pinned: Bool = true) async {
+        let code = iso.uppercased()
+        if pinned { countryPinnedThisSession = true }
+        guard code != activeCountry else { return }
+        activeCountry = code
+        // Only GPS-driven switches persist: the app always OPENS to wherever
+        // the phone actually is, never to a country you merely browsed.
+        if !pinned {
+            UserDefaults.standard.set(code, forKey: "sesh.activeCountry.v1")
+        }
+        venues = []
+        beerPricesByVenue = [:]
+        catalogSyncedTo = nil
+        catalogFullPullAt = nil
+        lastRefreshedAt = nil
+        lastPricesAt = nil
+        rebuildPriceIndex()
+        catalogStamp += 1
+        await refresh()
+        await loadBeerPrices()
+    }
 
     /// Report that a bar has outdoor seating (migration 094). Server-side the
     /// flag only ever flips TO true — there is no crowd path to unset it — so
@@ -555,6 +621,23 @@ final class VenueService: ObservableObject {
     /// map for that filter.
     func venuesWithBeerPrice(serving: BeerServing) -> [Venue] {
         venues.filter { beerPricesByVenue[$0.id]?.contains { $0.serving == serving.rawValue } ?? false }
+    }
+
+    /// Price to SHOW under a serving filter: the exact size when reported,
+    /// else the venue's size-less price — an imported "a beer is $6 here"
+    /// bar must still exist on the map. The card labels it honestly.
+    func displayBeerPrice(for venue: Venue, serving: BeerServing) -> VenueBeerPrice? {
+        beerPrice(for: venue, serving: serving)
+            ?? beerPricesByVenue[venue.id]?.first { $0.serving == "unknown" }
+    }
+
+    /// venuesWithBeerPrice plus the size-less fallback venues.
+    func venuesWithDisplayablePrice(serving: BeerServing) -> [Venue] {
+        venues.filter { v in
+            beerPricesByVenue[v.id]?.contains {
+                $0.serving == serving.rawValue || $0.serving == "unknown"
+            } ?? false
+        }
     }
 
     /// Any venue that has at least one reported price (any serving).
@@ -867,7 +950,7 @@ final class VenueService: ObservableObject {
             // which the decoder ignored but the network and parser still paid
             // for — about a third of the venue payload.
             let pageSize = 1000
-            let cols = "id,name,address,city,lat,lon,is_featured,source,external_id,mapkit_id,tier,qr_token,created_at,updated_at,outdoor_seating"
+            let cols = "id,name,address,city,lat,lon,is_featured,source,external_id,mapkit_id,tier,qr_token,created_at,updated_at,outdoor_seating,country"
 
             // INCREMENTAL when we already hold a catalog and a cursor, and the
             // last full pull is recent enough to trust for deletions. The whole
@@ -887,6 +970,7 @@ final class VenueService: ObservableObject {
                 let changed: [Venue] = try await supabase
                     .from("venues")
                     .select(cols)
+                    .eq("country", value: activeCountry)
                     .gt("updated_at", value: iso.string(from: since))
                     .order("updated_at", ascending: true)
                     .limit(pageSize)
@@ -918,6 +1002,7 @@ final class VenueService: ObservableObject {
                 try await supabase
                     .from("venues")
                     .select(cols)
+                    .eq("country", value: activeCountry)
                     .order("name", ascending: true)
                     .range(from: index * pageSize, to: (index + 1) * pageSize - 1)
                     .execute()
@@ -1068,6 +1153,7 @@ final class VenueService: ObservableObject {
             let is_featured: Bool
             let source: String
             let external_id: String
+            let country: String?
         }
         let payload = NewMapKitVenue(
             name: result.name,
@@ -1077,7 +1163,8 @@ final class VenueService: ObservableObject {
             lon: result.lon,
             is_featured: false,
             source: "mapkit",
-            external_id: result.id
+            external_id: result.id,
+            country: result.isoCountry
         )
         do {
             let inserted: [Venue] = try await supabase
@@ -1354,8 +1441,19 @@ private struct OffersMapView: View {
     @State private var sunEverShown = false
     /// Where search asked the camera to go.
     @State private var sunFocus: CLLocationCoordinate2D?
+    /// Zoom the next sunFocus fly should land at. nil = street level; the
+    /// country picker sets a whole-country zoom instead.
+    @State private var sunFocusZoom: Double? = nil
     /// The serving size the price map is filtered to.
     @State private var selectedServing: BeerServing = .canonical
+    /// True after the user taps a size themselves — region adaptation stops.
+    @State private var servingPicked = false
+    /// Last centre we reverse-geocoded for the regional serving default.
+    @State private var lastServingProbe: CLLocationCoordinate2D?
+    /// Sizes that actually have priced bars in the current view. The chip row
+    /// draws only these — the row itself tells you what gets poured around
+    /// here, instead of offering a Swedish 40 cl over Manhattan.
+    @State private var availableServings: Set<BeerServing> = []
     /// Beer-price submit sheet + its optional pre-filled bar.
     @State private var submitOpen = false
     @State private var submitPreset: BeerPriceTarget? = nil
@@ -1452,12 +1550,17 @@ private struct OffersMapView: View {
     @State private var facadeEdit: SunVenue?
     /// The sun map's "+" flow: report a terrace + its facing.
     @State private var addOutdoorOpen = false
+    /// The country browser (migration 101): pick where the maps look.
+    @State private var countryPickerOpen = false
     /// How many models carry a price for the selected serving — the header
     /// count and the contribute nudge, without re-walking the pipeline.
     private var pricePinCount: Int { pinModels.lazy.filter { $0.price != nil }.count }
 
     private func rebuildPinModels() {
-        let priced = venues.venuesWithBeerPrice(serving: selectedServing).filter(onScreen)
+        availableServings = Set(BeerServing.allCases.filter { s in
+            venues.venuesWithBeerPrice(serving: s).contains(where: onScreen)
+        })
+        let priced = venues.venuesWithDisplayablePrice(serving: selectedServing).filter(onScreen)
         var top = priced
         if priced.count > Self.maxPricePins {
             // Rank from wherever the user is, or failing that from what
@@ -1480,7 +1583,7 @@ private struct OffersMapView: View {
         var seen = Set<UUID>()
         var models: [MapPinModel] = []
         for v in top + pins where seen.insert(v.id).inserted {
-            let price = venues.beerPrice(for: v, serving: selectedServing)
+            let price = venues.displayBeerPrice(for: v, serving: selectedServing)
             models.append(MapPinModel(
                 venue: v,
                 offerArt: venues.posterOffer(for: v)?.imageURL,
@@ -1615,6 +1718,7 @@ private struct OffersMapView: View {
             .onMapCameraChange(frequency: .onEnd) { ctx in
                 visibleRegion = ctx.region
                 rebuildPinModels()
+                adaptServingToRegion(ctx.region.center)
                 if !mapKitPainted { mapKitPainted = true }
             }
             .opacity(mapMode == .sun ? 0 : 1)
@@ -1724,7 +1828,7 @@ private struct OffersMapView: View {
                             submitPreset = target
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { submitOpen = true }
                         },
-                        onPickServing: { selectedServing = $0 }
+                        onPickServing: { selectedServing = $0; servingPicked = true }
                     )
                 }
             }
@@ -1791,6 +1895,15 @@ private struct OffersMapView: View {
             // already authorized.
             location.requestAccess()
             recenter()
+            if let fix = location.location {
+                Task {
+                    guard let iso = await BeerCurrency.isoNear(fix.coordinate),
+                          iso.uppercased() != venues.activeCountry,
+                          !venues.countryPinnedThisSession else { return }
+                    await venues.switchCountry(iso, pinned: false)
+                    rebuildPinModels()
+                }
+            }
             // Catalog and prices are independent — overlap them. Coordinate
             // resolution reads the offers the refresh brings in, so it waits.
             async let catalog: Void = venues.refreshIfStale()
@@ -1819,9 +1932,18 @@ private struct OffersMapView: View {
         // permission alert). Snap to it once — after that the camera is the
         // user's; locate is the button's job.
         .onChange(of: location.location) { old, new in
-            guard old == nil, new != nil else { return }
+            guard old == nil, let fix = new else { return }
             recenter()
             rebuildPinModels()
+            // You woke up in another country: follow the phone unless the
+            // user explicitly picked a country this session.
+            Task {
+                guard let iso = await BeerCurrency.isoNear(fix.coordinate),
+                      iso.uppercased() != venues.activeCountry,
+                      !venues.countryPinnedThisSession else { return }
+                await venues.switchCountry(iso, pinned: false)
+                rebuildPinModels()
+            }
         }
         .onChange(of: selectedServing) { _, _ in rebuildPinModels() }
         .onChange(of: mapMode) { _, mode in
@@ -1862,7 +1984,7 @@ private struct OffersMapView: View {
                     // locally, so the next rebuild includes it organically too.
                     sun.pinned = v
                     selectedSunId = v.id
-                    sunFocus = v.coordinate
+                    sunFocusZoom = nil; sunFocus = v.coordinate
                 },
                 onClose: {
                     addOutdoorOpen = false
@@ -1870,6 +1992,18 @@ private struct OffersMapView: View {
                     rebuildPinModels()
                 })
             .presentationDetents([.large])
+            .presentationBackground(Color.ink)
+        }
+        .sheet(isPresented: $countryPickerOpen) {
+            CountryPickerSheet(venues: venues) { stat in
+                countryPickerOpen = false
+                Task {
+                    await venues.switchCountry(stat.country)
+                    fly(to: stat)
+                }
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
             .presentationBackground(Color.ink)
         }
         .sheet(isPresented: $sunListOpen) {
@@ -1883,7 +2017,7 @@ private struct OffersMapView: View {
                 onPick: { venue in
                     sun.pinned = venue
                     selectedSunId = venue.id
-                    sunFocus = venue.coordinate
+                    sunFocusZoom = nil; sunFocus = venue.coordinate
                 },
                 onPickWorldwide: { result in
                     Task {
@@ -1892,7 +2026,7 @@ private struct OffersMapView: View {
                         if let sv = await sun.prepareAndPin(venueId: venue.id,
                                                            zone: result.mapItem?.timeZone) {
                             selectedSunId = sv.id
-                            sunFocus = sv.coordinate
+                            sunFocusZoom = nil; sunFocus = sv.coordinate
                         }
                     }
                 })
@@ -1949,6 +2083,7 @@ private struct OffersMapView: View {
                 if let onClose { circleButton("xmark", action: onClose) }
             }
             modeToggle
+            HStack { countryPill; Spacer() }
             if mapMode == .prices { servingFilter }
         }
         .padding(.horizontal, 16)
@@ -1956,13 +2091,24 @@ private struct OffersMapView: View {
     }
 
     /// Serving-size filter for the price map.
+    /// Chips shown: sizes with data in view, or every size while the map is
+    /// still empty (a blank filter row reads as broken). The selected chip
+    /// always stays visible so the filter can't hide its own state.
+    private var visibleServings: [BeerServing] {
+        guard !availableServings.isEmpty else { return BeerServing.allCases }
+        return BeerServing.allCases.filter {
+            availableServings.contains($0) || $0 == selectedServing
+        }
+    }
+
     private var servingFilter: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(BeerServing.allCases) { s in
+                ForEach(visibleServings) { s in
                     let on = selectedServing == s
                     Button {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { selectedServing = s }
+                        servingPicked = true
                     } label: {
                         Text(s.label)
                             .font(.system(size: 11, weight: .black, design: .rounded))
@@ -2109,6 +2255,7 @@ private struct OffersMapView: View {
             // The lighting reference: whatever you're looking at.
             centre: sunReference.coord,
             focus: sunFocus,
+            focusZoom: sunFocusZoom,
             pagingLocked: $pagingLocked,
             locateTick: locateTick,
             // Parked behind the MapKit map in the other modes and whenever
@@ -2210,6 +2357,80 @@ private struct OffersMapView: View {
     }
 
     /// Centre on the user, at the same scale on every map.
+    /// The size people actually order differs by region — a 16 oz pour over
+    /// the US and Canada, a 40 cl stor stark elsewhere. Until the user picks a
+    /// size themselves, the default follows what the map is looking at.
+    /// Probes are gated to ~2 degrees of movement so panning around a city
+    /// never triggers a geocode.
+    private func adaptServingToRegion(_ center: CLLocationCoordinate2D) {
+        guard !servingPicked else { return }
+        if let last = lastServingProbe,
+           abs(last.latitude - center.latitude) < 2,
+           abs(last.longitude - center.longitude) < 2 { return }
+        lastServingProbe = center
+        Task {
+            guard let iso = await BeerCurrency.isoNear(center) else { return }
+            var regional: BeerServing = (iso == "US" || iso == "CA") ? .oz16 : .canonical
+            // Prefer a size that actually has bars here: the regional guess is
+            // a default, not a decree.
+            if !availableServings.isEmpty, !availableServings.contains(regional) {
+                regional = availableServings.max(by: { a, b in
+                    venues.venuesWithBeerPrice(serving: a).count
+                        < venues.venuesWithBeerPrice(serving: b).count
+                }) ?? regional
+            }
+            guard !servingPicked, selectedServing != regional else { return }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                selectedServing = regional
+            }
+            rebuildPinModels()
+        }
+    }
+
+    /// Compact "which country am I browsing" pill — flag + name, opens the
+    /// country browser.
+    private var countryPill: some View {
+        Button { countryPickerOpen = true } label: {
+            HStack(spacing: 6) {
+                Text(countryFlagEmoji(venues.activeCountry))
+                    .font(.system(size: 12))
+                Text(Locale.current.localizedString(forRegionCode: venues.activeCountry)
+                     ?? venues.activeCountry)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .black))
+                    .opacity(0.6)
+            }
+            .foregroundStyle(Color.cream.opacity(0.85))
+            .padding(.horizontal, 11).padding(.vertical, 6)
+            .background(Capsule().fill(Color.ink.opacity(0.8)))
+            .overlay(Capsule().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
+        .accessibilityLabel("Change country")
+    }
+
+    /// Frame a whole country from its data bounds, with air around the edges.
+    private func fly(to stat: VenueService.CountryStat) {
+        let latPad = max(0.4, (stat.maxLat - stat.minLat) * 0.2)
+        let lonPad = max(0.4, (stat.maxLon - stat.minLon) * 0.2)
+        let center = CLLocationCoordinate2D(
+            latitude: (stat.minLat + stat.maxLat) / 2,
+            longitude: (stat.minLon + stat.maxLon) / 2)
+        withAnimation(MapLocate.animation) {
+            camera = .region(MKCoordinateRegion(
+                center: center,
+                span: MKCoordinateSpan(
+                    latitudeDelta: (stat.maxLat - stat.minLat) + latPad * 2,
+                    longitudeDelta: (stat.maxLon - stat.minLon) + lonPad * 2)))
+        }
+        // The sun map frames the WHOLE country too: zoom derived from the
+        // data's longitudinal spread (log2(360/span)), clamped city↔globe.
+        let lonSpan = (stat.maxLon - stat.minLon) + lonPad * 2
+        sunFocusZoom = max(3.2, min(8.5, log2(360.0 / max(lonSpan, 0.05)) - 0.6))
+        sunFocus = center
+    }
+
     private func locateMe() {
         guard let loc = location.location else { return }
         if mapMode == .sun {
@@ -4211,5 +4432,115 @@ private struct ModePin: View {
         case .sun:
             EmptyView()
         }
+    }
+}
+
+
+/// Regional-indicator flag for an ISO-3166 alpha-2 code ("SE" → 🇸🇪).
+func countryFlagEmoji(_ iso: String) -> String {
+    iso.uppercased().unicodeScalars.reduce(into: "") { out, u in
+        if let scalar = Unicode.Scalar(127397 + u.value) {
+            out.unicodeScalars.append(scalar)
+        }
+    }
+}
+
+// MARK: - Country browser
+
+/// Every country the catalog holds, with what's there — beer prices and
+/// terraces — so "is my city on this yet?" has an answer before you fly.
+struct CountryPickerSheet: View {
+    @ObservedObject var venues: VenueService
+    let onPick: (VenueService.CountryStat) -> Void
+
+    @State private var stats: [VenueService.CountryStat] = []
+    @State private var loading = true
+    @State private var query = ""
+
+    private var rows: [VenueService.CountryStat] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return stats }
+        return stats.filter {
+            $0.country.lowercased().contains(q)
+                || (Locale.current.localizedString(forRegionCode: $0.country) ?? "")
+                    .lowercased().contains(q)
+        }
+    }
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("PICK A COUNTRY")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(2.4).foregroundStyle(Color.bronze)
+                    .padding(.top, 20)
+                Text("The maps load one country at a time — lighter on your phone, faster to draw.")
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.5))
+
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.cream.opacity(0.4))
+                    TextField("", text: $query,
+                              prompt: Text("Search countries")
+                                  .foregroundStyle(Color.cream.opacity(0.4)))
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .autocorrectionDisabled()
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.cream.opacity(0.05)))
+
+                if loading {
+                    HStack { Spacer(); ProgressView().tint(Color.bronze); Spacer() }
+                        .padding(.top, 30)
+                } else {
+                    ForEach(rows) { stat in
+                        Button { onPick(stat) } label: { row(stat) }
+                            .buttonStyle(PressScaleStyle())
+                    }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 40)
+        }
+        .background(Color.ink)
+        .task {
+            stats = await venues.loadCountryIndex()
+            loading = false
+        }
+    }
+
+    private func row(_ stat: VenueService.CountryStat) -> some View {
+        let active = stat.country == venues.activeCountry
+        return HStack(spacing: 12) {
+            Text(countryFlagEmoji(stat.country)).font(.system(size: 26))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(Locale.current.localizedString(forRegionCode: stat.country) ?? stat.country)
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                Text("\(stat.venues) bars · \(stat.priced) with prices · \(stat.outdoor) terraces")
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.55))
+            }
+            Spacer()
+            if active {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color.whiskey)
+            } else {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.cream.opacity(0.3))
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(Color.cream.opacity(active ? 0.07 : 0.035)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .strokeBorder(active ? Color.whiskey.opacity(0.5) : Color.cream.opacity(0.08),
+                          lineWidth: 1))
     }
 }

@@ -23,6 +23,8 @@ struct SunMapboxView: View, Equatable {
     let centre: CLLocationCoordinate2D
     /// Set by search to fly the camera onto one venue.
     var focus: CLLocationCoordinate2D?
+    /// Zoom for the next focus fly. nil = the close-in default.
+    var focusZoom: Double? = nil
     /// Raised while the user is touching the map, so the tab pager doesn't
     /// steal the horizontal part of a pinch.
     @Binding var pagingLocked: Bool
@@ -45,6 +47,7 @@ struct SunMapboxView: View, Equatable {
     init(readings: [SunReading], previewAt: Date,
          selectedId: Binding<UUID?>, centre: CLLocationCoordinate2D,
          focus: CLLocationCoordinate2D? = nil,
+         focusZoom: Double? = nil,
          pagingLocked: Binding<Bool> = .constant(false),
          locateTick: Int = 0,
          rendering: Bool = true,
@@ -55,6 +58,7 @@ struct SunMapboxView: View, Equatable {
         self._selectedId = selectedId
         self.centre = centre
         self.focus = focus
+        self.focusZoom = focusZoom
         self._pagingLocked = pagingLocked
         self.locateTick = locateTick
         self.rendering = rendering
@@ -161,8 +165,12 @@ struct SunMapboxView: View, Equatable {
 
     private func flyToFocus() {
         guard let f = focus else { return }
+        // A whole-country fly flattens the pitch — extruded buildings mean
+        // nothing at zoom 4, and the tilt just hides the far half.
+        let zoom = focusZoom ?? 16.6
         withViewportAnimation(.easeOut(duration: 0.9)) {
-            viewport = .camera(center: f, zoom: 16.6, bearing: 0, pitch: 55)
+            viewport = .camera(center: f, zoom: zoom, bearing: 0,
+                               pitch: zoom < 10 ? 0 : 55)
         }
     }
 

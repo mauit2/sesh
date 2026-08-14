@@ -605,6 +605,9 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
     /// Tri-state on purpose: true shows the "outdoor seating" note, false AND
     /// nil both show nothing — an absent note must never read as "no terrace".
     var outdoorSeating: Bool? = nil
+    /// ISO-3166 alpha-2 home of the bar (migration 101). The catalog loads
+    /// one country at a time, keyed on this.
+    var country: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, name, address, city, lat, lon
@@ -617,6 +620,7 @@ struct Venue: Codable, Identifiable, Equatable, Hashable {
         case createdAt  = "created_at"
         case updatedAt  = "updated_at"
         case outdoorSeating = "outdoor_seating"
+        case country
     }
 
     init(
@@ -856,7 +860,7 @@ struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
 /// A standard beer serving size (migration 063). Colour anchors scale with the
 /// serving so a cheap 25cl and a cheap pint both read green.
 enum BeerServing: String, CaseIterable, Identifiable {
-    case s25 = "25", s33 = "33", s40 = "40", s50 = "50", pint = "pint"
+    case s25 = "25", s33 = "33", s40 = "40", oz16 = "47.3", s50 = "50", pint = "pint"
     var id: String { rawValue }
     static let canonical = BeerServing.s40   // "stor stark" — the map default
 
@@ -866,18 +870,26 @@ enum BeerServing: String, CaseIterable, Identifiable {
         case .s25: return "25 cl"
         case .s33: return "33 cl"
         case .s40: return "40 cl"
+        case .oz16: return "16 oz"
         case .s50: return "50 cl"
         case .pint: return "Pint"
         }
     }
     /// Longer descriptor for the detail card.
-    var longLabel: String { self == .s40 ? "40 cl · stor stark" : label }
+    var longLabel: String {
+        switch self {
+        case .s40: return "40 cl · stor stark"
+        case .oz16: return "16 oz · US pint"
+        default: return label
+        }
+    }
     /// Representative centilitres — sorts sizes and scales the colour anchors.
     var cl: Double {
         switch self {
         case .s25: return 25
         case .s33: return 33
         case .s40: return 40
+        case .oz16: return 47.3
         case .s50: return 50
         case .pint: return 57
         }
@@ -949,6 +961,11 @@ struct VenueBeerPrice: Codable, Identifiable {
     }
 
     var servingSize: BeerServing { BeerServing(rawValue: serving) ?? .s40 }
+    /// Serving text that never lies: an imported price with no stated size
+    /// says so instead of masquerading as 40 cl.
+    var servingLabel: String {
+        serving == "unknown" ? "Size not stated" : servingSize.label
+    }
     /// "65 kr" / "¥600" — the map-pin label in the price's own currency.
     var priceLabel: String { BeerCurrency.format(price, currency) }
     /// "1 report" / "12 reports" trust line.
