@@ -136,12 +136,19 @@
   @media (prefers-contrast: more){
     :root{--line:rgba(243,233,216,.4);--cream-dim:#e6dcc8;--bronze:#cdb896;}
   }
+
+  /* sejdel dimples — the mug's glass as a living background */
+  .dimples{position:fixed;inset:-160px;pointer-events:none;z-index:0;opacity:.06;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='92' height='104'%3E%3Cdefs%3E%3CradialGradient id='g' cx='40%' cy='35%' r='75%'%3E%3Cstop offset='0%' stop-color='%23e8843c' stop-opacity='.5'/%3E%3Cstop offset='100%' stop-color='%23e8843c' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg stroke-linecap='round' fill='none'%3E%3Ccircle cx='23' cy='26' r='19' fill='url(%23g)'/%3E%3Cpath d='M5.3 22.9A18 18 0 0 1 36.8 14.4' stroke='%23f3e9d8' stroke-opacity='.5' stroke-width='1.6'/%3E%3Cpath d='M40.7 29.1A18 18 0 0 1 6.1 32.2' stroke='%230a0603' stroke-opacity='.7' stroke-width='2.2'/%3E%3Ccircle cx='69' cy='78' r='19' fill='url(%23g)'/%3E%3Cpath d='M51.3 74.9A18 18 0 0 1 82.8 66.4' stroke='%23f3e9d8' stroke-opacity='.5' stroke-width='1.6'/%3E%3Cpath d='M86.7 81.1A18 18 0 0 1 52.1 84.2' stroke='%230a0603' stroke-opacity='.7' stroke-width='2.2'/%3E%3C/g%3E%3C/svg%3E");
+    background-size:92px 104px;animation:dimpledrift 46s linear infinite;will-change:transform;}
+  @keyframes dimpledrift{from{transform:translate3d(0,0,0)}to{transform:translate3d(-92px,-104px,0)}}
+  @media (prefers-reduced-motion: reduce){.dimples{animation:none}}
 </style>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","headline":"Billigaste ölen i Malmö","description":"Ölpriser i Malmö","dateModified":"2026-08-14","inLanguage":"sv-SE","mainEntityOfPage":{"@type":"WebPage","@id":"https://sejdel.com/blogg/billig-ol-malmo/"},"publisher":{"@type":"Organization","name":"Sejdel","url":"https://sejdel.com"},"about":{"@type":"Place","name":"Malmö"}}</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Var är ölen billigast i Malmö?","acceptedAnswer":{"@type":"Answer","text":"Surf Shack har det lägsta priset vi har inrapporterat, 39 kr för 40 cl. Räknat per centiliter är Surf Shack bäst på 0.97 kr/cl."}},{"@type":"Question","name":"Vad kostar en stor stark i Malmö?","acceptedAnswer":{"@type":"Answer","text":"Medianen för 40 cl ligger på 78 kr. Billigast vi sett är 39 kr."}},{"@type":"Question","name":"Vad är literpriset på öl i Malmö?","acceptedAnswer":{"@type":"Answer","text":"Medianen motsvarar 150 kr per liter, alltså 1.50 kr/cl. Bästa literpriset i stan är 98 kr/l."}},{"@type":"Question","name":"Varför jämför ni per centiliter?","acceptedAnswer":{"@type":"Answer","text":"Eftersom glasstorlekarna skiljer sig. En 33 cl för 49 kr är dyrare per öl än en 50 cl för 65 kr, även om siffran på menyn är lägre. Per centiliter blir jämförelsen rättvis."}},{"@type":"Question","name":"Hur ofta uppdateras priserna?","acceptedAnswer":{"@type":"Answer","text":"Sidan byggs om från de senaste rapporterna — den här versionen är från 14 augusti 2026. Vi visar medianen av de senaste rapporterna per bar och storlek, inte det senaste priset."}},{"@type":"Question","name":"Kan jag rapportera ett pris själv?","acceptedAnswer":{"@type":"Answer","text":"Ja. Sök upp baren på ölkartan och lägg in priset, eller gör det i Sejdel-appen. Det syns på kartan direkt och på den här sidan nästa gång den byggs."}}]}</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Sejdel","item":"https://sejdel.com/"},{"@type":"ListItem","position":2,"name":"Ölpriser","item":"https://sejdel.com/blogg/"},{"@type":"ListItem","position":3,"name":"Malmö"}]}</script>
 </head>
-<body>
+<body><div class="dimples" aria-hidden="true"></div>
 <div class="wrap">
   <header class="top">
     <a class="brand" href="https://sejdel.com/">Sejdel<span>.</span></a>

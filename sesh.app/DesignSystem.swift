@@ -152,3 +152,63 @@ extension Color {
     static let foam    = Color(red: 0.975, green: 0.915, blue: 0.810)
 }
 
+
+// MARK: - Sejdel dimples
+
+/// The dimpled glass of a sejdel as a living surface: a staggered grid of
+/// glassy dents drifting slowly diagonally, like holding the mug up to the
+/// light and turning it. Sits UNDER content at very low opacity — texture,
+/// not decoration. Freezes (offset zero) when Reduce Motion is on.
+struct DimpleDriftBackground: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Overall strength of the texture. 0.10 reads on ink; lower for busy screens.
+    var strength: Double = 0.10
+    /// Drift speed in points/second. Keep gentle — this is ambience.
+    var speed: Double = 5
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
+            Canvas { ctx, size in
+                let tileW: CGFloat = 92          // horizontal dimple pitch
+                let tileH: CGFloat = 52          // row pitch (staggered)
+                let r: CGFloat = 19
+                let t = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate
+                let dx = CGFloat((t * speed).truncatingRemainder(dividingBy: Double(tileW)))
+                let dy = CGFloat((t * speed * 1.13).truncatingRemainder(dividingBy: Double(tileH * 2)))
+
+                var row = 0
+                var y = -tileH * 2 + dy
+                while y < size.height + tileH {
+                    let stagger = row.isMultiple(of: 2) ? 0 : tileW / 2
+                    var x = -tileW + stagger + dx
+                    while x < size.width + tileW {
+                        let c = CGPoint(x: x, y: y)
+                        // Glass dent: faint amber body, bright crescent where
+                        // light enters (top-left), dark crescent opposite.
+                        let body = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+                        ctx.fill(body, with: .radialGradient(
+                            Gradient(colors: [Color.whiskey.opacity(0.28), Color.whiskey.opacity(0.02)]),
+                            center: CGPoint(x: c.x - r * 0.25, y: c.y - r * 0.3),
+                            startRadius: 0, endRadius: r * 1.15))
+                        var lit = Path()
+                        lit.addArc(center: c, radius: r - 1,
+                                   startAngle: .degrees(120), endAngle: .degrees(255), clockwise: false)
+                        ctx.stroke(lit, with: .color(Color.foam.opacity(0.5)),
+                                   style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+                        var shade = Path()
+                        shade.addArc(center: c, radius: r - 0.5,
+                                     startAngle: .degrees(300), endAngle: .degrees(75), clockwise: false)
+                        ctx.stroke(shade, with: .color(Color.stout.opacity(0.8)),
+                                   style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                        x += tileW
+                    }
+                    row += 1
+                    y += tileH
+                }
+            }
+            .opacity(strength)
+        }
+        .allowsHitTesting(false)
+        .ignoresSafeArea()
+    }
+}

@@ -436,6 +436,7 @@ struct LoadingView: View {
     var body: some View {
         ZStack {
             AtmosphereBackground(accent: .whiskey)
+            DimpleDriftBackground(strength: 0.12)
             VStack(spacing: 14) {
                 Circle()
                     .fill(Color.whiskey)
