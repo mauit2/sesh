@@ -1,4 +1,4 @@
-/* seshapp.xyz — the pint.
+/* sejdel.com — the pint.
  *
  * One fixed canvas behind the page. The beer level tracks scroll (a sip at the
  * top, brim-full at the bottom). Realism comes from four layered motions:

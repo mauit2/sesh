@@ -8,8 +8,8 @@
 <meta name="color-scheme" content="light dark" />
 <meta name="theme-color" content="#0b0a08" />
 <link rel="icon" href="data:," />
-<title>Sesh — beer prices & deals map</title>
-<meta name="description" content="See what beer costs at bars around the world, and tonight's deals near you. Crowdsourced on Sesh." />
+<title>Sejdel — beer prices & deals map</title>
+<meta name="description" content="See what beer costs at bars around the world, and tonight's deals near you. Crowdsourced on Sejdel." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600..900&display=swap" rel="stylesheet" />
@@ -218,7 +218,7 @@
 <div id="map"></div>
 
 <header class="bar">
-  <a class="brand" href="/">Sesh<span>.</span></a>
+  <a class="brand" href="/">Sejdel<span>.</span></a>
   <span class="count" id="count">loading…</span>
   <div class="spacer"></div>
   <a class="icon-btn" href="/blog/" style="text-decoration:none">📰 Beer blog</a>
@@ -278,7 +278,7 @@
     <input id="oSearch" placeholder="Bar name…" autocomplete="off" />
     <div class="results" id="oResults"></div>
     <div class="err" id="oErr"></div>
-    <p class="lead" id="oFoot">Which way the seats face is set in the Sesh app — it redoes the sun for that bar from the real building heights.</p>
+    <p class="lead" id="oFoot">Which way the seats face is set in the Sejdel app — it redoes the sun for that bar from the real building heights.</p>
     <button class="cancel" id="oCancel">Close</button>
   </div>
 </div>
@@ -499,7 +499,7 @@
 
   function boot(){
     countEl=$("count");msgEl=$("msg");
-    if (qCity) document.title = "Beer prices in " + qCity + " – Sesh";
+    if (qCity) document.title = "Beer prices in " + qCity + " – Sejdel";
     map=new mapkit.Map("map",{colorScheme:mapkit.Map.ColorSchemes.Dark,showsCompass:mapkit.FeatureVisibility.Hidden,
       showsScale:mapkit.FeatureVisibility.Hidden,showsZoomControl:true,showsMapTypeControl:false,isRotationEnabled:false,
       center:new mapkit.Coordinate(qLat||57.70,qLon||11.96),cameraDistance:qLat?4200:9000});

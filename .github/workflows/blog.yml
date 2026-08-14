@@ -36,7 +36,7 @@ jobs:
             echo "No price movement since the last build — nothing to commit."
             exit 0
           fi
-          git config user.name "sesh-blog-bot"
+          git config user.name "sejdel-blog-bot"
           git config user.email "actions@users.noreply.github.com"
           git add docs/
           git commit -m "Blog: daily rebuild from live prices"

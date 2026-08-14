@@ -19,7 +19,7 @@ const SB = "https://lltuozmbxacxiepardys.supabase.co/rest/v1";
 const KEY = process.env.SUPA_ANON;
 if (!KEY) { console.error("SUPA_ANON not set"); process.exit(1); }
 const ROOT = join(dirname(new URL(import.meta.url).pathname), "..", "docs");
-const SITE = "https://seshapp.xyz";
+const SITE = "https://sejdel.com";
 
 // Minimum priced bars before a city gets its own page. Below this the table is
 // too short to be worth a reader's click, and thin pages drag a whole site down.
@@ -214,7 +214,7 @@ function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body
 <meta property="og:title" content="${esc(title)}" />
 <meta property="og:description" content="${esc(desc)}" />
 <meta property="og:url" content="${canonical}" />
-<meta property="og:site_name" content="Sesh" />
+<meta property="og:site_name" content="Sejdel" />
 <meta name="twitter:card" content="summary" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23140f0b'/%3E%3Cpath d='M9 11h14v13a3 3 0 0 1-3 3h-8a3 3 0 0 1-3-3z' fill='%23e8843c'/%3E%3Crect x='9' y='9' width='14' height='4' rx='2' fill='%23f3e9d8'/%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -340,7 +340,7 @@ ${jsonld ? (Array.isArray(jsonld) ? jsonld : [jsonld])
 <body>
 <div class="wrap">
   <header class="top">
-    <a class="brand" href="${SITE}/">Sesh<span>.</span></a>
+    <a class="brand" href="${SITE}/">Sejdel<span>.</span></a>
     <nav>
       <a href="${SITE}/map/">${lang === "sv" ? "Kartan" : "Map"}</a>
       <a href="${lang === "sv" ? SITE + "/blogg/" : SITE + "/blog/"}">${lang === "sv" ? "Blogg" : "Blog"}</a>
@@ -353,10 +353,10 @@ ${switcher || ""}
 ${body}
   <footer>
     ${lang === "sv"
-      ? `Sidan är avsedd för dig som är över 18 år. Priserna är inrapporterade av användare och visas som medianen av de senaste rapporterna per bar och storlek. Sesh ger ingen garanti för att ett pris gäller när du kommer dit — <a href="${SITE}/map/">rapportera gärna en ändring</a>. Drick måttfullt.`
-      : `This page is intended for readers of legal drinking age. Prices are reported by users and shown as the median of recent reports per bar and size. Sesh cannot guarantee a price still stands when you arrive — <a href="${SITE}/map/">report a change</a> if it has moved. Please drink responsibly.`}
+      ? `Sidan är avsedd för dig som är över 18 år. Priserna är inrapporterade av användare och visas som medianen av de senaste rapporterna per bar och storlek. Sejdel ger ingen garanti för att ett pris gäller när du kommer dit — <a href="${SITE}/map/">rapportera gärna en ändring</a>. Drick måttfullt.`
+      : `This page is intended for readers of legal drinking age. Prices are reported by users and shown as the median of recent reports per bar and size. Sejdel cannot guarantee a price still stands when you arrive — <a href="${SITE}/map/">report a change</a> if it has moved. Please drink responsibly.`}
     <br /><br />
-    <a href="${SITE}/">Sesh</a> · <a href="${SITE}/map/">${lang === "sv" ? "Ölkartan" : "Beer map"}</a>
+    <a href="${SITE}/">Sejdel</a> · <a href="${SITE}/map/">${lang === "sv" ? "Ölkartan" : "Beer map"}</a>
     · <a href="${SITE}/privacy/">${lang === "sv" ? "Integritet" : "Privacy"}</a>
   </footer>
 </div>
@@ -458,7 +458,7 @@ function faq(lang, c) {
     ["Hur ofta uppdateras priserna?",
      `Sidan byggs om från de senaste rapporterna — den här versionen är från ${updatedSv}. Vi visar medianen av de senaste rapporterna per bar och storlek, inte det senaste priset.`],
     ["Kan jag rapportera ett pris själv?",
-     "Ja. Sök upp baren på ölkartan och lägg in priset, eller gör det i Sesh-appen. Det syns på kartan direkt och på den här sidan nästa gång den byggs."],
+     "Ja. Sök upp baren på ölkartan och lägg in priset, eller gör det i Sejdel-appen. Det syns på kartan direkt och på den här sidan nästa gång den byggs."],
   ] : [
     [`Where is beer cheapest in ${nm}?`,
      `${esc(cheapestBar.venue)} has the lowest price reported to us, ${kr(cheapestBar.price)} for ${SERVING_LABEL[cheapestBar.serving]}. Per centilitre, ${esc(bestValue.venue)} is best value at ${perCl(bestValue.price / bestValue.cl)}.`],
@@ -471,7 +471,7 @@ function faq(lang, c) {
     ["How often are prices updated?",
      `The page is rebuilt from the latest reports — this version is from ${updatedEn}. We show the median of recent reports per bar and size rather than the most recent price.`],
     ["Can I report a price myself?",
-     "Yes. Find the bar on the beer map and add the price, or do it in the Sesh app. It shows on the map immediately and on this page the next time it is built."],
+     "Yes. Find the bar on the beer map and add the price, or do it in the Sejdel app. It shows on the map immediately and on this page the next time it is built."],
   ];
   const html = `<h2>${lang === "sv" ? "Vanliga frågor" : "Frequently asked questions"}</h2>`
     + qs.map(([q, a]) => `<h3>${esc(q)}</h3>\n  <p>${a}</p>`).join("\n  ");
@@ -489,11 +489,11 @@ function crumbs(lang, leaf) {
   const hub = lang === "sv" ? `${SITE}/blogg/` : `${SITE}/blog/`;
   const hubName = lang === "sv" ? "Ölpriser" : "Beer prices";
   return {
-    html: `<p class="crumbs"><a href="${SITE}/">Sesh</a> › <a href="${hub}">${hubName}</a> › <span>${esc(leaf)}</span></p>`,
+    html: `<p class="crumbs"><a href="${SITE}/">Sejdel</a> › <a href="${hub}">${hubName}</a> › <span>${esc(leaf)}</span></p>`,
     ld: {
       "@context": "https://schema.org", "@type": "BreadcrumbList",
       itemListElement: [
-        { "@type": "ListItem", position: 1, name: "Sesh", item: `${SITE}/` },
+        { "@type": "ListItem", position: 1, name: "Sejdel", item: `${SITE}/` },
         { "@type": "ListItem", position: 2, name: hubName, item: hub },
         { "@type": "ListItem", position: 3, name: leaf },
       ],
@@ -563,7 +563,7 @@ for (const c of cities) {
     dateModified: updated,
     inLanguage: url === svUrl ? "sv-SE" : "en",
     mainEntityOfPage: { "@type": "WebPage", "@id": url },
-    publisher: { "@type": "Organization", name: "Sesh", url: SITE },
+    publisher: { "@type": "Organization", name: "Sejdel", url: SITE },
     about: { "@type": "Place", name: url === svUrl ? c.city : en },
   });
 
@@ -604,7 +604,7 @@ for (const c of cities) {
   ${faq("sv", c).html}
 
   <h2>Så räknar vi</h2>
-  <p>Priserna kommer från användare i Sesh-appen och på ölkartan. För varje bar och storlek visar vi <em>medianen</em> av de senaste rapporterna, inte det senaste priset — ett enstaka felinmatat pris ska inte kunna styra listan. Bara priser i kronor och i storlekar vi kan räkna om per centiliter räknas med. Pint tolkas som 56,8 cl.</p>
+  <p>Priserna kommer från användare i Sejdel-appen och på ölkartan. För varje bar och storlek visar vi <em>medianen</em> av de senaste rapporterna, inte det senaste priset — ett enstaka felinmatat pris ska inte kunna styra listan. Bara priser i kronor och i storlekar vi kan räkna om per centiliter räknas med. Pint tolkas som 56,8 cl.</p>
   <p>Priser ändras och happy hour räknas inte in. Ser du ett pris som inte stämmer kan du <a href="${SITE}/map/">rapportera det på kartan</a> — det uppdaterar den här sidan nästa gång den byggs.</p>
 
   <h2>Mer om ölen i ${c.city}</h2>
@@ -650,7 +650,7 @@ for (const c of cities) {
   ${faq("en", c).html}
 
   <h2>How we work it out</h2>
-  <p>Prices come from Sesh users in the app and on the beer map. For each bar and size we show the <em>median</em> of recent reports rather than the latest one, so a single mistyped price cannot swing a table. Only prices in kronor, in sizes we can convert per centilitre, are included; a pint is treated as 56.8 cl.</p>
+  <p>Prices come from Sejdel users in the app and on the beer map. For each bar and size we show the <em>median</em> of recent reports rather than the latest one, so a single mistyped price cannot swing a table. Only prices in kronor, in sizes we can convert per centilitre, are included; a pint is treated as 56.8 cl.</p>
   <p>Prices change, and happy hour is not counted. If something looks wrong you can <a href="${SITE}/map/">report it on the map</a>, which updates this page the next time it is built.</p>
 
   <h2>More on beer in ${en}</h2>
@@ -694,7 +694,7 @@ write("blogg/billig-ol-sverige", page({
     "@context": "https://schema.org", "@type": "Article",
     headline: "Billigaste ölen i Sverige", dateModified: updated, inLanguage: "sv-SE",
     mainEntityOfPage: { "@type": "WebPage", "@id": svNatUrl },
-    publisher: { "@type": "Organization", name: "Sesh", url: SITE },
+    publisher: { "@type": "Organization", name: "Sejdel", url: SITE },
   },
   body: `
   <p class="lede">Inrapporterade ölpriser från <strong>${national.bars} barer</strong> i ${cities.length} svenska städer, jämförda på det enda sätt som är rättvist: kronor per centiliter.</p>
@@ -717,7 +717,7 @@ write("blogg/billig-ol-sverige", page({
   <p>Medianen i vårt underlag är ${perCl(national.medianRate)}, alltså runt ${kr(national.medianRate * 40)} för en stor stark på 40 cl. Spannet är stort: från ${perCl(national.bestRate)} till ${perCl(national.worstRate)}, en skillnad på ${(national.worstRate / national.bestRate).toFixed(1)} gånger mellan billigaste och dyraste ölen i landet.</p>
 
   <h2>Så räknar vi</h2>
-  <p>Priserna rapporteras av användare i Sesh. Per bar och storlek visas medianen av de senaste rapporterna. Bara priser i kronor räknas med, och pint tolkas som 56,8 cl. Städer med färre än ${MIN_BARS} barer får ingen egen sida — underlaget blir för tunt för att vara användbart.</p>
+  <p>Priserna rapporteras av användare i Sejdel. Per bar och storlek visas medianen av de senaste rapporterna. Bara priser i kronor räknas med, och pint tolkas som 56,8 cl. Städer med färre än ${MIN_BARS} barer får ingen egen sida — underlaget blir för tunt för att vara användbart.</p>
 
   <h2>Städer</h2>
   ${cityLinks("sv", null)}
@@ -734,7 +734,7 @@ write("blog/beer-prices-sweden", page({
     "@context": "https://schema.org", "@type": "Article",
     headline: "Beer prices in Sweden", dateModified: updated, inLanguage: "en",
     mainEntityOfPage: { "@type": "WebPage", "@id": enNatUrl },
-    publisher: { "@type": "Organization", name: "Sesh", url: SITE },
+    publisher: { "@type": "Organization", name: "Sejdel", url: SITE },
   },
   body: `
   <p class="lede">User-reported beer prices from <strong>${national.bars} bars</strong> across ${cities.length} Swedish cities, compared the only way that is fair: kronor per centilitre.</p>
@@ -757,7 +757,7 @@ write("blog/beer-prices-sweden", page({
   <p>The median across our data is ${perCl(national.medianRate)} — about ${kr(national.medianRate * 40)} for a 40 cl "stor stark", the standard large draught. The range is wide: ${perCl(national.bestRate)} to ${perCl(national.worstRate)}, a ${(national.worstRate / national.bestRate).toFixed(1)}× difference between the cheapest and the most expensive beer in the country.</p>
 
   <h2>How we work it out</h2>
-  <p>Prices are reported by Sesh users. For each bar and size we show the median of recent reports. Only prices in kronor are included, and a pint is treated as 56.8 cl. Cities with fewer than ${MIN_BARS} bars do not get their own page — the sample is too thin to be useful.</p>
+  <p>Prices are reported by Sejdel users. For each bar and size we show the median of recent reports. Only prices in kronor are included, and a pint is treated as 56.8 cl. Cities with fewer than ${MIN_BARS} bars do not get their own page — the sample is too thin to be useful.</p>
 
   <h2>Cities</h2>
   ${cityLinks("en", null)}
@@ -800,7 +800,7 @@ for (const c of cities) {
       { "@context": "https://schema.org", "@type": "Article", headline,
         dateModified: updated, inLanguage: lang === "sv" ? "sv-SE" : "en",
         mainEntityOfPage: { "@type": "WebPage", "@id": url },
-        publisher: { "@type": "Organization", name: "Sesh", url: SITE } },
+        publisher: { "@type": "Organization", name: "Sejdel", url: SITE } },
       { "@context": "https://schema.org", "@type": "ItemList",
         name: headline, numberOfItems: hits.length,
         itemListElement: hits.slice(0, 20).map((r, i) => ({
@@ -985,7 +985,7 @@ for (const [city, list] of hhCities) {
     { "@context": "https://schema.org", "@type": "Article", headline,
       dateModified: updated, inLanguage: lang === "sv" ? "sv-SE" : "en",
       mainEntityOfPage: { "@type": "WebPage", "@id": url },
-      publisher: { "@type": "Organization", name: "Sesh", url: SITE } },
+      publisher: { "@type": "Organization", name: "Sejdel", url: SITE } },
     { "@context": "https://schema.org", "@type": "ItemList", name: headline,
       numberOfItems: list.length,
       itemListElement: list.slice(0, 20).map((r, i) => ({
@@ -1084,7 +1084,7 @@ for (const [city, list] of hhCities) {
     jsonld: [{ "@context": "https://schema.org", "@type": "Article",
       headline: "Happy hour i Sverige", dateModified: updated, inLanguage: "sv-SE",
       mainEntityOfPage: { "@type": "WebPage", "@id": svU },
-      publisher: { "@type": "Organization", name: "Sesh", url: SITE } },
+      publisher: { "@type": "Organization", name: "Sejdel", url: SITE } },
       svFaq.ld, crumbs("sv", "Happy hour i Sverige").ld],
     body: `
   <p class="lede">Vi har happy hour-priser från <strong>${happy.length} krogar</strong> i ${nCities} städer. Billigast i landet är ${esc(lo.venue)} i ${esc(lo.city)}: ${kr(lo.price)} för ${SERVING_LABEL[lo.serving]}, ${perCl(lo.price / lo.cl)}.</p>
@@ -1117,7 +1117,7 @@ for (const [city, list] of hhCities) {
     jsonld: [{ "@context": "https://schema.org", "@type": "Article",
       headline: "Happy hour in Sweden", dateModified: updated, inLanguage: "en",
       mainEntityOfPage: { "@type": "WebPage", "@id": enU },
-      publisher: { "@type": "Organization", name: "Sesh", url: SITE } },
+      publisher: { "@type": "Organization", name: "Sejdel", url: SITE } },
       enFaq.ld, crumbs("en", "Happy hour in Sweden").ld],
     body: `
   <p class="lede">We hold happy hour prices from <strong>${happy.length} bars</strong> across ${nCities} cities. The cheapest in the country is ${esc(lo.venue)} in ${esc(lo.city)}: ${kr(lo.price)} for ${SERVING_LABEL[lo.serving]}, ${perCl(lo.price / lo.cl)}.</p>
@@ -1172,7 +1172,7 @@ for (const [c, hits] of outCities) {
     { "@context": "https://schema.org", "@type": "Article", headline,
       dateModified: updated, inLanguage: lang === "sv" ? "sv-SE" : "en",
       mainEntityOfPage: { "@type": "WebPage", "@id": url },
-      publisher: { "@type": "Organization", name: "Sesh", url: SITE } },
+      publisher: { "@type": "Organization", name: "Sejdel", url: SITE } },
     { "@context": "https://schema.org", "@type": "ItemList", name: headline,
       numberOfItems: hits.length,
       itemListElement: hits.slice(0, 20).map((r, i) => ({
@@ -1269,7 +1269,7 @@ for (const lang of ["sv", "en"]) {
   const alt = sv ? `${SITE}/blog/` : `${SITE}/blogg/`;
   write(sv ? "blogg" : "blog", page({
     lang, altLang: sv ? "en" : "sv", altHref: alt, canonical: url,
-    title: sv ? "Ölpriser i Sverige – stad för stad | Sesh" : "Beer prices in Sweden, city by city | Sesh",
+    title: sv ? "Ölpriser i Sverige – stad för stad | Sejdel" : "Beer prices in Sweden, city by city | Sejdel",
     desc: sv
       ? `Vad kostar ölen där du bor? Inrapporterade priser från ${national.bars} barer i ${cities.length} städer.`
       : `What does beer cost where you are? Reported prices from ${national.bars} bars across ${cities.length} Swedish cities.`,

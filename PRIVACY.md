@@ -1,14 +1,14 @@
-# Privacy Policy — Sesh App
+# Privacy Policy — Sejdel App
 
 **Effective date:** 12 June 2026
 **Last updated:** 12 June 2026
 
-This Privacy Policy explains what information the Sesh App ("Sesh", "the app",
+This Privacy Policy explains what information the Sejdel App ("Sejdel", "the app",
 "we", "us") collects, why we collect it, how it is used, and the choices you
-have. Sesh is a social blood-alcohol-content (BAC) estimation and drink-tracking
+have. Sejdel is a social blood-alcohol-content (BAC) estimation and drink-tracking
 app. By using the app you agree to the practices described here.
 
-> **Sesh is not a medical, legal, or safety device.** BAC values are
+> **Sejdel is not a medical, legal, or safety device.** BAC values are
 > Widmark-formula *estimates* based on the information you enter and are
 > provided for entertainment and harm-reduction awareness only. Never rely on
 > them to decide whether to drive or operate machinery. See the in-app
@@ -18,10 +18,10 @@ app. By using the app you agree to the practices described here.
 
 ## 1. Who we are
 
-Sesh App is operated by an individual developer (sole proprietor) enrolled in
+Sejdel App is operated by an individual developer (sole proprietor) enrolled in
 the Apple Developer Program.
 
-**Contact:** contact@seshapp.xyz
+**Contact:** contact@sejdel.com
 
 ---
 
@@ -121,7 +121,7 @@ To exercise any other right, contact us at the email above.
 
 ## 7. Children
 
-Sesh is intended only for users who are of legal drinking age in their
+Sejdel is intended only for users who are of legal drinking age in their
 jurisdiction. It is not directed to children, and we do not knowingly collect
 personal information from anyone under the legal drinking age. If you believe a
 minor has provided us data, contact us and we will delete it.
@@ -157,4 +157,4 @@ constitutes acceptance of the revised policy.
 
 ## 11. Contact
 
-Questions about this policy or your data? Email **contact@seshapp.xyz**.
+Questions about this policy or your data? Email **contact@sejdel.com**.

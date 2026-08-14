@@ -1,5 +1,5 @@
-# seshapp.xyz
+# sejdel.com
 User-agent: *
 Allow: /
 
-Sitemap: https://seshapp.xyz/sitemap.xml
+Sitemap: https://sejdel.com/sitemap.xml
