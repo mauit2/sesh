@@ -505,6 +505,9 @@ struct BeerPriceListSheet: View {
     @ObservedObject var venues: VenueService
     @ObservedObject var location: LocationService
     let serving: BeerServing
+    /// Browse-mode reference when there is no GPS fix — the map's viewport
+    /// centre. Without it the list used to fail open to the whole planet.
+    var fallbackOrigin: CLLocationCoordinate2D? = nil
     let onSelect: (Venue) -> Void
     @State private var query = ""
     /// Apple Maps alongside the catalog, unbiased, so "Atlas Bar Singapore"
@@ -515,11 +518,13 @@ struct BeerPriceListSheet: View {
     private var rows: [(venue: Venue, price: VenueBeerPrice)] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         let here = location.location
+            ?? fallbackOrigin.map { CLLocation(latitude: $0.latitude, longitude: $0.longitude) }
         return venues.venuesWithBeerPrice(serving: serving)
-            // The BROWSE list is bars near you; a typed SEARCH reaches the
-            // whole catalog — "Bar Etzy" should find Gothenburg from
-            // Stockholm, and "…Berlin" should find Berlin (the worldwide
-            // section below covers bars we hold no price for yet).
+            // The BROWSE list is bars near you (or, with no fix yet, near what
+            // the map shows); a typed SEARCH reaches the whole catalog —
+            // "Bar Etzy" should find Gothenburg from Stockholm, and "…Berlin"
+            // should find Berlin (the worldwide section below covers bars we
+            // hold no price for yet).
             .filter { v in
                 guard q.isEmpty, let here else { return true }
                 let d = CLLocation(latitude: v.lat, longitude: v.lon).distance(from: here)

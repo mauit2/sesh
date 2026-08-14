@@ -37,6 +37,8 @@ final class LocationService: NSObject, ObservableObject {
     @Published private(set) var lastError: String?
 
     private let manager = CLLocationManager()
+    /// One retry per cold start — see didFailWithError.
+    private var retriedAfterError = false
 
     override init() {
         super.init()
@@ -96,12 +98,20 @@ extension LocationService: CLLocationManagerDelegate {
         guard let loc = locations.last else { return }
         Task { @MainActor in
             self.location = loc
+            self.retriedAfterError = false
         }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         Task { @MainActor in
             self.lastError = error.localizedDescription
+            // requestLocation() is one-shot and a cold GPS often errors once
+            // (kCLErrorLocationUnknown) before it warms up. One quiet retry;
+            // a second failure stays failed.
+            guard !self.retriedAfterError, self.authState == .authorized else { return }
+            self.retriedAfterError = true
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            self.manager.requestLocation()
         }
     }
 }
@@ -1733,7 +1743,8 @@ private struct OffersMapView: View {
         }
         // Searchable, price-sorted list of bars for the selected serving.
         .sheet(isPresented: $priceListOpen) {
-            BeerPriceListSheet(venues: venues, location: location, serving: selectedServing) { venue in
+            BeerPriceListSheet(venues: venues, location: location, serving: selectedServing,
+                               fallbackOrigin: visibleRegion?.center) { venue in
                 priceListOpen = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { focus(venue) }
             }
@@ -1773,6 +1784,12 @@ private struct OffersMapView: View {
             sunPrewarming = false
         }
         .task {
+            // THE MAP MUST ASK. Every degraded state this screen ever shipped
+            // with — locate button dead, camera parked on Gothenburg, sun list
+            // empty, beer list worldwide — traced back to nobody on this
+            // screen requesting a fix: prompts on first visit, refreshes when
+            // already authorized.
+            location.requestAccess()
             recenter()
             // Catalog and prices are independent — overlap them. Coordinate
             // resolution reads the offers the refresh brings in, so it waits.
@@ -1798,6 +1815,14 @@ private struct OffersMapView: View {
             }
         }
         .onChange(of: venues.catalogStamp) { _, _ in rebuildPinModels() }
+        // The first fix usually lands a beat after the map is up (or after the
+        // permission alert). Snap to it once — after that the camera is the
+        // user's; locate is the button's job.
+        .onChange(of: location.location) { old, new in
+            guard old == nil, new != nil else { return }
+            recenter()
+            rebuildPinModels()
+        }
         .onChange(of: selectedServing) { _, _ in rebuildPinModels() }
         .onChange(of: mapMode) { _, mode in
             // sunEverShown is already true from the warm-up; kept as a guard
@@ -1850,7 +1875,7 @@ private struct OffersMapView: View {
         .sheet(isPresented: $sunListOpen) {
             SunListSheet(
                 readings: sunListReadings ?? [],
-                haveLocation: sunListReadings != nil,
+                haveLocation: location.location != nil,
                 radiusKm: Int(Self.sunListRadius / 1000),
                 placeName: sunReference.name,
                 sun: sun,
@@ -2020,7 +2045,12 @@ private struct OffersMapView: View {
     /// nil (no fix) means we cannot answer it, and the sheet says so instead of
     /// quietly showing a list from wherever the map happens to be.
     private var sunListReadings: [SunReading]? {
-        guard let here = location.location else { return nil }
+        // No fix no longer means no list: fall back to the place the Sun
+        // screen is about (pinned bar, search, else the map centre), so the
+        // list answers "around what you're looking at" instead of vanishing.
+        let here = location.location
+            ?? CLLocation(latitude: sunReference.coord.latitude,
+                          longitude: sunReference.coord.longitude)
         return sunReadings.filter {
             here.distance(from: CLLocation(latitude: $0.venue.lat,
                                            longitude: $0.venue.lon)) <= Self.sunListRadius

@@ -1053,7 +1053,8 @@ struct SunListSheet: View {
             Color.ink.ignoresSafeArea()
             VStack(spacing: 10) {
                 VStack(spacing: 3) {
-                    Text(searching ? "ANY BAR, ANYWHERE" : "WITHIN \(radiusKm) KM OF YOU")
+                    Text(searching ? "ANY BAR, ANYWHERE"
+                         : haveLocation ? "WITHIN \(radiusKm) KM OF YOU" : "AROUND THE MAP")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .tracking(3)
                         .foregroundStyle(Color.bronze)
