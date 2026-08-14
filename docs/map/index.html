@@ -40,6 +40,21 @@
   .seg{display:flex;background:rgba(11,10,8,.8);border:1px solid var(--line);border-radius:999px;padding:3px;}
   .seg button{font-weight:700;font-size:12px;color:var(--cream);opacity:.7;background:none;border:0;padding:7px 15px;border-radius:999px;}
   .seg button.on{background:var(--whiskey);color:var(--ink);opacity:1;}
+  .cpanel{position:absolute;z-index:40;top:64px;right:12px;width:min(320px,calc(100vw - 24px));
+    max-height:min(430px,70vh);overflow:auto;background:rgba(19,13,9,.96);border:1px solid var(--line);
+    border-radius:16px;padding:12px;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);}
+  .cpanel-head{display:flex;justify-content:space-between;align-items:center;
+    font:700 10px/1 ui-monospace,monospace;letter-spacing:.28em;color:var(--bronze);margin:2px 2px 6px;}
+  .cpanel-head button{background:none;border:0;color:var(--cream);opacity:.6;font-size:13px;cursor:pointer;}
+  .cpanel-sub{font-size:11px;color:var(--cream);opacity:.5;margin:0 2px 10px;}
+  .crow{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 10px;
+    border-radius:12px;border:1px solid transparent;background:rgba(243,233,216,.03);
+    color:var(--cream);cursor:pointer;margin-bottom:6px;}
+  .crow:hover{background:rgba(243,233,216,.07);}
+  .crow.on{border-color:rgba(232,132,60,.5);background:rgba(232,132,60,.08);}
+  .crow .cflag{font-size:20px;}
+  .crow .cname{font-weight:700;font-size:13px;}
+  .crow .cmeta{font-size:10.5px;opacity:.55;}
   .sizes{display:flex;gap:6px;flex-wrap:wrap;width:100%;}
   .sizes button{font-weight:800;font-size:11px;color:var(--cream);opacity:.85;background:rgba(11,10,8,.8);border:1px solid var(--line);padding:6px 11px;border-radius:999px;}
   .sizes button.on{background:var(--whiskey);color:var(--ink);border-color:var(--whiskey);opacity:1;}
@@ -230,7 +245,14 @@
     <button data-mode="deals">Deals</button>
   </div>
   <div class="sizes" id="sizes"></div>
+  <button class="icon-btn" id="countryBtn" title="Browse countries">🌍 Countries</button>
 </header>
+
+<div class="cpanel" id="cpanel" hidden>
+  <div class="cpanel-head">PICK A COUNTRY <button id="cpanelX">✕</button></div>
+  <div class="cpanel-sub">Fly to any country we hold beer prices for.</div>
+  <div id="cpanelList"></div>
+</div>
 
 <div class="legend" id="legend">
   CHEAPEST → PRICIEST NEARBY
@@ -315,7 +337,23 @@
 
   function fmt(a,c){var n=Math.round(a),s=SYM[c]||c;return TRAIL[c]?(n+" "+s):(s+n);}
   function esc(t){return String(t==null?"":t).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
-  function servingLabel(x){return (SERVINGS.filter(function(s){return s[0]===x;})[0]||["",x])[1];}
+  function servingLabel(x){if(x==="unknown")return "Size not stated";
+    return (SERVINGS.filter(function(s){return s[0]===x;})[0]||["",x])[1];}
+  // Rows to DRAW for a serving: the exact size where reported, else the
+  // bar's size-less price — same fallback the app uses, so an imported
+  // "a beer costs $6 here" bar still exists on the map.
+  function displayRows(sv){
+    var byVenue={};
+    beerData.forEach(function(r){(byVenue[r.venue_id]=byVenue[r.venue_id]||[]).push(r);});
+    var out=[];
+    Object.keys(byVenue).forEach(function(id){
+      var rows=byVenue[id],exact=rows.filter(function(r){return r.serving===sv;});
+      if(exact.length){out.push.apply(out,exact);return;}
+      var unk=rows.filter(function(r){return r.serving==="unknown";});
+      if(unk.length)out.push(unk[0]);
+    });
+    return out;
+  }
   function hav(aLat,aLon,bLat,bLon){var R=6371000,dLat=(bLat-aLat)*Math.PI/180,dLon=(bLon-aLon)*Math.PI/180,la1=aLat*Math.PI/180,la2=bLat*Math.PI/180;
     var h=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)*Math.sin(dLon/2);return 2*R*Math.asin(Math.min(1,Math.sqrt(h)));}
   function localCheapest(row,all){var best=row.price;for(var i=0;i<all.length;i++){var q=all[i];
@@ -517,8 +555,7 @@
     // A bar priced only at 50 cl has no pin while the map sits on its 40 cl
     // default, so honour the serving the link carried before building the chips.
     if(qServing&&SERVINGS.some(function(x){return x[0]===qServing;}))serving=qServing;
-    SERVINGS.forEach(function(s){var b=document.createElement("button");b.textContent=s[1];b.dataset.serving=s[0];if(s[0]===serving)b.className="on";
-      b.onclick=function(){serving=s[0];[].forEach.call($("sizes").children,function(c){c.className=c.dataset.serving===serving?"on":"";});render();renderList();};$("sizes").appendChild(b);});
+    rebuildSizeChips();
     SERVINGS.forEach(function(s){var b=document.createElement("button");b.textContent=s[1];b.dataset.serving=s[0];if(s[0]===fSize)b.className="on";
       b.onclick=function(){fSize=s[0];[].forEach.call($("fSizes").children,function(c){c.className=c.dataset.serving===fSize?"on":"";});validate();};$("fSizes").appendChild(b);});
     CURRENCIES.forEach(function(c){var o=document.createElement("option");o.value=c;o.textContent=c+" ("+(SYM[c]||c)+")";$("fCur").appendChild(o);});
@@ -550,8 +587,13 @@
       if(q.length<2){$("fResults").innerHTML="";return;}searchTimer=setTimeout(function(){doSearch(q);},280);});
 
     Promise.all([rpc("public_beer_prices"),rpc("public_deals")]).then(function(res){
-      beerData=res[0].map(function(r){r.price=+r.price;return r;});dealData=res[1];msgEl.style.display="none";render();
+      beerData=res[0].map(function(r){r.price=+r.price;return r;});dealData=res[1];msgEl.style.display="none";
+      rebuildSizeChips();render();
     }).catch(function(err){msgEl.textContent="Couldn't load the data.";console.error(err);});
+    rpc("country_index").then(function(cs){countryStats=cs;renderCountryPanel();}).catch(function(){});
+    $("countryBtn").onclick=function(){var p=$("cpanel");p.hidden=!p.hidden;};
+    $("cpanelX").onclick=function(){$("cpanel").hidden=true;};
+    map.addEventListener("region-change-end",function(){if(mode==="prices")rebuildSizeChips();});
   }
 
   // popupHtml may be a STRING or a FUNCTION. A function is evaluated when the
@@ -601,6 +643,54 @@
   });
   function popupDeal(d){return '<div class="sub">'+esc(d.venue_name)+'</div><h3>'+esc(d.title)+'</h3>'+(d.description?'<div class="note">'+esc(d.description)+'</div>':'');}
 
+  // Chips shown = sizes with data in the current view (all while loading):
+  // the row itself says what gets poured around here. The selected chip
+  // always stays visible so the filter can't hide its own state.
+  function rebuildSizeChips(){
+    var present={};
+    beerData.forEach(function(r){if(r.serving!=="unknown"&&inView(r))present[r.serving]=1;});
+    var list=SERVINGS.filter(function(s){return present[s[0]]||s[0]===serving;});
+    if(!list.length||!Object.keys(present).length)list=SERVINGS;
+    var box=$("sizes");box.innerHTML="";
+    list.forEach(function(s){var b=document.createElement("button");b.textContent=s[1];b.dataset.serving=s[0];
+      if(s[0]===serving)b.className="on";
+      b.onclick=function(){serving=s[0];[].forEach.call(box.children,function(c){c.className=c.dataset.serving===serving?"on":"";});render();renderList();};
+      box.appendChild(b);});
+  }
+
+  // ---- Country browser: every country we hold data for, with counts,
+  // and a fly-to that frames the whole country (same as the app).
+  var countryStats=[];
+  function flagEmoji(iso){return iso.toUpperCase().replace(/./g,function(c){return String.fromCodePoint(127397+c.charCodeAt(0));});}
+  function countryName(iso){try{return new Intl.DisplayNames([navigator.language||"en"],{type:"region"}).of(iso)||iso;}catch(e){return iso;}}
+  function renderCountryPanel(){
+    var box=$("cpanelList");box.innerHTML="";
+    countryStats.forEach(function(c){
+      var b=document.createElement("button");b.className="crow"+(c._on?" on":"");
+      b.innerHTML='<span class="cflag">'+flagEmoji(c.country)+'</span>'
+        +'<span><div class="cname">'+esc(countryName(c.country))+'</div>'
+        +'<div class="cmeta">'+c.venues+' bars · '+c.priced+' with prices · '+c.outdoor+' terraces</div></span>';
+      b.onclick=function(){flyToCountry(c);};
+      box.appendChild(b);});
+  }
+  function flyToCountry(c){
+    countryStats.forEach(function(x){x._on=false;});c._on=true;
+    $("cpanel").hidden=true;
+    var latPad=Math.max(.4,(c.max_lat-c.min_lat)*.2),lonPad=Math.max(.4,(c.max_lon-c.min_lon)*.2);
+    map.setRegionAnimated(new mapkit.CoordinateRegion(
+      new mapkit.Coordinate((c.min_lat+c.max_lat)/2,(c.min_lon+c.max_lon)/2),
+      new mapkit.CoordinateSpan((c.max_lat-c.min_lat)+latPad*2,(c.max_lon-c.min_lon)+lonPad*2)));
+    // Adopt the country's most common size, like the app does — unless the
+    // current chip already has data there.
+    var inBox=beerData.filter(function(r){return r.lat>=c.min_lat-latPad&&r.lat<=c.max_lat+latPad
+      &&r.lon>=c.min_lon-lonPad&&r.lon<=c.max_lon+lonPad&&r.serving!=="unknown";});
+    if(!inBox.some(function(r){return r.serving===serving;})&&inBox.length){
+      var tally={};inBox.forEach(function(r){tally[r.serving]=(tally[r.serving]||0)+1;});
+      serving=Object.keys(tally).sort(function(a,b){return tally[b]-tally[a];})[0];
+    }
+    setTimeout(function(){rebuildSizeChips();render();renderList();},50);
+  }
+
   function render(){
     clearPins();
     if(mode==="sun"){
@@ -619,7 +709,7 @@
       return;   // no auto-fit: sun pins follow wherever the user is looking
     }
     if(mode==="prices"){$("legend").style.display="";
-      beerData.filter(function(r){return r.serving===serving;}).forEach(function(r){
+      displayRows(serving).forEach(function(r){
         makePin(new mapkit.Coordinate(r.lat,r.lon),
           '<span class="pill" style="background:'+colorFor(r.price,localCheapest(r,beerData))+'">'+fmt(r.price,r.currency)+'</span>',
           function(){return popupBeer(r,localCheapest(r,beerData));},r.venue_id,"beer");});
@@ -644,7 +734,7 @@
 
   function renderList(){
     var q=$("search").value.trim().toLowerCase();
-    var rows=beerData.filter(function(r){return r.serving===serving && inView(r);})
+    var rows=displayRows(serving).filter(inView)
       .filter(function(r){return !q||r.venue_name.toLowerCase().indexOf(q)>=0;})
       .sort(function(a,b){return a.price-b.price;});
     $("drawerTitle").textContent="Cheapest "+servingLabel(serving)+" in view";
