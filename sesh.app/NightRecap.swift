@@ -1605,7 +1605,7 @@ struct SeshCameraView: View {
                 Spacer()
 
                 if camera.denied {
-                    Text("Allow camera access in Settings to use the Sesh Cam.")
+                    Text("Allow camera access in Settings to use the Sejdel Cam.")
                         .font(.system(size: 14, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.cream)
                         .multilineTextAlignment(.center)

@@ -2182,6 +2182,8 @@ private struct FriendsView: View {
     @State private var showUsernameEditor = false
     /// Tapped friend → their profile feed (past nights).
     @State private var openProfile: ProfileRef?
+    /// Contacts + invite-link flow, shared with onboarding.
+    @State private var crewOpen = false
 
     private var myUsername: String? {
         if case .signedIn(let p) = auth.state { return p.username }
@@ -2239,6 +2241,22 @@ private struct FriendsView: View {
             ProfileFeedView(user: ref, feed: feed)
                 .presentationBackground(Color.ink)
         }
+        .sheet(isPresented: $crewOpen) {
+            FindCrewSheet(
+                friends: friends,
+                inviteURL: URL(string: "https://sejdel.com/")!,
+                kicker: "GROW THE CREW",
+                title: "Find your people",
+                blurb: "Check which of your contacts are already here, or send anyone an invite.",
+                dismissLabel: "Done"
+            ) {
+                crewOpen = false
+                Task { await friends.refresh() }
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.ink)
+        }
     }
 
     private var header: some View {
@@ -2291,6 +2309,32 @@ private struct FriendsView: View {
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.8))
             }
+            // The same contacts + invite flow onboarding uses. Reachable
+            // forever here, because "add friends" is a thing people come
+            // back to — not a one-shot at signup.
+            Button { crewOpen = true } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "person.2.badge.plus")
+                        .font(.system(size: 15, weight: .bold))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Invite friends from contacts")
+                            .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        Text("Scrambled codes only — your contacts stay on your phone")
+                            .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                            .opacity(0.72)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .opacity(0.5)
+                }
+                .foregroundStyle(Color.ink)
+                .padding(.horizontal, 13).padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.whiskey))
+            }
+            .buttonStyle(PressScaleStyle())
+            .padding(.top, 4)
         }
     }
 
@@ -4823,7 +4867,7 @@ private struct WelcomeTourView: View {
         TourPage(
             icon: "sparkles",
             kicker: "WELCOME",
-            title: "Welcome to sesh",
+            title: "Welcome to sejdel",
             text: "Your night, tracked — from the first pour to the morning recap. Here's the quick lay of the land."
         ),
         TourPage(
@@ -4957,6 +5001,9 @@ private struct ProfileAndTourModifier: ViewModifier {
     @Binding var tourOpen: Bool
     @Binding var walkthroughOpen: Bool
     let seenKey: String
+    /// Shown once per install, right after the tour.
+    private let crewKey = "sesh.crewPrompt.seen.v1"
+    @State private var crewOpen = false
     let profile: Profile
     @ObservedObject var auth: AuthService
     @ObservedObject var admin: AdminService
@@ -4980,7 +5027,25 @@ private struct ProfileAndTourModifier: ViewModifier {
                 WelcomeTourView {
                     UserDefaults.standard.set(true, forKey: seenKey)
                     tourOpen = false
+                    // The tour hands straight off to "bring your crew" — the
+                    // moment intent is highest. Only on the FIRST run, never
+                    // on a replay from the profile, and only once ever: an
+                    // onboarding wall that keeps asking for the address book
+                    // is how apps get deleted.
+                    if !UserDefaults.standard.bool(forKey: crewKey) {
+                        UserDefaults.standard.set(true, forKey: crewKey)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { crewOpen = true }
+                    }
                 }
+            }
+            .sheet(isPresented: $crewOpen) {
+                FindCrewSheet(friends: friends,
+                              inviteURL: URL(string: "https://sejdel.com/")!) {
+                    crewOpen = false
+                }
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
             }
             .onAppear {
                 if !UserDefaults.standard.bool(forKey: seenKey) {
@@ -6467,6 +6532,12 @@ private struct SessionView: View {
     private func bootSession() {
         recordSavedGroup(from: planGroup)
         recordSavedGroup(from: liveGroup)
+        // Publish the account's email digest so friends who have this address
+        // in their contacts can find them — no user action, and no phone
+        // number needed. Per-kind (099), so it never clears a phone key.
+        Task {
+            await ContactDiscovery().publishEmailKey(supabase.auth.currentUser?.email)
+        }
         friends.start()
         eventsService.start()
         dm.start()
@@ -7252,7 +7323,7 @@ private struct Masthead: View {
                     .fill(Color.whiskey)
                     .frame(width: 7, height: 7)
                     .shadow(color: Color.whiskey.opacity(0.9), radius: 8)
-                Text("sesh")
+                Text("sejdel")
                     .font(.system(size: 22, weight: .black, design: .rounded))
                     .italic()
                     .foregroundStyle(Color.cream)
@@ -8531,6 +8602,13 @@ private struct ProfileSheet: View {
     /// send_venue_push knows who to reach.
     @AppStorage(DealsPush.optInKey) private var dealsPushOptIn = false
 
+    /// Contact-discovery controls. The number is never persisted — it's
+    /// hashed, published, and dropped (see ContactDiscovery / migration 099).
+    @StateObject private var discovery = ContactDiscovery()
+    @State private var phoneEntry = ""
+    @State private var phoneSaving = false
+    @State private var phoneNote: String?
+
     /// Saved night recaps (loaded from disk on open) + which one is
     /// being replayed full-screen.
     @StateObject private var nightHistory = RecapHistoryStore()
@@ -8694,6 +8772,70 @@ private struct ProfileSheet: View {
                                     .foregroundStyle(Color.cream.opacity(0.55))
                                     .fixedSize(horizontal: false, vertical: true)
                                     .padding(.horizontal, 4)
+                            }
+                        }
+                        LoungePickerField(label: "LET FRIENDS FIND YOU") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Add your number and friends who have it in their contacts can find you. We store a scrambled code, never the number itself.")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.55))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                HStack(spacing: 8) {
+                                    TextField("+46 70 123 45 67", text: $phoneEntry)
+                                        .keyboardType(.phonePad)
+                                        .textContentType(.telephoneNumber)
+                                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(Color.cream)
+                                        .padding(.horizontal, 12).padding(.vertical, 10)
+                                        .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                            .fill(Color.cream.opacity(0.05)))
+                                    Button {
+                                        let raw = phoneEntry
+                                        phoneSaving = true
+                                        Task {
+                                            let ok = await discovery.publishPhoneKey(raw)
+                                            await MainActor.run {
+                                                phoneSaving = false
+                                                phoneNote = ok
+                                                    ? "Saved — friends with your number can find you."
+                                                    : "Couldn't save that number."
+                                                if ok { phoneEntry = "" }
+                                            }
+                                        }
+                                    } label: {
+                                        if phoneSaving {
+                                            ProgressView().tint(Color.ink)
+                                                .frame(width: 46, height: 40)
+                                        } else {
+                                            Text("SAVE")
+                                                .font(.system(size: 10.5, weight: .black, design: .monospaced))
+                                                .tracking(1.1)
+                                                .foregroundStyle(Color.ink)
+                                                .padding(.horizontal, 14).padding(.vertical, 12)
+                                        }
+                                    }
+                                    .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                        .fill(Color.whiskey))
+                                    .buttonStyle(PressScaleStyle())
+                                    .disabled(phoneEntry.trimmingCharacters(in: .whitespaces).count < 6 || phoneSaving)
+                                }
+                                if let n = phoneNote {
+                                    Text(n)
+                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(Color.whiskey)
+                                }
+                                Button {
+                                    Task {
+                                        await discovery.clearMyKeys()
+                                        await MainActor.run { phoneNote = "Removed. You're no longer findable by contacts." }
+                                    }
+                                } label: {
+                                    Text("Remove my codes")
+                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.5))
+                                        .underline()
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                         LoungePickerField(label: "DEAL ALERTS") {
@@ -8967,7 +9109,7 @@ private struct ProfileSheet: View {
                     // Support contact — opens the mail composer pre-addressed
                     // to support. Gives users (and App Review) a clear way to
                     // reach us.
-                    if let supportURL = URL(string: "mailto:contact@seshapp.xyz?subject=sesh%20support") {
+                    if let supportURL = URL(string: "mailto:contact@sejdel.com?subject=sejdel%20support") {
                         Link(destination: supportURL) {
                             HStack(spacing: 10) {
                                 Image(systemName: "envelope.fill")

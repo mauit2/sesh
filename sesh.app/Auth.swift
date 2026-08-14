@@ -441,7 +441,7 @@ struct LoadingView: View {
                     .fill(Color.whiskey)
                     .frame(width: 10, height: 10)
                     .shadow(color: Color.whiskey.opacity(0.9), radius: 12)
-                Text("sesh")
+                Text("sejdel")
                     .font(.system(size: 40, weight: .black, design: .rounded))
                     .italic()
                     .tracking(-1.5)
@@ -589,7 +589,7 @@ struct AuthView: View {
                     .tracking(2.4)
                     .foregroundStyle(Color.bronze)
             }
-            Text("sesh")
+            Text("sejdel")
                 .font(.system(size: 72, weight: .black, design: .rounded))
                 .italic()
                 .tracking(-3)
@@ -625,7 +625,7 @@ struct AuthView: View {
             LoungeField(
                 label: mode == .signUp ? "EMAIL" : "EMAIL OR USERNAME",
                 text: $email,
-                placeholder: mode == .signUp ? "you@seshapp.xyz" : "you@seshapp.xyz or yourname",
+                placeholder: mode == .signUp ? "you@sejdel.com" : "you@sejdel.com or yourname",
                 keyboard: mode == .signUp ? .emailAddress : .default,
                 autocapitalize: false
             )
@@ -834,7 +834,7 @@ struct AuthView: View {
     }
 
     private var footnote: some View {
-        Text("By continuing you accept that sesh is a fun BAC estimate, not a legal or medical reference. Never use it to decide whether to drive.")
+        Text("By continuing you accept that sejdel is a fun BAC estimate, not a legal or medical reference. Never use it to decide whether to drive.")
             .font(.system(size: 10, design: .rounded))
             .lineSpacing(3)
             .foregroundStyle(Color.bronze)
@@ -925,7 +925,7 @@ private struct PasswordResetView: View {
                     header
                     if phase == .request {
                         LoungeField(label: "EMAIL", text: $email,
-                                    placeholder: "you@seshapp.xyz",
+                                    placeholder: "you@sejdel.com",
                                     keyboard: .emailAddress, autocapitalize: false)
                     } else {
                         LoungeField(label: "8-DIGIT CODE", text: $code,
@@ -1298,7 +1298,7 @@ struct BirthdatePromptSheet: View {
                 Text("When's your birthday?")
                     .font(.system(size: 22, weight: .heavy, design: .rounded))
                     .foregroundStyle(Color.cream)
-                Text("Sesh only knows the age you typed in, and it drifts every birthday. Set it once and it stays right on its own. It never shows on your profile.")
+                Text("Sejdel only knows the age you typed in, and it drifts every birthday. Set it once and it stays right on its own. It never shows on your profile.")
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.6))
                     .multilineTextAlignment(.center)

@@ -190,7 +190,7 @@ final class BeverageLookupService: ObservableObject {
         do {
             var request = URLRequest(url: url)
             // OFF asks API clients to identify themselves.
-            request.setValue("sesh-ios/1.0 (sesh app)", forHTTPHeaderField: "User-Agent")
+            request.setValue("sejdel-ios/1.0 (sejdel app)", forHTTPHeaderField: "User-Agent")
             let (data, _) = try await URLSession.shared.data(for: request)
             let resp = try JSONDecoder().decode(OFFResponse.self, from: data)
             guard resp.status == 1, let p = resp.product else { return nil }

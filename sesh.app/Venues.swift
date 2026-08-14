@@ -3873,7 +3873,7 @@ struct VenueSheet: View {
         case .notDetermined:
             permissionRow(
                 title: "Enable location",
-                detail: "Sesh uses location only while open, to find bars near you.",
+                detail: "Sejdel uses location only while open, to find bars near you.",
                 cta: "ALLOW"
             ) {
                 location.requestAccess()

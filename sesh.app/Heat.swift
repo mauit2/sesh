@@ -359,7 +359,7 @@ struct QRCheckInSheet: View {
     }
 
     /// Accept a raw code or any URL whose last path segment is the code
-    /// (so printed QRs can point at https://seshapp.xyz/qr/<CODE> and still
+    /// (so printed QRs can point at https://sejdel.com/qr/<CODE> and still
     /// work as a plain web link for people without the app).
     private func handle(payload: String) {
         guard !resolving else { return }
@@ -709,7 +709,7 @@ struct QRAdminSheet: View {
     /// High-error-correction QR of the public check-in URL, scaled crisp.
     private static func qrImage(for token: String) -> UIImage? {
         let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data("https://seshapp.xyz/qr/\(token)".utf8)
+        filter.message = Data("https://sejdel.com/qr/\(token)".utf8)
         filter.correctionLevel = "Q"
         guard let output = filter.outputImage else { return nil }
         let scaled = output.transformed(by: CGAffineTransform(scaleX: 12, y: 12))

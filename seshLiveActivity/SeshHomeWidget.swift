@@ -175,7 +175,7 @@ struct SeshHomeWidget: Widget {
             SeshHomeWidgetView(entry: entry)
                 .containerBackground(Color.seshInk, for: .widget)
         }
-        .configurationDisplayName("sesh")
+        .configurationDisplayName("sejdel")
         .description("Your live BAC and your group — without unlocking your phone.")
         .supportedFamilies([.systemSmall, .systemMedium])
     }
@@ -337,7 +337,7 @@ private struct SeshHomeWidgetView: View {
                     .foregroundStyle(Color.seshCream.opacity(0.6))
             }
             Spacer(minLength: 0)
-            Text("Open sesh to add a drink")
+            Text("Open sejdel to add a drink")
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .tracking(0.6)
                 .foregroundStyle(Color.seshBronze)
@@ -406,7 +406,7 @@ private struct SeshHomeWidgetView: View {
             Text("No live sesh")
                 .font(.system(size: 13, weight: .heavy, design: .rounded))
                 .foregroundStyle(Color.seshCream)
-            Text("Open sesh to start one.")
+            Text("Open sejdel to start one.")
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.seshCream.opacity(0.6))
                 .multilineTextAlignment(.center)

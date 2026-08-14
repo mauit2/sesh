@@ -59,7 +59,7 @@ Deno.serve(async (req: Request) => {
   try {
     const j = await req.json();
     user_id = String(j.user_id ?? "");
-    title = String(j.title ?? "sesh");
+    title = String(j.title ?? "sejdel");
     body = String(j.body ?? "");
     data = (j.data ?? {}) as Record<string, unknown>;
     // Optional app-icon badge count. Set the total unseen so a locked/closed

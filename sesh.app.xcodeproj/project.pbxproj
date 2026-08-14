@@ -278,11 +278,11 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = seshLiveActivityExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = H7A4TB3KVA;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = seshLiveActivity/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = seshLiveActivity;
+				INFOPLIST_KEY_CFBundleDisplayName = sejdel;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -309,11 +309,11 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = seshLiveActivityExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = H7A4TB3KVA;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = seshLiveActivity/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = seshLiveActivity;
+				INFOPLIST_KEY_CFBundleDisplayName = sejdel;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -459,13 +459,15 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = sesh.app/sesh.app.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = H7A4TB3KVA;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_NSCameraUsageDescription = "sesh uses your camera to scan beverage barcodes, set your profile photo, and snap pics at your stops during a night out.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "sesh uses your location only while open to find bars near you and surface their drink specials. We never track you in the background.";
+				INFOPLIST_KEY_CFBundleDisplayName = sejdel;
+				INFOPLIST_KEY_NSCameraUsageDescription = "sejdel uses your camera to scan beverage barcodes, set your profile photo, and snap pics at your stops during a night out.";
+				INFOPLIST_KEY_NSContactsUsageDescription = "sejdel checks which of your contacts are already here so you can add them as friends. Your contacts never leave your phone \U2014 only scrambled codes are sent, and we keep nothing about people who aren't on sejdel.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "sejdel uses your location only while open to find bars near you and surface their drink specials. We never track you in the background.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -496,13 +498,15 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = sesh.app/sesh.app.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = H7A4TB3KVA;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_NSCameraUsageDescription = "sesh uses your camera to scan beverage barcodes, set your profile photo, and snap pics at your stops during a night out.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "sesh uses your location only while open to find bars near you and surface their drink specials. We never track you in the background.";
+				INFOPLIST_KEY_CFBundleDisplayName = sejdel;
+				INFOPLIST_KEY_NSCameraUsageDescription = "sejdel uses your camera to scan beverage barcodes, set your profile photo, and snap pics at your stops during a night out.";
+				INFOPLIST_KEY_NSContactsUsageDescription = "sejdel checks which of your contacts are already here so you can add them as friends. Your contacts never leave your phone \U2014 only scrambled codes are sent, and we keep nothing about people who aren't on sejdel.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "sejdel uses your location only while open to find bars near you and surface their drink specials. We never track you in the background.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

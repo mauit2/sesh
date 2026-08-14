@@ -1700,7 +1700,7 @@ struct EventDetailSheet: View {
                         HStack(spacing: 5) {
                             Image(systemName: "plus")
                                 .font(.system(size: 10, weight: .bold, design: .rounded))
-                            Text("Add a guest who's not on sesh")
+                            Text("Add a guest who's not on sejdel")
                                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                         }
                         .foregroundStyle(Color.bronze)
