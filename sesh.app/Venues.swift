@@ -744,6 +744,18 @@ final class VenueService: ObservableObject {
         localBeerPrices(serving: serving, currency: currency, near: coord).min() ?? own
     }
 
+    /// Colour anchor for MAP PINS: the cheapest among everything DRAWN under
+    /// the current size filter — the exact size plus the size-less fallback
+    /// rows — in the same currency and area. Anchoring each pin to its own
+    /// row's bucket painted the same €7 red at one bar and green next door
+    /// whenever the two pins came from different buckets.
+    func localCheapestDisplayed(selected: BeerServing, currency: String,
+                                near coord: CLLocationCoordinate2D, own: Double) -> Double {
+        let exact = localBeerPrices(serving: selected.rawValue, currency: currency, near: coord)
+        let unsized = localBeerPrices(serving: "unknown", currency: currency, near: coord)
+        return min(exact.min() ?? own, unsized.min() ?? own)
+    }
+
     /// Regional average for a serving + currency — the "vs typical" baseline.
     func localAverage(serving: String, currency: String, near coord: CLLocationCoordinate2D) -> Double? {
         let ps = localBeerPrices(serving: serving, currency: currency, near: coord)
@@ -1625,8 +1637,8 @@ private struct OffersMapView: View {
                 offerArt: venues.posterOffer(for: v)?.imageURL,
                 offerCount: venues.offers(for: v).count,
                 price: price,
-                cheapest: price.map { venues.localCheapest(
-                    serving: $0.serving, currency: $0.currency,
+                cheapest: price.map { venues.localCheapestDisplayed(
+                    selected: selectedServing, currency: $0.currency,
                     near: venues.coordinate(for: v), own: $0.price) } ?? 0
             ))
         }
@@ -2469,18 +2481,24 @@ private struct OffersMapView: View {
         let center = CLLocationCoordinate2D(
             latitude: (stat.minLat + stat.maxLat) / 2,
             longitude: (stat.minLon + stat.maxLon) / 2)
-        withAnimation(MapLocate.animation) {
-            camera = .region(MKCoordinateRegion(
-                center: center,
-                span: MKCoordinateSpan(
-                    latitudeDelta: (stat.maxLat - stat.minLat) + latPad * 2,
-                    longitudeDelta: (stat.maxLon - stat.minLon) + lonPad * 2)))
-        }
+        let region = MKCoordinateRegion(
+            center: center,
+            span: MKCoordinateSpan(
+                latitudeDelta: (stat.maxLat - stat.minLat) + latPad * 2,
+                longitudeDelta: (stat.maxLon - stat.minLon) + lonPad * 2))
+        withAnimation(MapLocate.animation) { camera = .region(region) }
+        // The viewport becomes the DESTINATION now, not when MapKit deigns to
+        // report the settle — programmatic flies don't reliably fire
+        // onMapCameraChange(.onEnd), which left the map pinless until the
+        // user happened to pan.
+        visibleRegion = region
         // The sun map frames the WHOLE country too: zoom derived from the
         // data's longitudinal spread (log2(360/span)), clamped city↔globe.
         let lonSpan = (stat.maxLon - stat.minLon) + lonPad * 2
         sunFocusZoom = max(3.2, min(8.5, log2(360.0 / max(lonSpan, 0.05)) - 0.6))
         sunFocus = center
+        sunMapCentre = center
+        rebuildPinModels()
     }
 
     /// Frame one city from its data bounds; sensible floor so a two-bar
@@ -2491,26 +2509,33 @@ private struct OffersMapView: View {
         let center = CLLocationCoordinate2D(
             latitude: (c.minLat + c.maxLat) / 2,
             longitude: (c.minLon + c.maxLon) / 2)
-        withAnimation(MapLocate.animation) {
-            camera = .region(MKCoordinateRegion(
-                center: center,
-                span: MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan)))
-        }
+        let region = MKCoordinateRegion(
+            center: center,
+            span: MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan))
+        withAnimation(MapLocate.animation) { camera = .region(region) }
+        visibleRegion = region
         sunFocusZoom = 12.5
         sunFocus = center
+        // Don't wait for the camera to settle: aim the sun pipeline at the
+        // destination now, so the horizon fetch overlaps the flight and the
+        // terrace pins are up when the map lands.
+        sunMapCentre = center
+        rebuildPinModels()
     }
 
     /// Fly to any coordinate at city scale — the worldwide search's landing,
     /// including places we hold nothing for yet.
     private func flyToPlace(lat: Double, lon: Double) {
         let center = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-        withAnimation(MapLocate.animation) {
-            camera = .region(MKCoordinateRegion(
-                center: center,
-                span: MKCoordinateSpan(latitudeDelta: 0.09, longitudeDelta: 0.12)))
-        }
+        let region = MKCoordinateRegion(
+            center: center,
+            span: MKCoordinateSpan(latitudeDelta: 0.09, longitudeDelta: 0.12))
+        withAnimation(MapLocate.animation) { camera = .region(region) }
+        visibleRegion = region
         sunFocusZoom = 12.5
         sunFocus = center
+        sunMapCentre = center
+        rebuildPinModels()
     }
 
     private func locateMe() {

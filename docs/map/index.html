@@ -365,8 +365,13 @@
   }
   function hav(aLat,aLon,bLat,bLon){var R=6371000,dLat=(bLat-aLat)*Math.PI/180,dLon=(bLon-aLon)*Math.PI/180,la1=aLat*Math.PI/180,la2=bLat*Math.PI/180;
     var h=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)*Math.sin(dLon/2);return 2*R*Math.asin(Math.min(1,Math.sqrt(h)));}
+  // One anchor per currency over everything DRAWN under the current size
+  // filter (exact size + size-less fallback) — per-bucket anchors painted
+  // the same price two different colours at neighbouring bars.
   function localCheapest(row,all){var best=row.price;for(var i=0;i<all.length;i++){var q=all[i];
-    if(q.serving!==row.serving||q.currency!==row.currency)continue;if(hav(row.lat,row.lon,q.lat,q.lon)<=200000)best=Math.min(best,q.price);}return best;}
+    if(q.currency!==row.currency)continue;
+    if(q.serving!==serving&&q.serving!=="unknown")continue;
+    if(hav(row.lat,row.lon,q.lat,q.lon)<=200000)best=Math.min(best,q.price);}return best;}
   function colorFor(p,cheap){var t=Math.min(1,Math.max(0,p/cheap-1));return "hsl("+Math.round((1-t)*122)+",72%,50%)";}
 
   // ---- Sun maths: 1:1 port of the app's SunMath.swift (NOAA), verified
