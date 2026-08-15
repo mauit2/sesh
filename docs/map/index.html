@@ -251,7 +251,8 @@
     <button data-mode="sun">Sun</button>
     <button data-mode="deals">Deals</button>
   </div>
-  <div class="sizes" id="sizes"></div>
+  <button class="icon-btn" id="filterBtn" title="Filter by serving size">⚙ Filter ▾</button>
+  <div class="sizes hide" id="sizes"></div>
   <button class="icon-btn" id="countryBtn" title="Browse countries">🌍 Countries</button>
 </header>
 
@@ -266,7 +267,7 @@
 <div class="legend" id="legend">
   CHEAPEST → PRICIEST NEARBY
   <div class="grad"></div>
-  <div class="ends"><span>cheap</span><span>2× the cheapest</span></div>
+  <div class="ends"><span>cheapest</span><span>typical</span><span>priciest</span></div>
 </div>
 
 <aside class="drawer" id="drawer">
@@ -372,17 +373,39 @@
   }
   function hav(aLat,aLon,bLat,bLon){var R=6371000,dLat=(bLat-aLat)*Math.PI/180,dLon=(bLon-aLon)*Math.PI/180,la1=aLat*Math.PI/180,la2=bLat*Math.PI/180;
     var h=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)*Math.sin(dLon/2);return 2*R*Math.asin(Math.min(1,Math.sqrt(h)));}
-  // One anchor per currency over everything DRAWN under the current size
-  // filter (exact size + size-less fallback) — per-bucket anchors painted
-  // the same price two different colours at neighbouring bars.
-  function localCheapest(row,all){var best=row.price;for(var i=0;i<all.length;i++){var q=all[i];
-    if(q.currency!==row.currency)continue;
-    if(serving!=="all"&&q.serving!==serving&&q.serving!=="unknown")continue;
-    if(hav(row.lat,row.lon,q.lat,q.lon)<=200000)best=Math.min(best,q.price);}return best;}
+  // Anchors over everything DRAWN under the current size filter, ONE VALUE
+  // PER VENUE (its cheapest pour on "all", its exact-else-unsized price
+  // under a filter): green at the local minimum, YELLOW AT THE MEDIAN, red
+  // at the maximum. The old ratio scale (2x the cheapest = red) worked in
+  // Sweden's tight 50-80 kr band but painted most of a $1-$10 city red.
+  function localAnchors(row,all){
+    var perVenue={};
+    for(var i=0;i<all.length;i++){var q=all[i];
+      if(q.currency!==row.currency)continue;
+      if(hav(row.lat,row.lon,q.lat,q.lon)>200000)continue;
+      var v=perVenue[q.venue_id]||(perVenue[q.venue_id]={});
+      if(serving==="all"){if(v.any==null||q.price<v.any)v.any=q.price;}
+      else if(q.serving===serving){if(v.exact==null||q.price<v.exact)v.exact=q.price;}
+      else if(q.serving==="unknown"){if(v.unk==null||q.price<v.unk)v.unk=q.price;}
+    }
+    var vals=[];
+    for(var k in perVenue){var v=perVenue[k];
+      var pr=(serving==="all")?v.any:(v.exact!=null?v.exact:v.unk);
+      if(pr!=null)vals.push(pr);}
+    if(!vals.length)vals=[row.price];
+    vals.sort(function(a,b){return a-b;});
+    var n=vals.length,med=n%2?vals[(n-1)/2]:(vals[n/2-1]+vals[n/2])/2;
+    return {min:vals[0],median:med,max:vals[n-1]};
+  }
   // Grade the ROUNDED price — the number on the pill — so two pills that
-  // read the same can never wear different colours.
-  function colorFor(p,cheap){p=Math.round(p);cheap=Math.round(cheap)||1;
-    var t=Math.min(1,Math.max(0,p/cheap-1));return "hsl("+Math.round((1-t)*122)+",72%,50%)";}
+  // read the same can never wear different colours. 0 at the local minimum,
+  // 0.5 (yellow) at the median, 1 at the maximum, piecewise linear.
+  function scaleT(p,a){var mn=Math.round(a.min),md=Math.round(a.median),mx=Math.round(a.max);
+    if(p<=mn)return 0;if(p>=mx)return 1;
+    if(p<=md)return md>mn?0.5*(p-mn)/(md-mn):0;
+    return mx>md?0.5+0.5*(p-md)/(mx-md):1;}
+  function colorFor(p,anchors){var t=scaleT(Math.round(p),anchors);
+    return "hsl("+Math.round((1-t)*122)+",72%,50%)";}
 
   // ---- Sun maths: 1:1 port of the app's SunMath.swift (NOAA), verified
   // against the compiled Swift to 1e-13 degrees. A venue is in the sun when
@@ -585,7 +608,7 @@
     CURRENCIES.forEach(function(c){var o=document.createElement("option");o.value=c;o.textContent=c+" ("+(SYM[c]||c)+")";$("fCur").appendChild(o);});
 
     $("modeSeg").addEventListener("click",function(e){var btn=e.target.closest("button");if(!btn)return;mode=btn.dataset.mode;
-      [].forEach.call(this.children,function(c){c.className=c.dataset.mode===mode?"on":"";});$("sizes").className=mode==="prices"?"sizes":"sizes hide";$("legend").style.display=mode==="prices"?"":"none";
+      [].forEach.call(this.children,function(c){c.className=c.dataset.mode===mode?"on":"";});$("filterBtn").style.display=mode==="prices"?"":"none";if(mode!=="prices")$("sizes").className="sizes hide";syncFilterBtn();$("legend").style.display=mode==="prices"?"":"none";
       $("sunbar").style.display=mode==="sun"?"block":"none";
       syncAddBtn();
       if(mode==="sun")fetchSunForView();
@@ -636,9 +659,10 @@
   }
   function clearPins(){if(layerAnn.length)map.removeAnnotations(layerAnn);layerAnn=[];annById={};}
 
-  function popupBeer(r,cheap){var pct=r.price/cheap,v=pct<1.05?"Cheapest around":pct<1.25?"Cheap":pct<1.6?"About average":"On the pricey side";
+  function popupBeer(r,anchors){var t=scaleT(Math.round(r.price),anchors),
+      v=t<=0.02?"Cheapest around":t<0.35?"Cheap for the area":t<0.65?"About average":t<0.98?"On the pricey side":"Top of the range";
     var rep=r.report_count==1?"1 report":(r.report_count+" reports");
-    return '<div class="sub">'+esc(servingLabel(r.serving))+' · '+esc(rep)+'</div><h3>'+esc(r.venue_name)+'</h3><div class="big" style="color:'+colorFor(r.price,cheap)+'">'+fmt(r.price,r.currency)+'</div><div class="note">'+v+'</div>'
+    return '<div class="sub">'+esc(servingLabel(r.serving))+' · '+esc(rep)+'</div><h3>'+esc(r.venue_name)+'</h3><div class="big" style="color:'+colorFor(r.price,anchors)+'">'+fmt(r.price,r.currency)+'</div><div class="note">'+v+'</div>'
       +outdoorLine(r.outdoor,r.venue_id);}
   // true -> bright yes, false -> muted no + a report link, null -> just the
   // report link: an unchecked bar must never read as terrace-less, and the
@@ -688,9 +712,22 @@
         // Tapping the active size releases the filter back to All.
         serving=(serving===s[0]&&s[0]!=="all")?"all":s[0];
         [].forEach.call(box.children,function(c){c.className=c.dataset.serving===serving?"on":"";});
+        $("sizes").className="sizes hide";syncFilterBtn();
         render();renderList();};
       box.appendChild(b);});
   }
+
+  // Single FILTER pill — collapsed face of the size chips. Names the active
+  // size so the filter can't hide its own state.
+  function syncFilterBtn(){var b=$("filterBtn"),open=$("sizes").className==="sizes";
+    var lbl=serving==="all"?"Filter":"Filter · "+(SERVINGS.filter(function(s){return s[0]===serving;})[0]||["",serving])[1];
+    b.textContent="⚙ "+lbl+(open?" ▴":" ▾");
+    b.classList.toggle("primary",serving!=="all");}
+  $("filterBtn").onclick=function(){var el=$("sizes");
+    el.className=el.className==="sizes"?"sizes hide":"sizes";
+    if(el.className==="sizes")rebuildSizeChips();
+    syncFilterBtn();};
+  syncFilterBtn();
 
   // ---- Country browser: countries expand into their most useful cities
   // (priced bars + terraces first), and the search reaches ANY city on the
@@ -820,8 +857,8 @@
     if(mode==="prices"){$("legend").style.display="";
       displayRows(serving).forEach(function(r){
         makePin(new mapkit.Coordinate(r.lat,r.lon),
-          '<span class="pill" style="background:'+colorFor(r.price,localCheapest(r,beerData))+'">'+fmt(r.price,r.currency)+'</span>',
-          function(){return popupBeer(r,localCheapest(r,beerData));},r.venue_id,"beer");});
+          '<span class="pill" style="background:'+colorFor(r.price,localAnchors(r,beerData))+'">'+fmt(r.price,r.currency)+'</span>',
+          function(){return popupBeer(r,localAnchors(r,beerData));},r.venue_id,"beer");});
       var n=Object.keys(annById).length;countEl.textContent=n+(n===1?" bar":" bars");
     }else{$("legend").style.display="none";
       dealData.forEach(function(d){var h=d.image_url?'<img class="art" src="'+esc(d.image_url)+'" alt="" />':'<div class="dot">🍺</div>';makePin(new mapkit.Coordinate(d.lat,d.lon),h,popupDeal(d));});
@@ -849,8 +886,9 @@
     $("drawerTitle").textContent="Cheapest "+servingLabel(serving)+" in view";
     var host=$("rows");host.innerHTML="";
     if(!rows.length){host.innerHTML='<div class="empty">'+(q?"No bars match here.":"No "+servingLabel(serving)+" prices in view — zoom out or pan.")+'</div>';return;}
-    rows.forEach(function(r){var cheap=localCheapest(r,beerData);var el=document.createElement("div");el.className="row";
-      el.innerHTML='<span class="rp" style="background:'+colorFor(r.price,cheap)+'">'+fmt(r.price,r.currency)+'</span><div><div class="rn">'+esc(r.venue_name)+'</div><div class="rl">'+esc(servingLabel(r.serving))+' · '+r.report_count+' rep</div></div>';
+    rows=rows.slice(0,100);
+    rows.forEach(function(r){var anchors=localAnchors(r,beerData);var el=document.createElement("div");el.className="row";
+      el.innerHTML='<span class="rp" style="background:'+colorFor(r.price,anchors)+'">'+fmt(r.price,r.currency)+'</span><div><div class="rn">'+esc(r.venue_name)+'</div><div class="rl">'+esc(servingLabel(r.serving))+' · '+r.report_count+' rep</div></div>';
       el.onclick=function(){if(mode!=="prices"){$("modeSeg").querySelector('[data-mode="prices"]').click();}
         map.setRegionAnimated(new mapkit.CoordinateRegion(new mapkit.Coordinate(r.lat,r.lon),new mapkit.CoordinateSpan(0.02,0.02)));
         var a=annById[r.venue_id];if(a)a.selected=true;$("drawer").classList.remove("open");};
