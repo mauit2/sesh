@@ -562,6 +562,42 @@ final class VenueService: ObservableObject {
         (try? await supabase.rpc("country_index").execute().value) ?? []
     }
 
+    struct CityStat: Decodable, Identifiable {
+        let city: String
+        let venues: Int
+        let priced: Int
+        let outdoor: Int
+        let minLat: Double, maxLat: Double, minLon: Double, maxLon: Double
+        var id: String { city }
+        /// "Milan, Italy" → "Milan" for display; grouping stays exact.
+        var displayName: String { city.split(separator: ",").first.map(String.init) ?? city }
+        enum CodingKeys: String, CodingKey {
+            case city, venues, priced, outdoor
+            case minLat = "min_lat", maxLat = "max_lat"
+            case minLon = "min_lon", maxLon = "max_lon"
+        }
+    }
+
+    /// A country's cities, most useful data first (migration 103).
+    func loadCityIndex(_ country: String) async -> [CityStat] {
+        struct P: Encodable { let p_country: String }
+        return (try? await supabase.rpc("city_index", params: P(p_country: country))
+            .execute().value) ?? []
+    }
+
+    struct NearbyBars: Decodable {
+        let venues: Int; let priced: Int; let outdoor: Int
+    }
+
+    /// How populated a coordinate is — the worldwide city search's honesty
+    /// check ("12 bars here" vs "no bars yet").
+    func barsNear(lat: Double, lon: Double) async -> NearbyBars? {
+        struct P: Encodable { let p_lat: Double; let p_lon: Double }
+        let rows: [NearbyBars]? = try? await supabase
+            .rpc("bars_near", params: P(p_lat: lat, p_lon: lon)).execute().value
+        return rows?.first
+    }
+
     /// Swap the whole catalog to another country. Hard swap on purpose —
     /// the point of scoping is that the old country's 2600 venues do NOT
     /// stay resident when you browse Italy.
@@ -1995,13 +2031,29 @@ private struct OffersMapView: View {
             .presentationBackground(Color.ink)
         }
         .sheet(isPresented: $countryPickerOpen) {
-            CountryPickerSheet(venues: venues) { stat in
-                countryPickerOpen = false
-                Task {
-                    await venues.switchCountry(stat.country)
-                    fly(to: stat)
-                }
-            }
+            CountryPickerSheet(
+                venues: venues,
+                onPickCountry: { stat in
+                    countryPickerOpen = false
+                    Task {
+                        await venues.switchCountry(stat.country)
+                        fly(to: stat)
+                    }
+                },
+                onPickCity: { iso, city in
+                    countryPickerOpen = false
+                    Task {
+                        await venues.switchCountry(iso)
+                        flyToCity(city)
+                    }
+                },
+                onPickPlace: { hit in
+                    countryPickerOpen = false
+                    Task {
+                        if let iso = hit.iso { await venues.switchCountry(iso) }
+                        flyToPlace(lat: hit.lat, lon: hit.lon)
+                    }
+                })
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
             .presentationBackground(Color.ink)
@@ -2428,6 +2480,36 @@ private struct OffersMapView: View {
         // data's longitudinal spread (log2(360/span)), clamped city↔globe.
         let lonSpan = (stat.maxLon - stat.minLon) + lonPad * 2
         sunFocusZoom = max(3.2, min(8.5, log2(360.0 / max(lonSpan, 0.05)) - 0.6))
+        sunFocus = center
+    }
+
+    /// Frame one city from its data bounds; sensible floor so a two-bar
+    /// town doesn't zoom to rooftop level.
+    private func flyToCity(_ c: VenueService.CityStat) {
+        let latSpan = max(0.05, (c.maxLat - c.minLat) * 1.5)
+        let lonSpan = max(0.07, (c.maxLon - c.minLon) * 1.5)
+        let center = CLLocationCoordinate2D(
+            latitude: (c.minLat + c.maxLat) / 2,
+            longitude: (c.minLon + c.maxLon) / 2)
+        withAnimation(MapLocate.animation) {
+            camera = .region(MKCoordinateRegion(
+                center: center,
+                span: MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan)))
+        }
+        sunFocusZoom = 12.5
+        sunFocus = center
+    }
+
+    /// Fly to any coordinate at city scale — the worldwide search's landing,
+    /// including places we hold nothing for yet.
+    private func flyToPlace(lat: Double, lon: Double) {
+        let center = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        withAnimation(MapLocate.animation) {
+            camera = .region(MKCoordinateRegion(
+                center: center,
+                span: MKCoordinateSpan(latitudeDelta: 0.09, longitudeDelta: 0.12)))
+        }
+        sunFocusZoom = 12.5
         sunFocus = center
     }
 
@@ -4447,15 +4529,76 @@ func countryFlagEmoji(_ iso: String) -> String {
 
 // MARK: - Country browser
 
-/// Every country the catalog holds, with what's there — beer prices and
-/// terraces — so "is my city on this yet?" has an answer before you fly.
+/// Worldwide CITY search for the country browser — MapKit geocodes any city
+/// name on device; the server is only asked how populated the spot is.
+@MainActor
+final class CitySearch: ObservableObject {
+    struct Hit: Identifiable, Equatable {
+        let id = UUID()
+        let name: String
+        let detail: String
+        let iso: String?
+        let lat: Double
+        let lon: Double
+    }
+    @Published private(set) var hits: [Hit] = []
+    @Published private(set) var searching = false
+    private var task: Task<Void, Never>?
+
+    func search(_ query: String) {
+        task?.cancel()
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard q.count >= 2 else { hits = []; searching = false; return }
+        searching = true
+        task = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            let req = MKLocalSearch.Request()
+            req.naturalLanguageQuery = q
+            req.resultTypes = .address
+            let response = try? await MKLocalSearch(request: req).start()
+            guard !Task.isCancelled else { return }
+            var seen = Set<String>()
+            hits = (response?.mapItems ?? []).compactMap { item in
+                let pm = item.placemark
+                // City-level only: keep placemarks that name a locality and
+                // carry no street — a search for "Reykjavik" must not offer
+                // Reykjaviksvägen 4.
+                guard pm.thoroughfare == nil,
+                      let city = pm.locality ?? pm.name else { return nil }
+                let key = "\(city)|\(pm.isoCountryCode ?? "")"
+                guard seen.insert(key).inserted else { return nil }
+                return Hit(name: city,
+                           detail: pm.country ?? pm.administrativeArea ?? "",
+                           iso: pm.isoCountryCode,
+                           lat: pm.coordinate.latitude,
+                           lon: pm.coordinate.longitude)
+            }
+            searching = false
+        }
+    }
+}
+
+/// Every country the catalog holds — tap one to expand it into "the whole
+/// country" plus its most useful cities (priced bars + terraces first). The
+/// search field also reaches ANY city on the planet: places we hold nothing
+/// for are still flyable, so the user can go there and put it on the map.
 struct CountryPickerSheet: View {
     @ObservedObject var venues: VenueService
-    let onPick: (VenueService.CountryStat) -> Void
+    let onPickCountry: (VenueService.CountryStat) -> Void
+    let onPickCity: (String, VenueService.CityStat) -> Void
+    let onPickPlace: (CitySearch.Hit) -> Void
 
     @State private var stats: [VenueService.CountryStat] = []
     @State private var loading = true
     @State private var query = ""
+    /// Which country row is expanded into its city list.
+    @State private var expanded: String?
+    @State private var cities: [String: [VenueService.CityStat]] = [:]
+    @State private var cityLoading: String?
+    @StateObject private var citySearch = CitySearch()
+    /// bars_near results per search hit, filled lazily per row.
+    @State private var probes: [UUID: VenueService.NearbyBars] = [:]
 
     private var rows: [VenueService.CountryStat] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -4470,11 +4613,11 @@ struct CountryPickerSheet: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("PICK A COUNTRY")
+                Text("PICK A PLACE")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .tracking(2.4).foregroundStyle(Color.bronze)
                     .padding(.top, 20)
-                Text("The maps load one country at a time — lighter on your phone, faster to draw.")
+                Text("Tap a country for its best cities, or search any city on the planet — empty ones included.")
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.5))
 
@@ -4483,23 +4626,63 @@ struct CountryPickerSheet: View {
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(Color.cream.opacity(0.4))
                     TextField("", text: $query,
-                              prompt: Text("Search countries")
+                              prompt: Text("Search a country or any city")
                                   .foregroundStyle(Color.cream.opacity(0.4)))
                         .font(.system(size: 14, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.cream)
                         .autocorrectionDisabled()
+                        .onChange(of: query) { _, q in citySearch.search(q) }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.cream.opacity(0.05)))
 
+                if !query.isEmpty, !citySearch.hits.isEmpty {
+                    Text("CITIES, ANYWHERE")
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .tracking(2.2).foregroundStyle(Color.bronze)
+                        .padding(.top, 6)
+                    ForEach(citySearch.hits) { hit in
+                        Button { onPickPlace(hit) } label: { placeRow(hit) }
+                            .buttonStyle(PressScaleStyle())
+                            .task(id: hit.id) {
+                                guard probes[hit.id] == nil else { return }
+                                probes[hit.id] = await venues.barsNear(lat: hit.lat, lon: hit.lon)
+                            }
+                    }
+                }
+
                 if loading {
                     HStack { Spacer(); ProgressView().tint(Color.bronze); Spacer() }
                         .padding(.top, 30)
                 } else {
+                    if !query.isEmpty, !citySearch.hits.isEmpty, !rows.isEmpty {
+                        Text("COUNTRIES ON THE MAP")
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .tracking(2.2).foregroundStyle(Color.bronze)
+                            .padding(.top, 6)
+                    }
                     ForEach(rows) { stat in
-                        Button { onPick(stat) } label: { row(stat) }
+                        VStack(spacing: 6) {
+                            Button {
+                                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                                    expanded = expanded == stat.country ? nil : stat.country
+                                }
+                                if cities[stat.country] == nil {
+                                    cityLoading = stat.country
+                                    Task {
+                                        cities[stat.country] = await venues.loadCityIndex(stat.country)
+                                        cityLoading = nil
+                                    }
+                                }
+                            } label: { countryRow(stat) }
                             .buttonStyle(PressScaleStyle())
+
+                            if expanded == stat.country {
+                                countryDetail(stat)
+                                    .transition(.opacity.combined(with: .move(edge: .top)))
+                            }
+                        }
                     }
                 }
             }
@@ -4513,7 +4696,7 @@ struct CountryPickerSheet: View {
         }
     }
 
-    private func row(_ stat: VenueService.CountryStat) -> some View {
+    private func countryRow(_ stat: VenueService.CountryStat) -> some View {
         let active = stat.country == venues.activeCountry
         return HStack(spacing: 12) {
             Text(countryFlagEmoji(stat.country)).font(.system(size: 26))
@@ -4530,11 +4713,11 @@ struct CountryPickerSheet: View {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(Color.whiskey)
-            } else {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.cream.opacity(0.3))
             }
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color.cream.opacity(0.35))
+                .rotationEffect(.degrees(expanded == stat.country ? 180 : 0))
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -4542,5 +4725,87 @@ struct CountryPickerSheet: View {
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
             .strokeBorder(active ? Color.whiskey.opacity(0.5) : Color.cream.opacity(0.08),
                           lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func countryDetail(_ stat: VenueService.CountryStat) -> some View {
+        VStack(spacing: 5) {
+            Button { onPickCountry(stat) } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "map")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.whiskey)
+                    Text("Entire country")
+                        .font(.system(size: 13.5, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    Spacer()
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.cream.opacity(0.4))
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(Color.whiskey.opacity(0.10)))
+            }
+            .buttonStyle(PressScaleStyle())
+
+            if cityLoading == stat.country {
+                ProgressView().tint(Color.bronze).padding(.vertical, 8)
+            }
+            ForEach(cities[stat.country] ?? []) { c in
+                Button { onPickCity(stat.country, c) } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "building.2")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.bronze)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(c.displayName)
+                                .font(.system(size: 13.5, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                            Text("\(c.venues) bars · \(c.priced) with prices · \(c.outdoor) terraces")
+                                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.5))
+                        }
+                        Spacer()
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Color.cream.opacity(0.35))
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .fill(Color.cream.opacity(0.03)))
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+        }
+        .padding(.leading, 10)
+    }
+
+    private func placeRow(_ hit: CitySearch.Hit) -> some View {
+        let probe = probes[hit.id]
+        return HStack(spacing: 12) {
+            Text(hit.iso.map(countryFlagEmoji) ?? "📍").font(.system(size: 22))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(hit.name)
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                Text(probe.map { p in
+                        p.venues == 0
+                            ? "\(hit.detail) · No bars yet — put it on the map"
+                            : "\(hit.detail) · \(p.venues) bars · \(p.priced) with prices"
+                     } ?? hit.detail)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.55))
+            }
+            Spacer()
+            Image(systemName: "paperplane.fill")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color.whiskey.opacity(0.8))
+        }
+        .padding(.horizontal, 14).padding(.vertical, 11)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(Color.cream.opacity(0.035)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
     }
 }

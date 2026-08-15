@@ -55,6 +55,13 @@
   .crow .cflag{font-size:20px;}
   .crow .cname{font-weight:700;font-size:13px;}
   .crow .cmeta{font-size:10.5px;opacity:.55;}
+  .cpanel-search{width:100%;box-sizing:border-box;margin:0 0 10px;padding:9px 12px;border-radius:11px;
+    border:1px solid var(--line);background:rgba(243,233,216,.05);color:var(--cream);
+    font:500 13px/1.2 inherit;outline:none;}
+  .crowsm{margin-left:14px;padding:7px 10px;background:rgba(243,233,216,.02);}
+  .crowsm .cname{font-size:12px;}
+  .crowsm .cmeta{font-size:10px;}
+  .crow.whole{border-color:rgba(232,132,60,.35);background:rgba(232,132,60,.07);margin-left:14px;padding:7px 10px;}
   .sizes{display:flex;gap:6px;flex-wrap:wrap;width:100%;}
   .sizes button{font-weight:800;font-size:11px;color:var(--cream);opacity:.85;background:rgba(11,10,8,.8);border:1px solid var(--line);padding:6px 11px;border-radius:999px;}
   .sizes button.on{background:var(--whiskey);color:var(--ink);border-color:var(--whiskey);opacity:1;}
@@ -249,8 +256,10 @@
 </header>
 
 <div class="cpanel" id="cpanel" hidden>
-  <div class="cpanel-head">PICK A COUNTRY <button id="cpanelX">✕</button></div>
-  <div class="cpanel-sub">Fly to any country we hold beer prices for.</div>
+  <div class="cpanel-head">PICK A PLACE <button id="cpanelX">✕</button></div>
+  <div class="cpanel-sub">Tap a country for its best cities, or search any city on the planet.</div>
+  <input class="cpanel-search" id="cpanelSearch" type="text" placeholder="Search a country or any city" autocomplete="off" />
+  <div id="cpanelPlaces"></div>
   <div id="cpanelList"></div>
 </div>
 
@@ -593,6 +602,11 @@
     rpc("country_index").then(function(cs){countryStats=cs;renderCountryPanel();}).catch(function(){});
     $("countryBtn").onclick=function(){var p=$("cpanel");p.hidden=!p.hidden;};
     $("cpanelX").onclick=function(){$("cpanel").hidden=true;};
+    $("cpanelSearch").addEventListener("input",function(){
+      renderCountryPanel();
+      clearTimeout(placeTimer);var q=this.value.trim();
+      placeTimer=setTimeout(function(){searchPlaces(q);},300);
+    });
     map.addEventListener("region-change-end",function(){if(mode==="prices")rebuildSizeChips();});
   }
 
@@ -658,20 +672,56 @@
       box.appendChild(b);});
   }
 
-  // ---- Country browser: every country we hold data for, with counts,
-  // and a fly-to that frames the whole country (same as the app).
-  var countryStats=[];
+  // ---- Country browser: countries expand into their most useful cities
+  // (priced bars + terraces first), and the search reaches ANY city on the
+  // planet — empty ones included, so people can fly there and populate it.
+  var countryStats=[],cityCache={},expandedCountry=null,placeProbe={};
   function flagEmoji(iso){return iso.toUpperCase().replace(/./g,function(c){return String.fromCodePoint(127397+c.charCodeAt(0));});}
   function countryName(iso){try{return new Intl.DisplayNames([navigator.language||"en"],{type:"region"}).of(iso)||iso;}catch(e){return iso;}}
+  function cityDisplay(c){return (c.split(",")[0]||c).trim();}
+
   function renderCountryPanel(){
+    var q=($("cpanelSearch").value||"").trim().toLowerCase();
     var box=$("cpanelList");box.innerHTML="";
-    countryStats.forEach(function(c){
-      var b=document.createElement("button");b.className="crow"+(c._on?" on":"");
-      b.innerHTML='<span class="cflag">'+flagEmoji(c.country)+'</span>'
-        +'<span><div class="cname">'+esc(countryName(c.country))+'</div>'
-        +'<div class="cmeta">'+c.venues+' bars · '+c.priced+' with prices · '+c.outdoor+' terraces</div></span>';
-      b.onclick=function(){flyToCountry(c);};
-      box.appendChild(b);});
+    countryStats.filter(function(c){return !q||c.country.toLowerCase().indexOf(q)>=0
+        ||countryName(c.country).toLowerCase().indexOf(q)>=0;})
+      .forEach(function(c){
+        var b=document.createElement("button");b.className="crow"+(c._on?" on":"");
+        b.innerHTML='<span class="cflag">'+flagEmoji(c.country)+'</span>'
+          +'<span><div class="cname">'+esc(countryName(c.country))+'</div>'
+          +'<div class="cmeta">'+c.venues+' bars · '+c.priced+' with prices · '+c.outdoor+' terraces</div></span>';
+        b.onclick=function(){toggleCountry(c);};
+        box.appendChild(b);
+        if(expandedCountry===c.country){
+          var whole=document.createElement("button");whole.className="crow whole";
+          whole.innerHTML='<span class="cflag">🗺️</span><span><div class="cname">Entire country</div></span>';
+          whole.onclick=function(){flyToCountry(c);};
+          box.appendChild(whole);
+          (cityCache[c.country]||[]).forEach(function(ct){
+            var cb=document.createElement("button");cb.className="crow crowsm";
+            cb.innerHTML='<span class="cflag">🏙️</span>'
+              +'<span><div class="cname">'+esc(cityDisplay(ct.city))+'</div>'
+              +'<div class="cmeta">'+ct.venues+' bars · '+ct.priced+' with prices · '+ct.outdoor+' terraces</div></span>';
+            cb.onclick=function(){flyToCity(ct);};
+            box.appendChild(cb);
+          });
+        }
+      });
+  }
+  function toggleCountry(c){
+    expandedCountry=expandedCountry===c.country?null:c.country;
+    if(expandedCountry&&!cityCache[c.country]){
+      rpc("city_index",{p_country:c.country}).then(function(cs){cityCache[c.country]=cs;renderCountryPanel();}).catch(function(){});
+    }
+    renderCountryPanel();
+  }
+  function adoptServingIn(minLat,maxLat,minLon,maxLon){
+    var inBox=beerData.filter(function(r){return r.lat>=minLat&&r.lat<=maxLat&&r.lon>=minLon&&r.lon<=maxLon&&r.serving!=="unknown";});
+    if(!inBox.some(function(r){return r.serving===serving;})&&inBox.length){
+      var tally={};inBox.forEach(function(r){tally[r.serving]=(tally[r.serving]||0)+1;});
+      serving=Object.keys(tally).sort(function(a,b){return tally[b]-tally[a];})[0];
+    }
+    setTimeout(function(){rebuildSizeChips();render();renderList();},50);
   }
   function flyToCountry(c){
     countryStats.forEach(function(x){x._on=false;});c._on=true;
@@ -680,18 +730,55 @@
     map.setRegionAnimated(new mapkit.CoordinateRegion(
       new mapkit.Coordinate((c.min_lat+c.max_lat)/2,(c.min_lon+c.max_lon)/2),
       new mapkit.CoordinateSpan((c.max_lat-c.min_lat)+latPad*2,(c.max_lon-c.min_lon)+lonPad*2)));
-    // Adopt the country's most common size, like the app does — unless the
-    // current chip already has data there.
-    var inBox=beerData.filter(function(r){return r.lat>=c.min_lat-latPad&&r.lat<=c.max_lat+latPad
-      &&r.lon>=c.min_lon-lonPad&&r.lon<=c.max_lon+lonPad&&r.serving!=="unknown";});
-    if(!inBox.some(function(r){return r.serving===serving;})&&inBox.length){
-      var tally={};inBox.forEach(function(r){tally[r.serving]=(tally[r.serving]||0)+1;});
-      serving=Object.keys(tally).sort(function(a,b){return tally[b]-tally[a];})[0];
-    }
-    setTimeout(function(){rebuildSizeChips();render();renderList();},50);
+    adoptServingIn(c.min_lat-latPad,c.max_lat+latPad,c.min_lon-lonPad,c.max_lon+lonPad);
+  }
+  function flyToCity(ct){
+    $("cpanel").hidden=true;
+    var latSpan=Math.max(.05,(ct.max_lat-ct.min_lat)*1.5),lonSpan=Math.max(.07,(ct.max_lon-ct.min_lon)*1.5);
+    map.setRegionAnimated(new mapkit.CoordinateRegion(
+      new mapkit.Coordinate((ct.min_lat+ct.max_lat)/2,(ct.min_lon+ct.max_lon)/2),
+      new mapkit.CoordinateSpan(latSpan,lonSpan)));
+    adoptServingIn(ct.min_lat-latSpan,ct.max_lat+latSpan,ct.min_lon-lonSpan,ct.max_lon+lonSpan);
+  }
+  // Any city on the planet, via MapKit's own geocoder.
+  var placeTimer=null;
+  function searchPlaces(q){
+    var box=$("cpanelPlaces");
+    if(q.length<2){box.innerHTML="";return;}
+    new mapkit.Geocoder().lookup(q,function(err,data){
+      if(err){box.innerHTML="";return;}
+      var seen={},hits=(data.results||[]).filter(function(r){
+        var pm=r;return pm.coordinate&&(pm.locality||pm.name);
+      }).slice(0,4);
+      box.innerHTML="";
+      hits.forEach(function(pm,ix){
+        var nm=pm.locality||pm.name,cc=(pm.countryCode||"").toUpperCase();
+        var key=nm+"|"+cc;if(seen[key])return;seen[key]=1;
+        var b=document.createElement("button");b.className="crow";
+        var metaId="pmeta"+ix;
+        b.innerHTML='<span class="cflag">'+(cc?flagEmoji(cc):"📍")+'</span>'
+          +'<span><div class="cname">'+esc(nm)+'</div>'
+          +'<div class="cmeta" id="'+metaId+'">'+esc(pm.country||"")+'</div></span>';
+        b.onclick=function(){
+          $("cpanel").hidden=true;
+          map.setRegionAnimated(new mapkit.CoordinateRegion(
+            new mapkit.Coordinate(pm.coordinate.latitude,pm.coordinate.longitude),
+            new mapkit.CoordinateSpan(.09,.12)));
+          setTimeout(function(){rebuildSizeChips();render();renderList();},50);
+        };
+        box.appendChild(b);
+        rpc("bars_near",{p_lat:pm.coordinate.latitude,p_lon:pm.coordinate.longitude}).then(function(rows){
+          var n=rows&&rows[0]?rows[0]:null,el=document.getElementById(metaId);
+          if(!n||!el)return;
+          el.textContent=(pm.country||"")+(n.venues>0
+            ?" · "+n.venues+" bars · "+n.priced+" with prices"
+            :" · No bars yet — put it on the map");
+        }).catch(function(){});
+      });
+    });
   }
 
-  function render(){
+    function render(){
     clearPins();
     if(mode==="sun"){
       $("legend").style.display="none";
