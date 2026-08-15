@@ -23,6 +23,13 @@ enum BeerPriceScale {
     static func color(_ price: Double, cheapest: Double) -> Color {
         Color(hue: (1 - t(price, cheapest: cheapest)) * 0.34, saturation: 0.78, brightness: 0.80)
     }
+    /// Colour for a price the user sees ROUNDED. Judging the exact median
+    /// while showing the rounded label painted two "$5" pins different
+    /// colours whenever their true medians differed by cents — the colour
+    /// must grade the number on the pin, nothing else.
+    static func displayColor(_ price: Double, cheapest: Double) -> Color {
+        color(price.rounded(), cheapest: cheapest.rounded())
+    }
     static func verdict(_ price: Double, cheapest: Double) -> String {
         let tt = t(price, cheapest: cheapest)
         if tt < 0.05 { return "Cheapest around" }
@@ -93,7 +100,7 @@ struct BeerPricePin: View {
             .foregroundStyle(Color.black.opacity(0.85))
             .padding(.horizontal, selected ? 12 : 9)
             .padding(.vertical, selected ? 6 : 4)
-            .background(Capsule().fill(BeerPriceScale.color(price.price, cheapest: cheapest)))
+            .background(Capsule().fill(BeerPriceScale.displayColor(price.price, cheapest: cheapest)))
             .overlay(Capsule().strokeBorder(Color.white.opacity(0.65), lineWidth: 1.5))
             .shadow(color: .black.opacity(0.45), radius: selected ? 9 : 4, y: 2)
             .scaleEffect(selected ? 1.08 : 1)
@@ -181,7 +188,7 @@ struct BeerPriceDetailCard: View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(p.priceLabel)
                 .font(.system(size: 42, weight: .black, design: .rounded))
-                .foregroundStyle(BeerPriceScale.color(p.price, cheapest: cheapest(p)))
+                .foregroundStyle(BeerPriceScale.displayColor(p.price, cheapest: cheapest(p)))
             VStack(alignment: .leading, spacing: 2) {
                 Text(p.servingSize.longLabel.uppercased())
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -219,7 +226,7 @@ struct BeerPriceDetailCard: View {
             ForEach(all) { sp in
                 Button { onPickServing(sp.servingSize) } label: {
                     HStack(spacing: 10) {
-                        Circle().fill(BeerPriceScale.color(sp.price, cheapest: cheapest(sp))).frame(width: 10, height: 10)
+                        Circle().fill(BeerPriceScale.displayColor(sp.price, cheapest: cheapest(sp))).frame(width: 10, height: 10)
                         Text(sp.servingLabel)
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.cream)
@@ -656,7 +663,7 @@ struct BeerPriceListSheet: View {
                 .foregroundStyle(Color.black.opacity(0.85))
                 .frame(minWidth: 56)
                 .padding(.horizontal, 8).padding(.vertical, 7)
-                .background(Capsule().fill(BeerPriceScale.color(p.price, cheapest: cheapest)))
+                .background(Capsule().fill(BeerPriceScale.displayColor(p.price, cheapest: cheapest)))
             VStack(alignment: .leading, spacing: 2) {
                 Text(v.name).font(.system(size: 15, weight: .heavy, design: .rounded))
                     .foregroundStyle(Color.cream).lineLimit(1)

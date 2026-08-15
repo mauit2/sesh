@@ -372,7 +372,10 @@
     if(q.currency!==row.currency)continue;
     if(q.serving!==serving&&q.serving!=="unknown")continue;
     if(hav(row.lat,row.lon,q.lat,q.lon)<=200000)best=Math.min(best,q.price);}return best;}
-  function colorFor(p,cheap){var t=Math.min(1,Math.max(0,p/cheap-1));return "hsl("+Math.round((1-t)*122)+",72%,50%)";}
+  // Grade the ROUNDED price — the number on the pill — so two pills that
+  // read the same can never wear different colours.
+  function colorFor(p,cheap){p=Math.round(p);cheap=Math.round(cheap)||1;
+    var t=Math.min(1,Math.max(0,p/cheap-1));return "hsl("+Math.round((1-t)*122)+",72%,50%)";}
 
   // ---- Sun maths: 1:1 port of the app's SunMath.swift (NOAA), verified
   // against the compiled Swift to 1e-13 degrees. A venue is in the sun when
