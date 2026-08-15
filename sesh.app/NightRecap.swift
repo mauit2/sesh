@@ -3619,6 +3619,8 @@ private struct StopNoteEditor: View {
     @State private var text: String
     let onCommit: (String) -> Void
     @FocusState private var focused: Bool
+    /// Scroll anchor for the focus announcement below.
+    @State private var editorID = UUID()
 
     init(note: String?, onCommit: @escaping (String) -> Void) {
         _text = State(initialValue: note ?? "")
@@ -3642,8 +3644,14 @@ private struct StopNoteEditor: View {
         .padding(.horizontal, 12).padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.cream.opacity(0.05)))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.bronze.opacity(0.2), lineWidth: 1))
+        .id(editorID)
         .onChange(of: focused) { _, isFocused in
-            if !isFocused { onCommit(text) }
+            if isFocused {
+                NotificationCenter.default.post(name: .sejdelScrollToFocusedField,
+                                                object: editorID)
+            } else {
+                onCommit(text)
+            }
         }
     }
 }

@@ -5140,6 +5140,14 @@ private struct DealsPromosModifier<Cover: View>: ViewModifier {
 }
 
 private struct SessionView: View {
+    /// Measured tab bar height — reserved as a bottom inset while the bar
+    /// itself is overlay-pinned behind the keyboard.
+    @State private var tabBarHeight: CGFloat = 84
+    /// True while the keyboard is up. The tab-bar spacer collapses then —
+    /// the keyboard already covers the bar, and keeping the spacer would
+    /// stack a dead gap on top of the keyboard inset (visible under the
+    /// chat composer).
+    @State private var keyboardUp = false
     let profile: Profile
     @ObservedObject var auth: AuthService
     /// In-app invite inbox, owned by RootView so the polling loop is
@@ -6018,19 +6026,28 @@ private struct SessionView: View {
                 // page feel like the same animation.
                 .animation(.spring(response: 0.4, dampingFraction: 0.82), value: tab)
 
-                BottomTabBar(tab: $tab, liveActive: liveActive,
-                             friendsLive: friendsPulse.pulses.contains { $0.live },
-                             newOnNightline: liveStories.hasUnseenNightline,
-                             unseenCount: liveStories.unseenNightlineCount,
-                             eventInvites: eventsService.pendingCount(for: profile.id),
-                             dmUnread: dm.totalUnread)
-                    // Stay pinned at the bottom behind the keyboard rather
-                    // than floating up above it (chat composer).
-                    .ignoresSafeArea(.keyboard, edges: .bottom)
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                // The bar's footprint — the bar itself is pinned at the
+                // root below so the keyboard covers it instead of lifting
+                // it. On CHATS it collapses while the keyboard is up so the
+                // composer sits flush on the keyboard; elsewhere it stays,
+                // or the page inset would bounce during the animation.
+                Color.clear.frame(height: (keyboardUp && tab == .chats) ? 0 : tabBarHeight)
+            }
+
             // Switching sections (tap or swipe) drops the keyboard — so
             // leaving a chat mid-typing doesn't strand it open.
             .onChange(of: tab) { _, newTab in handleTabChange(newTab) }
+            // Tap anywhere outside a field, on any screen or sheet, to
+            // drop the keyboard.
+            .onAppear { KeyboardDismissTap.install() }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                withAnimation(.easeOut(duration: 0.25)) { keyboardUp = true }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                withAnimation(.easeOut(duration: 0.25)) { keyboardUp = false }
+            }
             .modifier(DealsPromosModifier(
                 interstitial: $interstitial,
                 dealPromptOpen: $dealPromptOpen,
@@ -6042,6 +6059,15 @@ private struct SessionView: View {
                 },
                 onDecline: { DealsPush.setOptIn(false) }
             ))
+
+            // Pinned bar: a root-level ZStack sibling, NOT an overlay on
+            // the VStack — the VStack shrinks above the keyboard, so
+            // anything anchored to it rides up with the keyboard. This
+            // layer ignores the keyboard and stays planted.
+            pinnedTabBar
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .ignoresSafeArea(.keyboard, edges: .bottom)
+                .zIndex(10)
 
             // Floating invite banner — pinned just below the ModeTopBar.
             // Drops in from the top whenever a new pending invite arrives
@@ -6068,6 +6094,13 @@ private struct SessionView: View {
                 .zIndex(20)
             }
         }
+        // On every tab but CHATS the page layout is FROZEN against the
+        // keyboard: the keyboard slides over the content and nothing
+        // reflows — a focused field is brought into view by scrolling
+        // (see .sejdelScrollToFocusedField), not by squeezing the page.
+        // Counter-animating a squeezed layout always jitters; freezing it
+        // can't. CHATS keeps system avoidance for its composer.
+        .ignoresSafeArea(tab == .chats ? [] : .keyboard, edges: .bottom)
         .animation(.spring(response: 0.45, dampingFraction: 0.82), value: invites.bannerInvites.count)
         // A tapped invite push asks us to open the inbox. Refresh first so
         // the just-arrived invite is present even if the 7s poll hasn't
@@ -6488,6 +6521,22 @@ private struct SessionView: View {
         try? await Task.sleep(nanoseconds: 1_800_000_000)
         maybeShowInterstitial()
         if let loc = location.location { DealsPush.reportLocation(loc) }
+    }
+
+
+    /// The tab bar, pinned to the window bottom. It ignores the keyboard so
+    /// the keyboard slides over it on every tab; text fields stay visible
+    /// through normal scrolling.
+    private var pinnedTabBar: some View {
+        BottomTabBar(tab: $tab, liveActive: liveActive,
+                     friendsLive: friendsPulse.pulses.contains { $0.live },
+                     newOnNightline: liveStories.hasUnseenNightline,
+                     unseenCount: liveStories.unseenNightlineCount,
+                     eventInvites: eventsService.pendingCount(for: profile.id),
+                     dmUnread: dm.totalUnread)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) {
+                tabBarHeight = $0
+            }
     }
 
     private func handleTabChange(_ newTab: TopTab) {
@@ -13192,6 +13241,9 @@ private struct GhostPickerTarget: Identifiable {
 /// stay current without manual refresh. Quick-add tiles live at the bottom
 /// so logging a drink is one tap from the most likely candidates.
 private struct LiveSeshView: View {
+    /// Measured height of the quick-add dock — reserved as scroll inset so
+    /// the overlay-pinned dock never covers content.
+    @State private var quickDockHeight: CGFloat = 150
     @ObservedObject var live: LiveSeshState
     /// Optional group context. When the user is in a group session AND has
     /// hit GO LIVE, this is non-nil and the view becomes a group experience:
@@ -13576,28 +13628,56 @@ private struct LiveSeshView: View {
     var body: some View {
         ZStack {
             AtmosphereBackground(accent: Color.whiskey)
-            ScrollView(showsIndicators: false) {
-                TimelineView(.periodic(from: .now, by: 30)) { context in
-                    content(now: context.date)
+            ScrollViewReader { scrollProxy in
+                ScrollView(showsIndicators: false) {
+                    TimelineView(.periodic(from: .now, by: 30)) { context in
+                        content(now: context.date)
+                    }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    // Reserve the dock's footprint so content scrolls clear
+                    // of it; the dock itself is pinned below the keyboard.
+                    Color.clear.frame(height: quickDockHeight)
+                }
+                // Dragging the content also drops the keyboard.
+                .scrollDismissesKeyboard(.interactively)
+                // The pinned-chrome layout means the page doesn't lift with
+                // the keyboard, so bring a newly focused field up ourselves.
+                .onReceive(NotificationCenter.default.publisher(for: .sejdelScrollToFocusedField)) { note in
+                    guard let id = note.object as? UUID else { return }
+                    // Deferred past the keyboard's own transaction — issued
+                    // in the same turn, the system's zero-delta adjustment
+                    // cancels this scroll and the field stays covered.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
+                            scrollProxy.scrollTo(id, anchor: .center)
+                        }
+                    }
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                quickAddDock
-            }
+
+            // Dock as a root-level sibling (not a ScrollView overlay): the
+            // scroll view shrinks above the keyboard, so an overlay anchored
+            // to it would ride up. This layer stays planted.
+            quickAddDock
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) {
+                    quickDockHeight = $0
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
             // The pace prompt is a real decision about the night's data, so
             // it gets the centre of the screen — scrim, big numbers, and a
-            // live before → after readout while the slider moves.
-            .overlay {
-                if paceCardShown {
-                    ZStack {
-                        Color.black.opacity(0.55).ignoresSafeArea()
-                            .onTapGesture { }   // scrim absorbs taps; decide via buttons
-                        paceCard
-                            .frame(maxWidth: 380)
-                            .padding(.horizontal, 20)
-                    }
-                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            // live before → after readout while the slider moves. Topmost:
+            // its scrim must cover the dock too.
+            if paceCardShown {
+                ZStack {
+                    Color.black.opacity(0.55).ignoresSafeArea()
+                        .onTapGesture { }   // scrim absorbs taps; decide via buttons
+                    paceCard
+                        .frame(maxWidth: 380)
+                        .padding(.horizontal, 20)
                 }
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
         .preferredColorScheme(.dark)
@@ -16201,6 +16281,69 @@ private struct ShareModePicker: View {
     }
 }
 
+
+/// Posted by an inline text field when it gains focus, carrying its view
+/// `.id` — the owning ScrollView scrolls it above the keyboard. Needed
+/// because the pinned-chrome layout keeps pages from lifting, so SwiftUI's
+/// automatic caret-chasing no longer reaches fields low on the page.
+extension Notification.Name {
+    static let sejdelScrollToFocusedField = Notification.Name("sejdel.scrollToFocusedField")
+}
+
+/// Drop the keyboard from anywhere — tapping outside a text field is
+/// always an exit.
+@MainActor
+func endTextEditing() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                    to: nil, from: nil, for: nil)
+}
+
+/// One window-level tap recogniser that dismisses the keyboard on any tap
+/// outside a text input — every page, every sheet, no per-view wiring.
+/// cancelsTouchesInView stays false so buttons underneath still fire.
+enum KeyboardDismissTap {
+    private static var installed = false
+    private static let delegate = DismissTapDelegate()
+
+    @MainActor static func install() {
+        guard !installed,
+              let window = UIApplication.shared.connectedScenes
+                  .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
+        else { return }
+        let tap = UITapGestureRecognizer(target: delegate,
+                                         action: #selector(DismissTapDelegate.tapped(_:)))
+        tap.cancelsTouchesInView = false
+        tap.delegate = delegate
+        window.addGestureRecognizer(tap)
+        installed = true
+    }
+}
+
+final class DismissTapDelegate: NSObject, UIGestureRecognizerDelegate {
+    /// Dismiss only when the tap lands OUTSIDE the focused field. Geometry,
+    /// not class checks — SwiftUI's text fields aren't reliably UITextField
+    /// subclasses, and a class miss here would resign focus the instant a
+    /// field received it.
+    @objc func tapped(_ g: UITapGestureRecognizer) {
+        guard let window = g.view,
+              let responder = window.sejdelFirstResponder() else { return }
+        let pt = g.location(in: responder)
+        if responder.bounds.insetBy(dx: -16, dy: -16).contains(pt) { return }
+        Task { @MainActor in endTextEditing() }
+    }
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+}
+
+private extension UIView {
+    func sejdelFirstResponder() -> UIView? {
+        if isFirstResponder { return self }
+        for sub in subviews {
+            if let r = sub.sejdelFirstResponder() { return r }
+        }
+        return nil
+    }
+}
 
 // MARK: - Bottom tab bar
 /// Bottom navigation bar — the section switcher (moved here from the top)

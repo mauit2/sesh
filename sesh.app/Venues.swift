@@ -672,14 +672,6 @@ final class VenueService: ObservableObject {
         beerPricesByVenue[venue.id]?.min { $0.price < $1.price }
     }
 
-    /// Cheapest price of ANY size in the region + currency — the "All" map's
-    /// colour anchor ("how far above the cheapest pour around here").
-    func localCheapestAny(currency: String, near coord: CLLocationCoordinate2D, own: Double) -> Double {
-        (BeerServing.allCases.map(\.rawValue) + ["unknown"])
-            .compactMap { localBeerPrices(serving: $0, currency: currency, near: coord).min() }
-            .min() ?? own
-    }
-
     /// venuesWithBeerPrice plus the size-less fallback venues.
     func venuesWithDisplayablePrice(serving: BeerServing) -> [Venue] {
         venues.filter { v in
@@ -704,10 +696,11 @@ final class VenueService: ObservableObject {
     /// of a coordinate — the local comparison set.
     /// Flattened (lat, lon, serving, currency, price) for every PRICED venue.
     /// Rebuilt when prices or venues change.
-    private struct PricePoint { let lat: Double; let lon: Double
+    private struct PricePoint { let venueId: UUID; let lat: Double; let lon: Double
                                 let serving: String; let currency: String; let price: Double }
     private var priceIndex: [PricePoint] = []
     private var regionPriceMemo: [String: [Double]] = [:]
+    private var regionVenueMinsMemo: [String: [UUID: [String: Double]]] = [:]
 
     func rebuildPriceIndex() {
         var idx: [PricePoint] = []
@@ -715,12 +708,13 @@ final class VenueService: ObservableObject {
             guard let arr = beerPricesByVenue[v.id], !arr.isEmpty else { continue }
             let c = coordinate(for: v)
             for p in arr {
-                idx.append(PricePoint(lat: c.latitude, lon: c.longitude,
+                idx.append(PricePoint(venueId: v.id, lat: c.latitude, lon: c.longitude,
                                       serving: p.serving, currency: p.currency, price: p.price))
             }
         }
         priceIndex = idx
         regionPriceMemo = [:]
+        regionVenueMinsMemo = [:]
     }
 
     /// Same-serving, same-currency prices within `beerRegionMeters`.
@@ -751,22 +745,60 @@ final class VenueService: ObservableObject {
         return out
     }
 
-    /// Cheapest same-serving, same-currency beer in this bar's region — the
-    /// green anchor for its colour. Falls back to the bar's own price.
-    func localCheapest(serving: String, currency: String, near coord: CLLocationCoordinate2D, own: Double) -> Double {
-        localBeerPrices(serving: serving, currency: currency, near: coord).min() ?? own
+    /// Per-venue serving→cheapest map for same-currency bars within
+    /// `beerRegionMeters` — the base for distribution anchors. One entry per
+    /// VENUE so a bar reporting five sizes doesn't weigh five times in the
+    /// median. Memoised per ~11 km cell like the flat price list.
+    private func localVenueMins(currency: String,
+                                near coord: CLLocationCoordinate2D) -> [UUID: [String: Double]] {
+        let key = "\(currency)|\((coord.latitude * 10).rounded())|\((coord.longitude * 10).rounded())"
+        if let hit = regionVenueMinsMemo[key] { return hit }
+
+        let limit = Self.beerRegionMeters
+        let dLat = limit / 111_320.0
+        let dLon = limit / (111_320.0 * max(0.2, cos(coord.latitude * .pi / 180)))
+        var out: [UUID: [String: Double]] = [:]
+        for p in priceIndex where p.currency == currency {
+            if abs(p.lat - coord.latitude) > dLat || abs(p.lon - coord.longitude) > dLon { continue }
+            let la1 = coord.latitude * .pi / 180, la2 = p.lat * .pi / 180
+            let dp = la2 - la1, dl = (p.lon - coord.longitude) * .pi / 180
+            let h = sin(dp / 2) * sin(dp / 2) + cos(la1) * cos(la2) * sin(dl / 2) * sin(dl / 2)
+            guard 2 * 6_371_000 * asin(min(1, sqrt(h))) <= limit else { continue }
+            let prev = out[p.venueId]?[p.serving]
+            if prev == nil || p.price < prev! {
+                out[p.venueId, default: [:]][p.serving] = p.price
+            }
+        }
+        regionVenueMinsMemo[key] = out
+        return out
     }
 
-    /// Colour anchor for MAP PINS: the cheapest among everything DRAWN under
-    /// the current size filter — the exact size plus the size-less fallback
-    /// rows — in the same currency and area. Anchoring each pin to its own
-    /// row's bucket painted the same €7 red at one bar and green next door
-    /// whenever the two pins came from different buckets.
-    func localCheapestDisplayed(selected: BeerServing, currency: String,
-                                near coord: CLLocationCoordinate2D, own: Double) -> Double {
-        let exact = localBeerPrices(serving: selected.rawValue, currency: currency, near: coord)
-        let unsized = localBeerPrices(serving: "unknown", currency: currency, near: coord)
-        return min(exact.min() ?? own, unsized.min() ?? own)
+    /// Same-serving, same-currency distribution in this bar's region — the
+    /// green/yellow/red anchors for a single serving row.
+    func localAnchors(serving: String, currency: String,
+                      near coord: CLLocationCoordinate2D, own: Double) -> BeerPriceScale.Anchors {
+        .over(localBeerPrices(serving: serving, currency: currency, near: coord), own: own)
+    }
+
+    /// Anchors for MAP PINS under a size filter: the distribution of what is
+    /// actually DRAWN — each venue's exact-size price, else its size-less
+    /// fallback. Grading each pin against its own row's bucket painted the
+    /// same €7 red at one bar and green next door whenever the two pins came
+    /// from different buckets.
+    func localAnchorsDisplayed(selected: BeerServing, currency: String,
+                               near coord: CLLocationCoordinate2D, own: Double) -> BeerPriceScale.Anchors {
+        let displayed = localVenueMins(currency: currency, near: coord).values
+            .compactMap { $0[selected.rawValue] ?? $0["unknown"] }
+        return .over(displayed, own: own)
+    }
+
+    /// Anchors for the "All sizes" map: each venue's cheapest pour of any
+    /// size — the same number its pin shows.
+    func localAnchorsAny(currency: String,
+                         near coord: CLLocationCoordinate2D, own: Double) -> BeerPriceScale.Anchors {
+        let displayed = localVenueMins(currency: currency, near: coord).values
+            .compactMap { $0.values.min() }
+        return .over(displayed, own: own)
     }
 
     /// Regional average for a serving + currency — the "vs typical" baseline.
@@ -1509,6 +1541,9 @@ private struct OffersMapView: View {
     /// nil = "All": every bar's cheapest pour, any size — the default. A
     /// concrete size is an opt-in filter.
     @State private var selectedServing: BeerServing? = nil
+    /// Whether the serving filter's options are expanded. Collapsed, the
+    /// map shows a single FILTER pill; tapping it reveals the size chips.
+    @State private var filterOpen = false
     /// Sizes that actually have priced bars in the current view. The chip row
     /// draws only these — the row itself tells you what gets poured around
     /// here, instead of offering a Swedish 40 cl over Manhattan.
@@ -1650,16 +1685,16 @@ private struct OffersMapView: View {
                 offerArt: venues.posterOffer(for: v)?.imageURL,
                 offerCount: venues.offers(for: v).count,
                 price: price,
-                cheapest: price.map { p in
+                anchors: price.map { p in
                     if let s = selectedServing {
-                        return venues.localCheapestDisplayed(
+                        return venues.localAnchorsDisplayed(
                             selected: s, currency: p.currency,
                             near: venues.coordinate(for: v), own: p.price)
                     }
-                    return venues.localCheapestAny(
+                    return venues.localAnchorsAny(
                         currency: p.currency,
                         near: venues.coordinate(for: v), own: p.price)
-                } ?? 0
+                } ?? .over([], own: 0)
             ))
         }
         pinModels = models
@@ -1916,7 +1951,8 @@ private struct OffersMapView: View {
         // Searchable, price-sorted list of bars for the selected serving.
         .sheet(isPresented: $priceListOpen) {
             BeerPriceListSheet(venues: venues, location: location, serving: selectedServing,
-                               fallbackOrigin: visibleRegion?.center) { venue in
+                               fallbackOrigin: visibleRegion?.center,
+                               viewport: visibleRegion) { venue in
                 priceListOpen = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { focus(venue) }
             }
@@ -2167,11 +2203,42 @@ private struct OffersMapView: View {
                 if let onClose { circleButton("xmark", action: onClose) }
             }
             modeToggle
-            HStack { countryPill; Spacer() }
-            if mapMode == .prices { servingFilter }
+            HStack {
+                countryPill
+                Spacer()
+                if mapMode == .prices { filterButton }
+            }
+            if mapMode == .prices, filterOpen { servingFilter }
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
+    }
+
+    /// Single FILTER pill — collapsed state of the serving filter. Shows the
+    /// active size so the filter never hides its own state, and lights up
+    /// whiskey while a size filter is applied.
+    private var filterButton: some View {
+        let active = selectedServing
+        return Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { filterOpen.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.system(size: 10, weight: .black))
+                Text(active.map { "Filter · \($0.label)" } ?? "Filter")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .black))
+                    .opacity(0.6)
+                    .rotationEffect(.degrees(filterOpen ? 180 : 0))
+            }
+            .foregroundStyle(active != nil ? Color.ink : Color.cream.opacity(0.85))
+            .padding(.horizontal, 11).padding(.vertical, 6)
+            .background(Capsule().fill(active != nil ? Color.whiskey : Color.ink.opacity(0.8)))
+            .overlay(Capsule().strokeBorder(Color.cream.opacity(active != nil ? 0 : 0.12), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
+        .accessibilityLabel("Filter by serving size")
     }
 
     /// Serving-size filter for the price map.
@@ -2190,7 +2257,10 @@ private struct OffersMapView: View {
             HStack(spacing: 6) {
                 let allOn = selectedServing == nil
                 Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { selectedServing = nil }
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                        selectedServing = nil
+                        filterOpen = false
+                    }
                 } label: {
                     Text("All")
                         .font(.system(size: 11, weight: .black, design: .rounded))
@@ -2205,6 +2275,7 @@ private struct OffersMapView: View {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                             // Tapping the active size releases the filter.
                             selectedServing = on ? nil : s
+                            filterOpen = false
                         }
                     } label: {
                         Text(s.label)
@@ -4506,7 +4577,7 @@ private struct MapPinModel: Identifiable {
     let offerArt: URL?
     let offerCount: Int
     let price: VenueBeerPrice?
-    let cheapest: Double
+    let anchors: BeerPriceScale.Anchors
     var id: UUID { venue.id }
 }
 
@@ -4536,7 +4607,7 @@ private struct ModePin: View {
             }
         case .prices:
             if let p = model.price {
-                BeerPricePin(price: p, cheapest: model.cheapest, selected: selected)
+                BeerPricePin(price: p, anchors: model.anchors, selected: selected)
                     .onTapGesture(perform: onTap)
             }
         case .sun:

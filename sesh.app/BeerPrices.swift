@@ -15,27 +15,62 @@ import CoreLocation
 /// double that price is fully red; a gradient between. Currency- and
 /// size-agnostic — it just compares like with like, whatever the local prices.
 enum BeerPriceScale {
-    /// 0 at the cheapest, 1 at (or above) 2× the cheapest.
-    static func t(_ price: Double, cheapest: Double) -> Double {
-        guard cheapest > 0 else { return 0 }
-        return min(1, max(0, price / cheapest - 1))
+    /// The local price distribution the gradient hangs on: green at the
+    /// cheapest, YELLOW AT THE MEDIAN, red at the dearest. The old ratio
+    /// scale (2× the cheapest = full red) worked in Sweden's tight 50–80 kr
+    /// band but painted most of a $1–$10 city red — one $2 dive made every
+    /// normal $5 bar look like a ripoff. Anchoring the middle of the
+    /// gradient to the median keeps "yellow = typical around here" true at
+    /// any spread.
+    struct Anchors: Equatable {
+        var min: Double
+        var median: Double
+        var max: Double
+
+        /// Distribution of a comparison set; `own` stands in when empty.
+        static func over(_ prices: [Double], own: Double) -> Anchors {
+            let ps = prices.isEmpty ? [own] : prices.sorted()
+            let mid = ps.count % 2 == 1
+                ? ps[ps.count / 2]
+                : (ps[ps.count / 2 - 1] + ps[ps.count / 2]) / 2
+            return Anchors(min: ps.first!, median: mid, max: ps.last!)
+        }
+
+        var rounded: Anchors {
+            Anchors(min: min.rounded(), median: median.rounded(), max: max.rounded())
+        }
     }
-    static func color(_ price: Double, cheapest: Double) -> Color {
-        Color(hue: (1 - t(price, cheapest: cheapest)) * 0.34, saturation: 0.78, brightness: 0.80)
+
+    /// 0 at the local minimum, 0.5 at the median, 1 at the maximum —
+    /// piecewise linear so each half of the gradient covers its half of
+    /// the distribution regardless of how lopsided the spread is.
+    static func t(_ price: Double, anchors a: Anchors) -> Double {
+        if price <= a.min { return 0 }
+        if price >= a.max { return 1 }
+        if price <= a.median {
+            let span = a.median - a.min
+            return span > 0 ? 0.5 * (price - a.min) / span : 0
+        }
+        let span = a.max - a.median
+        return span > 0 ? 0.5 + 0.5 * (price - a.median) / span : 1
     }
-    /// Colour for a price the user sees ROUNDED. Judging the exact median
+    static func color(_ price: Double, anchors: Anchors) -> Color {
+        Color(hue: (1 - t(price, anchors: anchors)) * 0.34, saturation: 0.78, brightness: 0.80)
+    }
+    /// Colour for a price the user sees ROUNDED. Judging the exact value
     /// while showing the rounded label painted two "$5" pins different
-    /// colours whenever their true medians differed by cents — the colour
+    /// colours whenever their true values differed by cents — the colour
     /// must grade the number on the pin, nothing else.
-    static func displayColor(_ price: Double, cheapest: Double) -> Color {
-        color(price.rounded(), cheapest: cheapest.rounded())
+    static func displayColor(_ price: Double, anchors: Anchors) -> Color {
+        color(price.rounded(), anchors: anchors.rounded)
     }
-    static func verdict(_ price: Double, cheapest: Double) -> String {
-        let tt = t(price, cheapest: cheapest)
-        if tt < 0.05 { return "Cheapest around" }
-        if tt < 0.25 { return "Cheap" }
-        if tt < 0.6  { return "About average" }
-        return "On the pricey side"
+    static func verdict(_ price: Double, anchors: Anchors) -> String {
+        let tt = t(price.rounded(), anchors: anchors.rounded)
+        if tt <= 0.02 { return "Cheapest around" }
+        if tt < 0.35 { return "Cheap for the area" }
+        if tt < 0.65 { return "About average" }
+        if tt < 0.98 { return "On the pricey side" }
+        return "Top of the range"
     }
     /// A neutral "cheap/good" green for comparison callouts.
     static var good: Color { Color(hue: 0.34, saturation: 0.78, brightness: 0.80) }
@@ -90,8 +125,8 @@ struct BeerPriceTarget: Identifiable, Equatable {
 /// serving).
 struct BeerPricePin: View {
     let price: VenueBeerPrice
-    /// Cheapest price for this serving in the area — the green anchor.
-    let cheapest: Double
+    /// Local distribution for this serving — green/yellow/red anchors.
+    let anchors: BeerPriceScale.Anchors
     let selected: Bool
 
     var body: some View {
@@ -100,7 +135,7 @@ struct BeerPricePin: View {
             .foregroundStyle(Color.black.opacity(0.85))
             .padding(.horizontal, selected ? 12 : 9)
             .padding(.vertical, selected ? 6 : 4)
-            .background(Capsule().fill(BeerPriceScale.displayColor(price.price, cheapest: cheapest)))
+            .background(Capsule().fill(BeerPriceScale.displayColor(price.price, anchors: anchors)))
             .overlay(Capsule().strokeBorder(Color.white.opacity(0.65), lineWidth: 1.5))
             .shadow(color: .black.opacity(0.45), radius: selected ? 9 : 4, y: 2)
             .scaleEffect(selected ? 1.08 : 1)
@@ -120,11 +155,11 @@ struct BeerPriceDetailCard: View {
     let onReport: (BeerPriceTarget) -> Void
     let onPickServing: (BeerServing) -> Void
 
-    /// Cheapest same-serving, same-currency beer in this bar's region — the
-    /// green anchor, so colours reflect local prices, not the whole world.
-    private func cheapest(_ p: VenueBeerPrice) -> Double {
-        venues.localCheapest(serving: p.serving, currency: p.currency,
-                             near: venues.coordinate(for: venue), own: p.price)
+    /// Same-serving, same-currency distribution in this bar's region —
+    /// the colour anchors, so a price reads against its own area.
+    private func anchors(_ p: VenueBeerPrice) -> BeerPriceScale.Anchors {
+        venues.localAnchors(serving: p.serving, currency: p.currency,
+                            near: venues.coordinate(for: venue), own: p.price)
     }
 
     var body: some View {
@@ -188,12 +223,12 @@ struct BeerPriceDetailCard: View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(p.priceLabel)
                 .font(.system(size: 42, weight: .black, design: .rounded))
-                .foregroundStyle(BeerPriceScale.displayColor(p.price, cheapest: cheapest(p)))
+                .foregroundStyle(BeerPriceScale.displayColor(p.price, anchors: anchors(p)))
             VStack(alignment: .leading, spacing: 2) {
                 Text(p.servingSize.longLabel.uppercased())
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(1.2).foregroundStyle(Color.bronze)
-                Text(BeerPriceScale.verdict(p.price, cheapest: cheapest(p)))
+                Text(BeerPriceScale.verdict(p.price, anchors: anchors(p)))
                     .font(.system(size: 13, weight: .heavy, design: .rounded))
                     .foregroundStyle(Color.cream)
             }
@@ -226,7 +261,7 @@ struct BeerPriceDetailCard: View {
             ForEach(all) { sp in
                 Button { onPickServing(sp.servingSize) } label: {
                     HStack(spacing: 10) {
-                        Circle().fill(BeerPriceScale.displayColor(sp.price, cheapest: cheapest(sp))).frame(width: 10, height: 10)
+                        Circle().fill(BeerPriceScale.displayColor(sp.price, anchors: anchors(sp))).frame(width: 10, height: 10)
                         Text(sp.servingLabel)
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.cream)
@@ -524,12 +559,52 @@ struct BeerPriceListSheet: View {
     /// Browse-mode reference when there is no GPS fix — the map's viewport
     /// centre. Without it the list used to fail open to the whole planet.
     var fallbackOrigin: CLLocationCoordinate2D? = nil
+    /// The map's viewport. The browse list is scoped to what the map shows:
+    /// zoomed to a city → that city's bars, cheapest first; zoomed out to a
+    /// whole country (the picker's "Entire country") → the whole catalog.
+    /// nil keeps the old near-you radius.
+    var viewport: MKCoordinateRegion? = nil
     let onSelect: (Venue) -> Void
     @State private var query = ""
+    /// Reverse-geocoded name of the viewed city, stamped into the kicker.
+    @State private var placeName: String?
     /// Apple Maps alongside the catalog, unbiased, so "Atlas Bar Singapore"
     /// jumps continents. Only consulted while the user is typing a query.
     @StateObject private var world = MapKitVenueSearch()
     @State private var resolving = false
+
+    /// A viewport wider than ~2° of longitude is a country view, not a city.
+    private var isCountryScope: Bool {
+        (viewport?.span.longitudeDelta ?? 0) > 2.0
+    }
+
+    /// "CHEAPEST 40 CL · PARIS" — the list always names its own scope.
+    private var kicker: String {
+        let what = serving.map { "CHEAPEST \($0.label.uppercased())" }
+            ?? "CHEAPEST POUR, ANY SIZE"
+        guard query.trimmingCharacters(in: .whitespaces).isEmpty else { return what }
+        if isCountryScope,
+           let name = Locale.current.localizedString(forRegionCode: venues.activeCountry) {
+            return "\(what) · \(name.uppercased())"
+        }
+        if let name = placeName ?? majorityCity { return "\(what) · \(name.uppercased())" }
+        return what
+    }
+
+    /// The bars themselves know what city they're in — the most common city
+    /// among the listed rows names the list without a network geocode (which
+    /// is what `placeName` falls back to when city fields are empty).
+    private var majorityCity: String? {
+        var counts: [String: Int] = [:]
+        for r in rows.prefix(40) {
+            // City fields sometimes carry ", Country" — keep the city part.
+            if let c = r.venue.city?.components(separatedBy: ",").first?
+                .trimmingCharacters(in: .whitespaces), !c.isEmpty {
+                counts[c, default: 0] += 1
+            }
+        }
+        return counts.max { $0.value < $1.value }?.key
+    }
 
     private var rows: [(venue: Venue, price: VenueBeerPrice)] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -544,7 +619,15 @@ struct BeerPriceListSheet: View {
             // should find Berlin (the worldwide section below covers bars we
             // hold no price for yet).
             .filter { v in
-                guard q.isEmpty, let here else { return true }
+                guard q.isEmpty else { return true }   // typed search: whole catalog
+                if let vp = viewport {
+                    // Country view: whole (country-scoped) catalog qualifies.
+                    if vp.span.longitudeDelta > 2.0 { return true }
+                    // City view: what the map shows, with a little margin.
+                    return abs(v.lat - vp.center.latitude) <= vp.span.latitudeDelta * 0.65
+                        && abs(v.lon - vp.center.longitude) <= vp.span.longitudeDelta * 0.65
+                }
+                guard let here else { return true }
                 let d = CLLocation(latitude: v.lat, longitude: v.lon).distance(from: here)
                 return d <= VenueService.dealsRadiusMeters
             }
@@ -559,12 +642,13 @@ struct BeerPriceListSheet: View {
     }
 
     var body: some View {
-        let list = rows
-        let cheapest = list.first?.price.price ?? 0   // sorted ascending
+        // Top 100 is plenty for browsing and keeps a whole-country list
+        // (UK: 700+ bars) from rendering in one non-lazy stack.
+        let list = Array(rows.prefix(100))
+        let anchors = BeerPriceScale.Anchors.over(list.map(\.price.price), own: 0)
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 10) {
-                Text(serving.map { "CHEAPEST \($0.label.uppercased())" }
-                     ?? "CHEAPEST POUR, ANY SIZE")
+                Text(kicker)
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .tracking(2.4).foregroundStyle(Color.bronze)
 
@@ -595,7 +679,7 @@ struct BeerPriceListSheet: View {
                         .padding(.vertical, 20)
                 }
                 ForEach(list, id: \.venue.id) { entry in
-                    Button { onSelect(entry.venue) } label: { row(entry.venue, entry.price, cheapest) }
+                    Button { onSelect(entry.venue) } label: { row(entry.venue, entry.price, anchors) }
                         .buttonStyle(PressScaleStyle())
                 }
 
@@ -661,17 +745,24 @@ struct BeerPriceListSheet: View {
         }
         .background(Color.ink)
         .preferredColorScheme(.dark)
+        .task {
+            guard !isCountryScope, let c = viewport?.center else { return }
+            let loc = CLLocation(latitude: c.latitude, longitude: c.longitude)
+            if let mark = try? await CLGeocoder().reverseGeocodeLocation(loc).first {
+                placeName = mark.locality ?? mark.subAdministrativeArea ?? mark.administrativeArea
+            }
+        }
         .onDisappear { world.clear() }
     }
 
-    private func row(_ v: Venue, _ p: VenueBeerPrice, _ cheapest: Double) -> some View {
+    private func row(_ v: Venue, _ p: VenueBeerPrice, _ anchors: BeerPriceScale.Anchors) -> some View {
         HStack(spacing: 12) {
             Text(p.priceLabel)
                 .font(.system(size: 14, weight: .black, design: .rounded).monospacedDigit())
                 .foregroundStyle(Color.black.opacity(0.85))
                 .frame(minWidth: 56)
                 .padding(.horizontal, 8).padding(.vertical, 7)
-                .background(Capsule().fill(BeerPriceScale.displayColor(p.price, cheapest: cheapest)))
+                .background(Capsule().fill(BeerPriceScale.displayColor(p.price, anchors: anchors)))
             VStack(alignment: .leading, spacing: 2) {
                 Text(v.name).font(.system(size: 15, weight: .heavy, design: .rounded))
                     .foregroundStyle(Color.cream).lineLimit(1)
