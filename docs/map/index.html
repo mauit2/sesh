@@ -347,6 +347,7 @@
   function fmt(a,c){var n=Math.round(a),s=SYM[c]||c;return TRAIL[c]?(n+" "+s):(s+n);}
   function esc(t){return String(t==null?"":t).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
   function servingLabel(x){if(x==="unknown")return "Size not stated";
+    if(x==="all")return "beer, any size";
     return (SERVINGS.filter(function(s){return s[0]===x;})[0]||["",x])[1];}
   // Rows to DRAW for a serving: the exact size where reported, else the
   // bar's size-less price — same fallback the app uses, so an imported
@@ -356,7 +357,13 @@
     beerData.forEach(function(r){(byVenue[r.venue_id]=byVenue[r.venue_id]||[]).push(r);});
     var out=[];
     Object.keys(byVenue).forEach(function(id){
-      var rows=byVenue[id],exact=rows.filter(function(r){return r.serving===sv;});
+      var rows=byVenue[id];
+      if(sv==="all"){
+        // The bar's cheapest pour of any size — the default map.
+        out.push(rows.reduce(function(a,b){return b.price<a.price?b:a;}));
+        return;
+      }
+      var exact=rows.filter(function(r){return r.serving===sv;});
       if(exact.length){out.push.apply(out,exact);return;}
       var unk=rows.filter(function(r){return r.serving==="unknown";});
       if(unk.length)out.push(unk[0]);
@@ -370,7 +377,7 @@
   // the same price two different colours at neighbouring bars.
   function localCheapest(row,all){var best=row.price;for(var i=0;i<all.length;i++){var q=all[i];
     if(q.currency!==row.currency)continue;
-    if(q.serving!==serving&&q.serving!=="unknown")continue;
+    if(serving!=="all"&&q.serving!==serving&&q.serving!=="unknown")continue;
     if(hav(row.lat,row.lon,q.lat,q.lon)<=200000)best=Math.min(best,q.price);}return best;}
   // Grade the ROUNDED price — the number on the pill — so two pills that
   // read the same can never wear different colours.
@@ -531,7 +538,7 @@
   }
 
   var map,search,layerAnn=[],annById={},tempAnn=null;
-  var beerData=[],dealData=[],mode="prices",serving="40",addLoc=null,fSize="40",searchTimer;
+  var beerData=[],dealData=[],mode="prices",serving="all",addLoc=null,fSize="40",searchTimer;
   var sunData=[],sunStep=null,sunTz="Europe/Stockholm",sunTrackCache=null;
   var $=function(id){return document.getElementById(id);};
   var countEl,msgEl;
@@ -673,10 +680,15 @@
     beerData.forEach(function(r){if(r.serving!=="unknown"&&inView(r))present[r.serving]=1;});
     var list=SERVINGS.filter(function(s){return present[s[0]]||s[0]===serving;});
     if(!list.length||!Object.keys(present).length)list=SERVINGS;
+    list=[["all","All"]].concat(list);
     var box=$("sizes");box.innerHTML="";
     list.forEach(function(s){var b=document.createElement("button");b.textContent=s[1];b.dataset.serving=s[0];
       if(s[0]===serving)b.className="on";
-      b.onclick=function(){serving=s[0];[].forEach.call(box.children,function(c){c.className=c.dataset.serving===serving?"on":"";});render();renderList();};
+      b.onclick=function(){
+        // Tapping the active size releases the filter back to All.
+        serving=(serving===s[0]&&s[0]!=="all")?"all":s[0];
+        [].forEach.call(box.children,function(c){c.className=c.dataset.serving===serving?"on":"";});
+        render();renderList();};
       box.appendChild(b);});
   }
 
@@ -724,10 +736,12 @@
     renderCountryPanel();
   }
   function adoptServingIn(minLat,maxLat,minLon,maxLon){
-    var inBox=beerData.filter(function(r){return r.lat>=minLat&&r.lat<=maxLat&&r.lon>=minLon&&r.lon<=maxLon&&r.serving!=="unknown";});
-    if(!inBox.some(function(r){return r.serving===serving;})&&inBox.length){
-      var tally={};inBox.forEach(function(r){tally[r.serving]=(tally[r.serving]||0)+1;});
-      serving=Object.keys(tally).sort(function(a,b){return tally[b]-tally[a];})[0];
+    if(serving!=="all"){
+      var inBox=beerData.filter(function(r){return r.lat>=minLat&&r.lat<=maxLat&&r.lon>=minLon&&r.lon<=maxLon&&r.serving!=="unknown";});
+      if(!inBox.some(function(r){return r.serving===serving;})&&inBox.length){
+        var tally={};inBox.forEach(function(r){tally[r.serving]=(tally[r.serving]||0)+1;});
+        serving=Object.keys(tally).sort(function(a,b){return tally[b]-tally[a];})[0];
+      }
     }
     setTimeout(function(){rebuildSizeChips();render();renderList();},50);
   }

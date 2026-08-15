@@ -667,6 +667,19 @@ final class VenueService: ObservableObject {
             ?? beerPricesByVenue[venue.id]?.first { $0.serving == "unknown" }
     }
 
+    /// A venue's cheapest price across every size — the "All" map's number.
+    func cheapestAnyPrice(for venue: Venue) -> VenueBeerPrice? {
+        beerPricesByVenue[venue.id]?.min { $0.price < $1.price }
+    }
+
+    /// Cheapest price of ANY size in the region + currency — the "All" map's
+    /// colour anchor ("how far above the cheapest pour around here").
+    func localCheapestAny(currency: String, near coord: CLLocationCoordinate2D, own: Double) -> Double {
+        (BeerServing.allCases.map(\.rawValue) + ["unknown"])
+            .compactMap { localBeerPrices(serving: $0, currency: currency, near: coord).min() }
+            .min() ?? own
+    }
+
     /// venuesWithBeerPrice plus the size-less fallback venues.
     func venuesWithDisplayablePrice(serving: BeerServing) -> [Venue] {
         venues.filter { v in
@@ -1493,11 +1506,9 @@ private struct OffersMapView: View {
     /// country picker sets a whole-country zoom instead.
     @State private var sunFocusZoom: Double? = nil
     /// The serving size the price map is filtered to.
-    @State private var selectedServing: BeerServing = .canonical
-    /// True after the user taps a size themselves — region adaptation stops.
-    @State private var servingPicked = false
-    /// Last centre we reverse-geocoded for the regional serving default.
-    @State private var lastServingProbe: CLLocationCoordinate2D?
+    /// nil = "All": every bar's cheapest pour, any size — the default. A
+    /// concrete size is an opt-in filter.
+    @State private var selectedServing: BeerServing? = nil
     /// Sizes that actually have priced bars in the current view. The chip row
     /// draws only these — the row itself tells you what gets poured around
     /// here, instead of offering a Swedish 40 cl over Manhattan.
@@ -1608,7 +1619,8 @@ private struct OffersMapView: View {
         availableServings = Set(BeerServing.allCases.filter { s in
             venues.venuesWithBeerPrice(serving: s).contains(where: onScreen)
         })
-        let priced = venues.venuesWithDisplayablePrice(serving: selectedServing).filter(onScreen)
+        let priced = (selectedServing.map { venues.venuesWithDisplayablePrice(serving: $0) }
+                      ?? venues.venuesWithAnyBeerPrice).filter(onScreen)
         var top = priced
         if priced.count > Self.maxPricePins {
             // Rank from wherever the user is, or failing that from what
@@ -1631,15 +1643,23 @@ private struct OffersMapView: View {
         var seen = Set<UUID>()
         var models: [MapPinModel] = []
         for v in top + pins where seen.insert(v.id).inserted {
-            let price = venues.displayBeerPrice(for: v, serving: selectedServing)
+            let price = selectedServing.map { venues.displayBeerPrice(for: v, serving: $0) }
+                ?? venues.cheapestAnyPrice(for: v)
             models.append(MapPinModel(
                 venue: v,
                 offerArt: venues.posterOffer(for: v)?.imageURL,
                 offerCount: venues.offers(for: v).count,
                 price: price,
-                cheapest: price.map { venues.localCheapestDisplayed(
-                    selected: selectedServing, currency: $0.currency,
-                    near: venues.coordinate(for: v), own: $0.price) } ?? 0
+                cheapest: price.map { p in
+                    if let s = selectedServing {
+                        return venues.localCheapestDisplayed(
+                            selected: s, currency: p.currency,
+                            near: venues.coordinate(for: v), own: p.price)
+                    }
+                    return venues.localCheapestAny(
+                        currency: p.currency,
+                        near: venues.coordinate(for: v), own: p.price)
+                } ?? 0
             ))
         }
         pinModels = models
@@ -1766,7 +1786,6 @@ private struct OffersMapView: View {
             .onMapCameraChange(frequency: .onEnd) { ctx in
                 visibleRegion = ctx.region
                 rebuildPinModels()
-                adaptServingToRegion(ctx.region.center)
                 if !mapKitPainted { mapKitPainted = true }
             }
             .opacity(mapMode == .sun ? 0 : 1)
@@ -1870,13 +1889,13 @@ private struct OffersMapView: View {
                 } else {
                     BeerPriceDetailCard(
                         venue: venue, venues: venues,
-                        serving: selectedServing,
+                        serving: selectedServing ?? .canonical,
                         onReport: { target in
                             selectedVenue = nil
                             submitPreset = target
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { submitOpen = true }
                         },
-                        onPickServing: { selectedServing = $0; servingPicked = true }
+                        onPickServing: { selectedServing = $0 }
                     )
                 }
             }
@@ -1887,7 +1906,8 @@ private struct OffersMapView: View {
         // Report / add a beer price.
         .sheet(isPresented: $submitOpen, onDismiss: { submitPreset = nil }) {
             BeerPriceSubmitSheet(venues: venues, location: location,
-                                 preset: submitPreset, initialServing: selectedServing) {
+                                 preset: submitPreset,
+                                 initialServing: selectedServing ?? .canonical) {
                 submitOpen = false
             }
             .presentationDetents([.large])
@@ -2168,11 +2188,24 @@ private struct OffersMapView: View {
     private var servingFilter: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                let allOn = selectedServing == nil
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { selectedServing = nil }
+                } label: {
+                    Text("All")
+                        .font(.system(size: 11, weight: .black, design: .rounded))
+                        .foregroundStyle(allOn ? Color.ink : Color.cream.opacity(0.8))
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Capsule().fill(allOn ? Color.whiskey : Color.ink.opacity(0.6)))
+                }
+                .buttonStyle(.plain)
                 ForEach(visibleServings) { s in
                     let on = selectedServing == s
                     Button {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { selectedServing = s }
-                        servingPicked = true
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                            // Tapping the active size releases the filter.
+                            selectedServing = on ? nil : s
+                        }
                     } label: {
                         Text(s.label)
                             .font(.system(size: 11, weight: .black, design: .rounded))
@@ -2421,36 +2454,6 @@ private struct OffersMapView: View {
     }
 
     /// Centre on the user, at the same scale on every map.
-    /// The size people actually order differs by region — a 16 oz pour over
-    /// the US and Canada, a 40 cl stor stark elsewhere. Until the user picks a
-    /// size themselves, the default follows what the map is looking at.
-    /// Probes are gated to ~2 degrees of movement so panning around a city
-    /// never triggers a geocode.
-    private func adaptServingToRegion(_ center: CLLocationCoordinate2D) {
-        guard !servingPicked else { return }
-        if let last = lastServingProbe,
-           abs(last.latitude - center.latitude) < 2,
-           abs(last.longitude - center.longitude) < 2 { return }
-        lastServingProbe = center
-        Task {
-            guard let iso = await BeerCurrency.isoNear(center) else { return }
-            var regional: BeerServing = (iso == "US" || iso == "CA") ? .oz16 : .canonical
-            // Prefer a size that actually has bars here: the regional guess is
-            // a default, not a decree.
-            if !availableServings.isEmpty, !availableServings.contains(regional) {
-                regional = availableServings.max(by: { a, b in
-                    venues.venuesWithBeerPrice(serving: a).count
-                        < venues.venuesWithBeerPrice(serving: b).count
-                }) ?? regional
-            }
-            guard !servingPicked, selectedServing != regional else { return }
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                selectedServing = regional
-            }
-            rebuildPinModels()
-        }
-    }
-
     /// Compact "which country am I browsing" pill — flag + name, opens the
     /// country browser.
     private var countryPill: some View {

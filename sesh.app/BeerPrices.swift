@@ -519,7 +519,8 @@ struct BeerPriceSubmitSheet: View {
 struct BeerPriceListSheet: View {
     @ObservedObject var venues: VenueService
     @ObservedObject var location: LocationService
-    let serving: BeerServing
+    /// nil = "All": each bar's cheapest pour of any size.
+    let serving: BeerServing?
     /// Browse-mode reference when there is no GPS fix — the map's viewport
     /// centre. Without it the list used to fail open to the whole planet.
     var fallbackOrigin: CLLocationCoordinate2D? = nil
@@ -534,7 +535,9 @@ struct BeerPriceListSheet: View {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         let here = location.location
             ?? fallbackOrigin.map { CLLocation(latitude: $0.latitude, longitude: $0.longitude) }
-        return venues.venuesWithDisplayablePrice(serving: serving)
+        let pool = serving.map { venues.venuesWithDisplayablePrice(serving: $0) }
+            ?? venues.venuesWithAnyBeerPrice
+        return pool
             // The BROWSE list is bars near you (or, with no fix yet, near what
             // the map shows); a typed SEARCH reaches the whole catalog —
             // "Bar Etzy" should find Gothenburg from Stockholm, and "…Berlin"
@@ -545,7 +548,11 @@ struct BeerPriceListSheet: View {
                 let d = CLLocation(latitude: v.lat, longitude: v.lon).distance(from: here)
                 return d <= VenueService.dealsRadiusMeters
             }
-            .compactMap { v in venues.displayBeerPrice(for: v, serving: serving).map { (v, $0) } }
+            .compactMap { v -> (Venue, VenueBeerPrice)? in
+                let price = serving.map { venues.displayBeerPrice(for: v, serving: $0) }
+                    ?? venues.cheapestAnyPrice(for: v)
+                return price.map { (v, $0) }
+            }
             .filter { q.isEmpty || $0.venue.name.lowercased().contains(q)
                          || $0.venue.displayLocation.lowercased().contains(q) }
             .sorted { $0.price.price < $1.price.price }
@@ -556,7 +563,8 @@ struct BeerPriceListSheet: View {
         let cheapest = list.first?.price.price ?? 0   // sorted ascending
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("CHEAPEST \(serving.label.uppercased())")
+                Text(serving.map { "CHEAPEST \($0.label.uppercased())" }
+                     ?? "CHEAPEST POUR, ANY SIZE")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .tracking(2.4).foregroundStyle(Color.bronze)
 
@@ -580,7 +588,7 @@ struct BeerPriceListSheet: View {
                 // Don't declare "no bars match" while the worldwide search is
                 // about to answer right underneath.
                 if list.isEmpty && !(!query.isEmpty && (world.isSearching || !world.results.isEmpty)) {
-                    Text(query.isEmpty ? "No \(serving.label) prices yet — add the first."
+                    Text(query.isEmpty ? "No \(serving?.label ?? "beer") prices yet — add the first."
                                        : "No bars match “\(query)”.")
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.5))
