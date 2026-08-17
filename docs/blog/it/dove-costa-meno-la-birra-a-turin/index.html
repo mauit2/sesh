@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
@@ -152,6 +152,17 @@
   .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
 </style>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Dove costa meno la birra a Turin?","acceptedAnswer":{"@type":"Answer","text":"Le Panche ha il prezzo più basso segnalato: 3 € (formato non indicato)."}},{"@type":"Question","name":"Quanto costa una birra a Turin?","acceptedAnswer":{"@type":"Answer","text":"La mediana su tutti i bar che seguiamo a Turin è 5 €, contando la birra più economica di ogni bar."}},{"@type":"Question","name":"Questi prezzi sono aggiornati?","acceptedAnswer":{"@type":"Answer","text":"La pagina viene ricostruita ogni giorno dalle ultime segnalazioni — questa versione è del 17 agosto 2026."}},{"@type":"Question","name":"Posso segnalare un prezzo?","acceptedAnswer":{"@type":"Answer","text":"Sì — trova il bar sulla mappa Sejdel e aggiungi quanto hai pagato. Sulla mappa appare subito, qui alla prossima ricostruzione."}}]}</script>
+<script>
+(function(){try{
+  var qs=new URLSearchParams(location.search);
+  if(qs.has("lang")){sessionStorage.setItem("sejdelLangPin",qs.get("lang"));return;}
+  if(sessionStorage.getItem("sejdelLangPin")||sessionStorage.getItem("sejdelLangHop"))return;
+  var want=(navigator.language||"").slice(0,2).toLowerCase();
+  if(!want||want===document.documentElement.lang)return;
+  var alts={"en":"https://sejdel.com/blog/where-is-the-cheapest-beer-in-turin-reddit/"};
+  if(alts[want]){sessionStorage.setItem("sejdelLangHop","1");location.replace(alts[want]);}
+}catch(e){}})();
+</script>
 </head>
 <body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
 <div class="wrap">
@@ -160,7 +171,7 @@
     <nav>
       <a href="https://sejdel.com/map/">Mappa</a>
       <a href="https://sejdel.com/blog/">Blog</a>
-      <a href="https://sejdel.com/blog/where-is-the-cheapest-beer-in-turin-reddit/">English</a>
+      <a href="https://sejdel.com/blog/where-is-the-cheapest-beer-in-turin-reddit/?lang=en">English</a>
     </nav>
   </header>
   <p class="kicker">Prezzi della birra · Italia</p>

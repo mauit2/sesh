@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
@@ -152,6 +152,17 @@
   .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
 </style>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"¿Dónde está la cerveza más barata en Madrid?","acceptedAnswer":{"@type":"Answer","text":"La Paradita Tapas Bar tiene el precio más bajo reportado: 2 € (tamaño sin especificar)."}},{"@type":"Question","name":"¿Cuánto cuesta una cerveza en Madrid?","acceptedAnswer":{"@type":"Answer","text":"La mediana de todos los bares que seguimos en Madrid es 3 €, contando la cerveza más barata de cada bar."}},{"@type":"Question","name":"¿Están al día estos precios?","acceptedAnswer":{"@type":"Answer","text":"La página se reconstruye a diario con los últimos reportes — esta versión es del 17 de agosto de 2026."}},{"@type":"Question","name":"¿Puedo reportar un precio?","acceptedAnswer":{"@type":"Answer","text":"Sí — busca el bar en el mapa de Sejdel y añade lo que pagaste. Sale en el mapa al momento y aquí en la próxima reconstrucción."}}]}</script>
+<script>
+(function(){try{
+  var qs=new URLSearchParams(location.search);
+  if(qs.has("lang")){sessionStorage.setItem("sejdelLangPin",qs.get("lang"));return;}
+  if(sessionStorage.getItem("sejdelLangPin")||sessionStorage.getItem("sejdelLangHop"))return;
+  var want=(navigator.language||"").slice(0,2).toLowerCase();
+  if(!want||want===document.documentElement.lang)return;
+  var alts={"en":"https://sejdel.com/blog/beer-under-5-euros-in-madrid-reddit/"};
+  if(alts[want]){sessionStorage.setItem("sejdelLangHop","1");location.replace(alts[want]);}
+}catch(e){}})();
+</script>
 </head>
 <body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
 <div class="wrap">
@@ -160,7 +171,7 @@
     <nav>
       <a href="https://sejdel.com/map/">Mapa</a>
       <a href="https://sejdel.com/blog/">Blog</a>
-      <a href="https://sejdel.com/blog/beer-under-5-euros-in-madrid-reddit/">English</a>
+      <a href="https://sejdel.com/blog/beer-under-5-euros-in-madrid-reddit/?lang=en">English</a>
     </nav>
   </header>
   <p class="kicker">Precios de la cerveza · España</p>

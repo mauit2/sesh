@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
@@ -152,6 +152,17 @@
   .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
 </style>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Where is the cheapest beer in Amsterdam?","acceptedAnswer":{"@type":"Answer","text":"Associação Portuguesa de Amsterdão has the lowest price reported to us: 1.7 € (33 cl)."}},{"@type":"Question","name":"How much does a beer cost in Amsterdam?","acceptedAnswer":{"@type":"Answer","text":"The median across every bar we track in Amsterdam is 5.33 €, counting each bar's cheapest pour."}},{"@type":"Question","name":"How current are these prices?","acceptedAnswer":{"@type":"Answer","text":"The page is rebuilt daily from the latest reports — this version is from 17 August 2026. Each bar shows the median of its recent reports, not a one-off sighting."}},{"@type":"Question","name":"Can I report a price myself?","acceptedAnswer":{"@type":"Answer","text":"Yes — find the bar on the Sejdel beer map and add what you paid. It shows on the map immediately and here at the next rebuild."}}]}</script>
+<script>
+(function(){try{
+  var qs=new URLSearchParams(location.search);
+  if(qs.has("lang")){sessionStorage.setItem("sejdelLangPin",qs.get("lang"));return;}
+  if(sessionStorage.getItem("sejdelLangPin")||sessionStorage.getItem("sejdelLangHop"))return;
+  var want=(navigator.language||"").slice(0,2).toLowerCase();
+  if(!want||want===document.documentElement.lang)return;
+  var alts={"nl":"https://sejdel.com/blog/nl/bier-onder-de-5-euro-amsterdam/"};
+  if(alts[want]){sessionStorage.setItem("sejdelLangHop","1");location.replace(alts[want]);}
+}catch(e){}})();
+</script>
 </head>
 <body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
 <div class="wrap">
@@ -160,7 +171,7 @@
     <nav>
       <a href="https://sejdel.com/map/">Map</a>
       <a href="https://sejdel.com/blog/">Blog</a>
-      <a href="https://sejdel.com/blog/nl/bier-onder-de-5-euro-amsterdam/">Nederlands</a>
+      <a href="https://sejdel.com/blog/nl/bier-onder-de-5-euro-amsterdam/?lang=nl">Nederlands</a>
     </nav>
   </header>
   <p class="kicker">Beer prices · Netherlands</p>

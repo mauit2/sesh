@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
@@ -152,6 +152,17 @@
   .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
 </style>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Onde fica a cerveja mais barata em Porto?","acceptedAnswer":{"@type":"Answer","text":"Cervejaria Galiza tem o preço mais baixo reportado: 1.8 € (40 cl)."}},{"@type":"Question","name":"Quanto custa uma cerveja em Porto?","acceptedAnswer":{"@type":"Answer","text":"A mediana de todos os bares que seguimos em Porto é 2 €, contando a cerveja mais barata de cada bar."}},{"@type":"Question","name":"Os preços estão atualizados?","acceptedAnswer":{"@type":"Answer","text":"A página é reconstruída diariamente a partir dos últimos reportes — esta versão é de 17 de agosto de 2026."}},{"@type":"Question","name":"Posso reportar um preço?","acceptedAnswer":{"@type":"Answer","text":"Sim — procura o bar no mapa da Sejdel e adiciona o que pagaste. Aparece no mapa de imediato e aqui na próxima reconstrução."}}]}</script>
+<script>
+(function(){try{
+  var qs=new URLSearchParams(location.search);
+  if(qs.has("lang")){sessionStorage.setItem("sejdelLangPin",qs.get("lang"));return;}
+  if(sessionStorage.getItem("sejdelLangPin")||sessionStorage.getItem("sejdelLangHop"))return;
+  var want=(navigator.language||"").slice(0,2).toLowerCase();
+  if(!want||want===document.documentElement.lang)return;
+  var alts={"en":"https://sejdel.com/blog/best-outdoor-seating-cheap-beer-in-porto-reddit/"};
+  if(alts[want]){sessionStorage.setItem("sejdelLangHop","1");location.replace(alts[want]);}
+}catch(e){}})();
+</script>
 </head>
 <body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
 <div class="wrap">
@@ -160,7 +171,7 @@
     <nav>
       <a href="https://sejdel.com/map/">Mapa</a>
       <a href="https://sejdel.com/blog/">Blog</a>
-      <a href="https://sejdel.com/blog/best-outdoor-seating-cheap-beer-in-porto-reddit/">English</a>
+      <a href="https://sejdel.com/blog/best-outdoor-seating-cheap-beer-in-porto-reddit/?lang=en">English</a>
     </nav>
   </header>
   <p class="kicker">Preços da cerveja · Portugal</p>

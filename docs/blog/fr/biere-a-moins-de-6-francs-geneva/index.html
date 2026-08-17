@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
@@ -152,6 +152,17 @@
   .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
 </style>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Où est la bière la moins chère à Geneva ?","acceptedAnswer":{"@type":"Answer","text":"Le Terreau a le prix le plus bas signalé : CHF 3 (taille non précisée)."}},{"@type":"Question","name":"Combien coûte une bière à Geneva ?","acceptedAnswer":{"@type":"Answer","text":"La médiane sur tous les bars suivis à Geneva est de CHF 6, sur la bière la moins chère de chaque bar."}},{"@type":"Question","name":"Ces prix sont-ils à jour ?","acceptedAnswer":{"@type":"Answer","text":"La page est reconstruite chaque jour à partir des derniers signalements — cette version date du 17 août 2026."}},{"@type":"Question","name":"Puis-je signaler un prix ?","acceptedAnswer":{"@type":"Answer","text":"Oui — trouvez le bar sur la carte Sejdel et ajoutez ce que vous avez payé. Visible sur la carte immédiatement, ici à la prochaine reconstruction."}}]}</script>
+<script>
+(function(){try{
+  var qs=new URLSearchParams(location.search);
+  if(qs.has("lang")){sessionStorage.setItem("sejdelLangPin",qs.get("lang"));return;}
+  if(sessionStorage.getItem("sejdelLangPin")||sessionStorage.getItem("sejdelLangHop"))return;
+  var want=(navigator.language||"").slice(0,2).toLowerCase();
+  if(!want||want===document.documentElement.lang)return;
+  var alts={"en":"https://sejdel.com/blog/beer-under-6-francs-in-geneva-reddit/"};
+  if(alts[want]){sessionStorage.setItem("sejdelLangHop","1");location.replace(alts[want]);}
+}catch(e){}})();
+</script>
 </head>
 <body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
 <div class="wrap">
@@ -160,7 +171,7 @@
     <nav>
       <a href="https://sejdel.com/map/">Carte</a>
       <a href="https://sejdel.com/blog/">Blog</a>
-      <a href="https://sejdel.com/blog/beer-under-6-francs-in-geneva-reddit/">English</a>
+      <a href="https://sejdel.com/blog/beer-under-6-francs-in-geneva-reddit/?lang=en">English</a>
     </nav>
   </header>
   <p class="kicker">Prix de la bière · Suisse</p>

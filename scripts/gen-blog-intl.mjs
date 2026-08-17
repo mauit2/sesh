@@ -504,14 +504,33 @@ function page({ lang, T, title, desc, canonical, alts, h1, kicker, body, jsonld 
   const altLinks = (alts || []).map((a) =>
     `<link rel="alternate" hreflang="${a.lang}" href="${a.href}" />`).join("\n");
   const xDefault = (alts || []).find((a) => a.lang === "en")?.href || canonical;
+  // Manual language choice carries ?lang=<code>, which pins it for the
+  // session so the auto-redirect below never fights the reader.
   const langNav = (alts || []).filter((a) => a.href !== canonical)
-    .map((a) => `<a href="${a.href}">${esc(L[a.lang]?.langName || a.lang)}</a>`).join("\n      ");
+    .map((a) => `<a href="${a.href}?lang=${a.lang}">${esc(L[a.lang]?.langName || a.lang)}</a>`).join("\n      ");
+  // Automatic language: a shared link opens in the device's language when a
+  // twin exists. Fires once per session, never after a manual choice, and
+  // search traffic already lands right via hreflang.
+  const twins = Object.fromEntries((alts || [])
+    .filter((a) => a.href !== canonical).map((a) => [a.lang, a.href]));
+  const autoLang = Object.keys(twins).length ? `
+<script>
+(function(){try{
+  var qs=new URLSearchParams(location.search);
+  if(qs.has("lang")){sessionStorage.setItem("sejdelLangPin",qs.get("lang"));return;}
+  if(sessionStorage.getItem("sejdelLangPin")||sessionStorage.getItem("sejdelLangHop"))return;
+  var want=(navigator.language||"").slice(0,2).toLowerCase();
+  if(!want||want===document.documentElement.lang)return;
+  var alts=${JSON.stringify(twins)};
+  if(alts[want]){sessionStorage.setItem("sejdelLangHop","1");location.replace(alts[want]);}
+}catch(e){}})();
+</script>` : "";
   return `<!DOCTYPE html>
 <html lang="${lang}">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
@@ -533,7 +552,7 @@ ${FAVICON}
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
 ${CSS}
 ${jsonld ? (Array.isArray(jsonld) ? jsonld : [jsonld])
-    .map((d) => `<script type="application/ld+json">${JSON.stringify(d)}</script>`).join("\n") : ""}
+    .map((d) => `<script type="application/ld+json">${JSON.stringify(d)}</script>`).join("\n") : ""}${autoLang}
 </head>
 <body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
 <div class="wrap">
@@ -816,17 +835,63 @@ for (const [iso, list] of byCountry) {
       title: T.hubTitle(proseName), desc: T.hubLede(proseName, bars, cities.length),
       kicker: T.kicker(countryName), h1: T.hubH1(proseName), body, jsonld: null,
     }));
-    countrySummaries.push({ iso, name: countryName, cities: cities.length, bars, rel });
+    countrySummaries.push({ iso, name: countryName, cities: cities.length, bars, rel,
+      from: money(Math.min(...cities.map((x) => x.cheap[0].price)), C, "en") });
   }
 }
 
-// ---------------------------------------------------- hub cross-links
+// ---------------------------------------------------- the world hub
 //
-// gen-blog.mjs owns /blog/ and /blogg/; it leaves INTL markers in both and
-// this script fills them with the country directory.
-for (const [file, label, more] of [
-  [join(ROOT, "blog", "index.html"), "Beyond Sweden", "Beer prices city by city — in the local language and English."],
-  [join(ROOT, "blogg", "index.html"), "Utanför Sverige", "Ölpriser stad för stad — på det lokala språket och engelska."],
+// Not a "beyond Sweden" annex: one page that asks the question for the whole
+// planet and hands the reader a country — Sweden included, as one flag among
+// the others.
+const flagEmoji = (iso) => iso.toUpperCase().replace(/./g,
+  (c) => String.fromCodePoint(127397 + c.charCodeAt(0)));
+
+const seRows = prices.map((p) => ({ ...p, v: vInfo.get(p.venue_id) || {} }))
+  .filter((r) => r.v.country === "SE" && r.currency === "SEK" && Number.isFinite(Number(r.price)));
+const seBars = new Set(seRows.map((r) => r.venue_id)).size;
+const seFrom = seRows.length ? `${Math.round(Math.min(...seRows.map((r) => Number(r.price))))} kr` : null;
+
+const WORLD_REL = "blog/what-does-beer-cost-around-the-world-reddit";
+{
+  const T = L.en;
+  const all = [
+    { iso: "SE", name: "Sweden", bars: seBars, cities: null, from: seFrom,
+      href: `${SITE}/blog/beer-prices-sweden/` },
+    ...countrySummaries.sort((a, b) => b.bars - a.bars)
+      .map((s) => ({ ...s, href: `${SITE}/${s.rel}/` })),
+  ].sort((a, b) => b.bars - a.bars);
+  const totalBars = all.reduce((a, c) => a + c.bars, 0);
+  const body = `
+  <p class="lede">Reported beer prices from ${totalBars} bars across ${all.length} countries — the same live data the Sejdel map runs on, compared bar by bar. Pick a country; every one has its cities in the local language and English.</p>
+  <p class="stamp">${esc(T.updated)} ${esc(dateIn("en"))}</p>
+  <h2>Pick a country</h2>
+  <div class="citygrid">
+    ${all.map((c) => `<div class="citycard">
+      <h3><a class="cityname" href="${c.href}">${flagEmoji(c.iso)} ${esc(c.name)}</a></h3>
+      <p class="meta">${c.bars} bars${c.cities ? ` · ${c.cities} ${c.cities === 1 ? "city" : "cities"}` : ""}${c.from ? ` · from ${esc(c.from)}` : ""}</p>
+    </div>`).join("\n")}
+  </div>
+  ${mapCta(T, null)}`;
+  write(WORLD_REL, page({
+    lang: "en", T, canonical: `${SITE}/${WORLD_REL}/`,
+    alts: [{ lang: "en", href: `${SITE}/${WORLD_REL}/` }],
+    title: "What does beer cost around the world? Live prices by country | Sejdel",
+    desc: `Beer prices from ${totalBars} bars in ${all.length} countries, reported by drinkers and compared city by city.`,
+    kicker: "Beer prices · Worldwide", h1: "What does beer cost around the world?",
+    body, jsonld: null,
+  }));
+}
+
+// The Swedish blog hubs point at the world hub — a doorway, not an annex.
+for (const [file, label, more, cta] of [
+  [join(ROOT, "blog", "index.html"), "Around the world",
+   "The same comparison for every country we cover — in the local language and English.",
+   "What does beer cost around the world?"],
+  [join(ROOT, "blogg", "index.html"), "Ute i världen",
+   "Samma jämförelse för alla länder vi täcker — på det lokala språket och engelska.",
+   "Vad kostar ölen i världen?"],
 ]) {
   if (!existsSync(file)) continue;
   let html = readFileSync(file, "utf8");
@@ -834,15 +899,15 @@ for (const [file, label, more] of [
   <h2>${label}</h2>
   <p>${more}</p>
   <ul class="chips">
+    <li><a href="${SITE}/${WORLD_REL}/">${cta}</a></li>
     ${countrySummaries.sort((a, b) => b.bars - a.bars).map((s) =>
-      `<li><a href="${SITE}/${s.rel}/">${esc(s.name)} · ${s.bars}</a></li>`).join("\n    ")}
+      `<li><a href="${SITE}/${s.rel}/">${flagEmoji(s.iso)} ${esc(s.name)} · ${s.bars}</a></li>`).join("\n    ")}
   </ul>
   <!--INTL:END-->`;
   const re = /<!--INTL:START-->[\s\S]*?<!--INTL:END-->/;
   if (re.test(html)) {
     writeFileSync(file, html.replace(re, block));
   } else {
-    // Marker not present (gen-blog not yet rerun): insert before the map CTA.
     writeFileSync(file, html.replace(/<a class="cta"/, `${block}\n  <a class="cta"`));
   }
 }
