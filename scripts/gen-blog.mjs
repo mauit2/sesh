@@ -50,6 +50,17 @@ async function rpc(fn, body = {}) {
   return r.json();
 }
 
+// PostgREST caps any response at 1000 rows; page until a short page.
+async function rpcPaged(fn) {
+  const out = [];
+  for (let off = 0; ; off += 1000) {
+    const page = await rpc(fn, { p_limit: 1000, p_offset: off });
+    out.push(...page);
+    if (page.length < 1000) break;
+  }
+  return out;
+}
+
 async function allVenues() {
   const out = [];
   for (let off = 0; ; off += 1000) {
@@ -66,7 +77,7 @@ async function allVenues() {
 // ---------------------------------------------------------------- data
 
 const [prices, venues, happyRaw] = await Promise.all([
-  rpc("public_beer_prices"), allVenues(), rpc("public_happy_hour_prices"),
+  rpcPaged("public_beer_prices"), allVenues(), rpc("public_happy_hour_prices"),
 ]);
 const cityOf = new Map(venues.map((v) => [v.id, v.city]));
 
@@ -1320,6 +1331,7 @@ for (const lang of ["sv", "en"]) {
     </div>`;
     }).join("\n")}
   </div>
+  <!--INTL:START--><!--INTL:END-->
   ${mapCta(lang)}
 `,
   }));
