@@ -158,8 +158,8 @@ const L = {
        `Yes — find the bar on the Sejdel beer map and add what you paid. It shows on the map immediately and here at the next rebuild.`]],
     otherCities: "More cities", allPages: "All beer prices", underChip: (n) => `Under ${n}`, outChip: "Outdoor seating",
     footer: `This page is intended for readers of legal drinking age. Prices are reported by users and shown as the median of recent reports per bar. Sejdel cannot guarantee a price still stands when you arrive — <a href="${SITE}/map/">report a change</a> if it has moved. Please drink responsibly.`,
-    hubTitle: (country) => `Beer prices in ${country}, city by city | Sejdel`,
-    hubH1: (country) => `What does beer cost in ${country}?`,
+    hubTitle: (country) => `How much is a beer in ${country}? City-by-city prices | Sejdel`,
+    hubH1: (country) => `How much is a beer in ${country}?`,
     hubLede: (country, bars, cities) => `Reported beer prices from ${bars} bars across ${cities} ${cities === 1 ? "city" : "cities"} in ${country}, compared bar by bar.`,
     hubPick: "Pick your city", langName: "English",
   },
@@ -791,9 +791,10 @@ for (const [iso, list] of byCountry) {
     const THE = new Set(["united-states", "united-kingdom", "netherlands"]);
     const cSlug = slugify(countryName);
     const rel = `blog/how-much-is-a-beer-in-${THE.has(cSlug) ? "the-" : ""}${cSlug}-reddit`;
+    const proseName = THE.has(cSlug) ? `the ${countryName}` : countryName;
     const bars = cities.reduce((a, c) => a + c.cheap.length, 0);
     const body = `
-  <p class="lede">${esc(T.hubLede(countryName, bars, cities.length))}</p>
+  <p class="lede">${esc(T.hubLede(proseName, bars, cities.length))}</p>
   <p class="stamp">${esc(T.updated)} ${esc(dateIn("en"))}</p>
   <h2>${esc(T.hubPick)}</h2>
   <div class="citygrid">
@@ -812,8 +813,8 @@ for (const [iso, list] of byCountry) {
   ${mapCta(T, cities[0])}`;
     write(rel, page({
       lang: "en", T, canonical: `${SITE}/${rel}/`, alts: [{ lang: "en", href: `${SITE}/${rel}/` }],
-      title: T.hubTitle(countryName), desc: T.hubLede(countryName, bars, cities.length),
-      kicker: T.kicker(countryName), h1: T.hubH1(countryName), body, jsonld: null,
+      title: T.hubTitle(proseName), desc: T.hubLede(proseName, bars, cities.length),
+      kicker: T.kicker(countryName), h1: T.hubH1(proseName), body, jsonld: null,
     }));
     countrySummaries.push({ iso, name: countryName, cities: cities.length, bars, rel });
   }
