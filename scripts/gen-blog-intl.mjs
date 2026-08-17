@@ -34,7 +34,7 @@ const HERE = dirname(new URL(import.meta.url).pathname);
 const ROOT = join(HERE, "..", "docs");
 const SITE = "https://sejdel.com";
 
-const MIN_BARS = 8;    // a city page below this is too thin to publish
+const MIN_BARS = 5;    // a city page below this is too thin to publish
 const MIN_UNDER = 5;   // "beer under N" needs this many qualifying bars
 const MIN_OUT = 5;     // an outdoor page (terrace data is sparser abroad)
 const TABLE_CAP = 15;
@@ -443,8 +443,18 @@ async function allVenues() {
 const [prices, venues] = await Promise.all([rpcPaged("public_beer_prices"), allVenues()]);
 const vInfo = new Map(venues.map((v) => [v.id, v]));
 
-// City names sometimes carry ", Country" — keep the city part only.
-const cleanCity = (c) => c ? String(c).split(",")[0].trim() : null;
+// City names sometimes carry ", Country" — keep the city part only. A
+// country name posing as a city ("United Kingdom") is data noise, not a
+// place; refuse it here so a bad import can never mint a fake city page.
+const JUNK_CITY = new Set([
+  "unitedkingdom", "unitedstates", "england", "scotland", "wales", "uk", "usa",
+  ...Object.values(COUNTRIES).flatMap((c) => Object.values(c.name)),
+].map((x) => slugify(String(x)).replace(/-/g, "")));
+const cleanCity = (c) => {
+  if (!c) return null;
+  const name = String(c).split(",")[0].trim();
+  return JUNK_CITY.has(slugify(name).replace(/-/g, "")) ? null : name;
+};
 
 const rows = prices
   .map((p) => {
