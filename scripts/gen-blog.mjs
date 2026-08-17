@@ -1338,6 +1338,32 @@ for (const lang of ["sv", "en"]) {
 }
 
 
+// ---------------------------------------------- Sweden summary for intl
+//
+// gen-blog-intl.mjs builds the world hub and needs Sweden rendered with the
+// same city-card grid as every other country — built HERE, with this file's
+// own slug and variant logic, so the two can never disagree about which
+// Swedish pages exist.
+{
+  const grid = cities.map((c) => {
+    const en = EN_NAME[c.city] || c.city;
+    const cityHref = `${SITE}/blog/cheapest-beer-${slugify(en)}/`;
+    const enLinks = variantLinks("en", c.city, null)
+      || `<ul class="chips"><li><a href="${cityHref}">All beer prices</a></li></ul>`;
+    const svLinks = variantLinks("sv", c.city, null)
+      || `<ul class="chips"><li><a href="${SITE}/blogg/billig-ol-${slugify(c.city)}/">Alla ölpriser</a></li></ul>`;
+    return `<div class="citycard">
+      <h3><a class="cityname" href="${cityHref}">${esc(en)}</a></h3>
+      <p class="meta">${c.bars} bars · from ${kr(c.cheapest40 ?? c.median40)}</p>
+      ${enLinks}
+      <p class="meta" style="margin-top:8px">Svenska</p>
+      ${svLinks}
+    </div>`;
+  }).join("\n");
+  writeFileSync(join(dirname(new URL(import.meta.url).pathname), ".se-summary.json"),
+    JSON.stringify({ bars: national.bars, cities: cities.length, grid }));
+}
+
 // ------------------------------------------------- homepage stats block
 //
 // The homepage teases these figures, and hand-written they drifted from the

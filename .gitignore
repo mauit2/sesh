@@ -62,3 +62,4 @@ Secrets.local.*
 # repo stops it being scraped from GitHub and used against our tile quota.
 # Each developer drops their own pk. token here; see Secrets.mapboxPublicToken.
 sesh.app/MapboxToken.txt
+scripts/.se-summary.json

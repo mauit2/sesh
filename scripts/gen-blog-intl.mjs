@@ -160,7 +160,7 @@ const L = {
     footer: `This page is intended for readers of legal drinking age. Prices are reported by users and shown as the median of recent reports per bar. Sejdel cannot guarantee a price still stands when you arrive — <a href="${SITE}/map/">report a change</a> if it has moved. Please drink responsibly.`,
     hubTitle: (country) => `How much is a beer in ${country}? City-by-city prices | Sejdel`,
     hubH1: (country) => `How much is a beer in ${country}?`,
-    hubLede: (country, bars, cities) => `Reported beer prices from ${bars} bars across ${cities} ${cities === 1 ? "city" : "cities"} in ${country}, compared bar by bar.`,
+    hubLede: (country, bars, cities) => `Reported beer prices from ${bars} bars across ${country}, with city pages for the ${cities} busiest ${cities === 1 ? "city" : "cities"} — the rest are on the map.`,
     hubPick: "Pick your city", langName: "English",
   },
   de: {
@@ -806,12 +806,16 @@ for (const [iso, list] of byCountry) {
   {
     const T = L.en;
     const countryName = C.name.en;
+    // The COUNTRY total counts every priced bar in the country — bars in
+    // towns too small for their own page (or with no city label at all)
+    // still exist; counting only page-worthy cities read as wrong data.
+    const countryBars = venueCheapest(list).length;
     // "how much is a beer in france reddit" — the hub IS that question.
     const THE = new Set(["united-states", "united-kingdom", "netherlands"]);
     const cSlug = slugify(countryName);
     const rel = `blog/how-much-is-a-beer-in-${THE.has(cSlug) ? "the-" : ""}${cSlug}-reddit`;
     const proseName = THE.has(cSlug) ? `the ${countryName}` : countryName;
-    const bars = cities.reduce((a, c) => a + c.cheap.length, 0);
+    const bars = countryBars;
     // Built once, used on the country hub AND the world hub — every article
     // must sit at most two clicks from the home page, so the world hub
     // (linked from home) carries the full chip set for every city.
@@ -858,27 +862,37 @@ const seRows = prices.map((p) => ({ ...p, v: vInfo.get(p.venue_id) || {} }))
   .filter((r) => r.v.country === "SE" && r.currency === "SEK" && Number.isFinite(Number(r.price)));
 const seBars = new Set(seRows.map((r) => r.venue_id)).size;
 const seFrom = seRows.length ? `${Math.round(Math.min(...seRows.map((r) => Number(r.price))))} kr` : null;
+// Sweden's city grid, exported by gen-blog.mjs so the world hub renders it
+// exactly like every other country's.
+let seGrid = null, seCities = null;
+try {
+  const se = JSON.parse(readFileSync(join(HERE, ".se-summary.json"), "utf8"));
+  seGrid = se.grid; seCities = se.cities;
+} catch { /* gen-blog.mjs has not run — fall back to the chip row */ }
 
 const WORLD_REL = "blog/what-does-beer-cost-around-the-world-reddit";
 {
   const T = L.en;
   const ranked = countrySummaries.sort((a, b) => b.bars - a.bars);
   const totalBars = ranked.reduce((a, c) => a + c.bars, 0) + seBars;
+  const seMeta = `${seBars} bars${seCities ? ` · ${seCities} cities with pages` : ""}${seFrom ? ` · from ${esc(seFrom)}` : ""}`;
   const seSection = `
   <h2>${flagEmoji("SE")} <a href="${SITE}/blog/beer-prices-sweden/">Sweden</a></h2>
-  <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">${seBars} bars${seFrom ? ` · from ${esc(seFrom)}` : ""}</p>
-  <ul class="chips">
+  <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">${seMeta}</p>
+  ${seGrid ? `<div class="citygrid">
+    ${seGrid}
+  </div>` : `<ul class="chips">
     <li><a href="${SITE}/blog/beer-prices-sweden/">All of Sweden</a></li>
     <li><a href="${SITE}/blog/">City by city (English)</a></li>
     <li><a href="${SITE}/blogg/">På svenska</a></li>
-  </ul>`;
+  </ul>`}`;
   const body = `
   <p class="lede">Reported beer prices from ${totalBars} bars across ${ranked.length + 1} countries — the same live data the Sejdel map runs on, compared bar by bar. Every city below is one click away, in the local language and English.</p>
   <p class="stamp">${esc(T.updated)} ${esc(dateIn("en"))}</p>
   ${seSection}
   ${ranked.map((s) => `
   <h2>${flagEmoji(s.iso)} <a href="${SITE}/${s.rel}/">${esc(s.name)}</a></h2>
-  <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">${s.bars} bars · ${s.cities} ${s.cities === 1 ? "city" : "cities"} · from ${esc(s.from)}</p>
+  <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">${s.bars} bars · ${s.cities} ${s.cities === 1 ? "city" : "cities"} with pages · from ${esc(s.from)}</p>
   <div class="citygrid">
     ${s.grid}
   </div>`).join("\n")}
@@ -964,6 +978,6 @@ for (const [file, label, more, cta] of [
   }
 }
 
-console.log(`countries: ${countrySummaries.map((s) => `${s.iso}:${s.cities}`).join(" ")}`);
+console.log(`countries: ${countrySummaries.map((s) => `${s.iso}:${s.bars}b/${s.cities}c`).join(" ")}`);
 console.log(`city page sets: ${cityPages}`);
 console.log(`pages written: ${written.length}`);
