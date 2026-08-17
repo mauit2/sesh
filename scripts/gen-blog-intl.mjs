@@ -934,6 +934,36 @@ for (const [file, label, more, cta] of [
   writeFileSync(smPath, sm);
 }
 
+// ------------------------------------------------- homepage stats block
+//
+// gen-blog.mjs writes a Swedish version of this block; running after it,
+// this generator replaces it with the worldwide view the homepage teases.
+{
+  const idx = join(ROOT, "index.html");
+  if (existsSync(idx)) {
+    let html = readFileSync(idx, "utf8");
+    const nCountries = countrySummaries.length + 1;
+    const nCities = countrySummaries.reduce((a, s) => a + s.cities, 0);
+    const totalBars = countrySummaries.reduce((a, s) => a + s.bars, 0) + seBars;
+    const flags = ["SE", ...countrySummaries.sort((a, b) => b.bars - a.bars).map((s) => s.iso)]
+      .map(flagEmoji).join(" ");
+    const names = ["Sweden", ...countrySummaries.map((s) => s.name)].join(", ");
+    const langs = "Swedish, English, French, German, Spanish, Portuguese, Italian and Dutch";
+    const block = `<!--BEERSTATS:START-->
+        <ul class="plist">
+          <li><b>${nCountries} countries. ${flags}</b> <span>${esc(names)} — every one compared city by city.</span></li>
+          <li><b>${totalBars} bars with live prices.</b> <span>Reported by people standing in them, shown as the median of recent reports — the same data the map runs on.</span></li>
+          <li><b>Eight languages.</b> <span>Every city reads in its own language — ${langs} — with an English twin for the rest of us.</span></li>
+        </ul>
+        <!--BEERSTATS:END-->`;
+    const re = /<!--BEERSTATS:START-->[\s\S]*?<!--BEERSTATS:END-->/;
+    if (re.test(html)) {
+      writeFileSync(idx, html.replace(re, block));
+      console.log("homepage stats block: worldwide version written");
+    }
+  }
+}
+
 console.log(`countries: ${countrySummaries.map((s) => `${s.iso}:${s.cities}`).join(" ")}`);
 console.log(`city page sets: ${cityPages}`);
 console.log(`pages written: ${written.length}`);
