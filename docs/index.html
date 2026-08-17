@@ -176,6 +176,36 @@
     box-shadow:0 30px 70px -40px rgba(0,0,0,.9),inset 0 1px 0 rgba(243,233,216,.05);
   }
 
+  /* ---------- bento ----------
+     One grid, mixed tile sizes: the whole page below the hero reads as a
+     board of cards instead of a stack of sections. Spans collapse 12 →
+     6 → 1-per-row as the viewport narrows. */
+  .bento{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;}
+  .bento>*{grid-column:span 12;min-width:0;}
+  .t4{grid-column:span 4;}.t5{grid-column:span 5;}
+  .t7{grid-column:span 7;}.t8{grid-column:span 8;}.t12{grid-column:span 12;}
+  .tile{padding:clamp(20px,2.6vw,30px);position:relative;overflow:hidden;
+    transition:transform .45s var(--spring),border-color .3s ease;}
+  .tile:hover{transform:translateY(-3px);border-color:rgba(232,132,60,.4);}
+  .tile-kicker{font-family:var(--mono);font-size:10px;letter-spacing:.24em;
+    text-transform:uppercase;color:var(--whiskey);margin:0 0 12px;}
+  .bento h2{font-size:clamp(1.55rem,3.2vw,2.2rem);}
+  .tile-h3{font-family:"Fraunces",serif;font-weight:800;font-size:1.35rem;
+    margin:0 0 8px;letter-spacing:-.01em;}
+  .tile-p{margin:0 0 4px;color:var(--cream-dim);font-size:.95rem;line-height:1.65;}
+  .tile>.btn{margin-top:18px;}
+  .accent{background:linear-gradient(150deg,rgba(232,132,60,.30),rgba(22,16,11,.62));
+    border-color:rgba(232,132,60,.5);}
+  .accent .tile-kicker{color:var(--cream);}
+  .bento .tabcard{margin:0;}
+  @media (max-width:980px){
+    .t4{grid-column:span 6;}
+    .t5,.t7,.t8{grid-column:span 12;}
+  }
+  @media (max-width:640px){
+    .t4{grid-column:span 12;}
+  }
+
   /* ---------- the five tabs + recap ----------
      Four cards are real screenshots straight out of the app. The other three
      are rebuilt here in CSS against the app's own tokens, taken from
@@ -548,15 +578,26 @@
 
   <div class="wrap">
 
-    <section aria-labelledby="flow-h">
-      <p class="label r">The app</p>
-      <h2 id="flow-h" class="r s1">Five tabs, <em>one</em> night.</h2>
-      <p class="lede r s2">PLAN, LIVE, NIGHTLINE, CHATS and DEALS — in the order a night
-        actually happens, and a recap waiting for you in the morning.</p>
+    <section aria-label="Inside Sejdel">
+      <p class="label r">Inside Sejdel</p>
+      <div class="bento">
 
-      <div class="screens">
+        <div class="glass tile t8 r s1">
+          <p class="tile-kicker">The app</p>
+          <h2 id="flow-h">Five tabs, <em>one</em> night.</h2>
+          <p class="lede">PLAN, LIVE, NIGHTLINE, CHATS and DEALS — in the order a night
+            actually happens, and a recap waiting for you in the morning.</p>
+        </div>
 
-        <article class="glass tabcard r s1">
+        <div class="glass tile t4 accent r s2">
+          <p class="tile-kicker">Beta</p>
+          <h3 class="tile-h3">Know your night, tonight.</h3>
+          <p class="tile-p">In beta on TestFlight for iOS 18 and up.</p>
+          <a class="btn" href="mailto:contact@sejdel.com?subject=TestFlight%20invite">Get an invite <span class="arw" aria-hidden="true">→</span></a>
+        </div>
+
+
+        <article class="glass tabcard tile t4 r s1">
           <div class="phone">
             <div class="screen">
               <img class="shot" src="./screens/plan.jpg" width="402" height="874"
@@ -571,7 +612,7 @@
           <span class="shotnote">Real screen · from the app</span>
         </article>
 
-        <article class="glass tabcard r s2">
+        <article class="glass tabcard tile t4 r s2">
           <div class="phone">
             <div class="screen">
               <img class="shot" src="./screens/live-a.jpg" width="402" height="874"
@@ -589,7 +630,7 @@
           <span class="shotnote">Real screens · two taps apart</span>
         </article>
 
-        <article class="glass tabcard r s3">
+        <article class="glass tabcard tile t4 r s3">
           <div class="phone">
             <div class="screen" aria-hidden="true">
               <div class="aBar"><span class="t">11:08</span><span class="isl"></span><span class="ic"><span class="wf"></span><span class="bat"></span></span></div>
@@ -641,7 +682,7 @@
           <span class="shotnote">Rebuilt to match · real screen has friends in it</span>
         </article>
 
-        <article class="glass tabcard r s1">
+        <article class="glass tabcard tile t4 r s1">
           <div class="phone">
             <div class="screen" aria-hidden="true">
               <div class="aBar"><span class="t">11:08</span><span class="isl"></span><span class="ic"><span class="wf"></span><span class="bat"></span></span></div>
@@ -678,7 +719,7 @@
           <span class="shotnote">Rebuilt to match · real screen is private</span>
         </article>
 
-        <article class="glass tabcard r s2">
+        <article class="glass tabcard tile t4 r s2">
           <div class="phone">
             <div class="screen">
               <img class="shot" src="./screens/deals.jpg" width="402" height="874"
@@ -695,7 +736,7 @@
           <span class="shotnote">Real screens · deals, then beer prices</span>
         </article>
 
-        <article class="glass tabcard r s3">
+        <article class="glass tabcard tile t4 r s3">
           <div class="phone">
             <div class="screen" aria-hidden="true">
               <div class="aBar"><span class="t">11:08</span><span class="isl"></span><span class="ic"><span class="wf"></span><span class="bat"></span></span></div>
@@ -747,14 +788,8 @@
             number, and who was there — waiting for you in the morning.</p>
           <span class="shotnote">Rebuilt to match · real recap has photos in it</span>
         </article>
-
-      </div>
-    </section>
-
-    <section aria-labelledby="map-h">
-      <p class="label r">Find the cheap pint</p>
-      <div class="split">
-        <div class="glass panel r s1">
+        <div class="glass tile t7 r s1">
+          <p class="tile-kicker">Find the cheap pint</p>
           <h2 id="map-h">The beer map, <em>everywhere.</em></h2>
           <p class="lede">Zoom out and the whole world is on it. Every price is coloured
             against what a beer actually costs in that region and that currency — so cheap
@@ -769,7 +804,8 @@
           <a class="btn" href="./map/">Open the map <span class="arw" aria-hidden="true">→</span></a>
         </div>
 
-        <div class="glass panel r s2">
+        <div class="glass tile t5 r s2">
+          <p class="tile-kicker">How colours work</p>
           <div class="scale">
             <div class="row">
               <span class="pill" style="background:#3fbf4a">45 kr</span>
@@ -794,39 +830,36 @@
             <p class="cap">Colour is relative to the local cheapest — same logic, any currency</p>
           </div>
         </div>
-      </div>
-    </section>
 
-    <!-- The price articles. Reachable from the nav, but a nav link alone leaves
-         28 pages effectively hidden; this puts the actual cities one click from
-         the homepage and gives Google a crawlable path to each. -->
-    <section aria-labelledby="prices-h">
-      <p class="label r">What beer costs</p>
-      <div class="glass panel r s1">
-        <h2 id="prices-h">Beer prices, <em>around the world.</em></h2>
-        <p class="lede">We publish what a beer actually costs — city by city, country by
-          country, compared per pour rather than per glass, because a cheap beer in a
-          small glass isn't cheap. In the local language and English, updated daily
-          from the same reports that feed the map.</p>
-        <p style="display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 22px">
-          <a class="btn" href="./blog/what-does-beer-cost-around-the-world-reddit/">Around the world <span class="arw" aria-hidden="true">→</span></a>
-        </p>
-        <!-- gen-blog.mjs rewrites everything between these markers. Hand-editing
-             the numbers here is how they end up contradicting the articles. -->
-        <!--BEERSTATS:START-->
+        <div class="glass tile t8 r s1">
+          <p class="tile-kicker">What beer costs</p>
+          <h2 id="prices-h">Beer prices, <em>around the world.</em></h2>
+          <p class="lede">We publish what a beer actually costs — city by city, country by
+            country, compared per pour rather than per glass, because a cheap beer in a
+            small glass isn't cheap. In the local language and English, updated daily
+            from the same reports that feed the map.</p>
+          <!-- gen-blog-intl.mjs rewrites everything between these markers. Hand-editing
+               the numbers here is how they end up contradicting the articles. -->
+          <!--BEERSTATS:START-->
         <ul class="plist">
           <li><b>12 countries. 🇸🇪 🇬🇧 🇺🇸 🇫🇷 🇮🇹 🇪🇸 🇵🇹 🇧🇪 🇩🇪 🇨🇭 🇳🇱 🇨🇦</b> <span>Sweden, United Kingdom, United States, France, Italy, Spain, Portugal, Belgium, Germany, Switzerland, Netherlands, Canada — every one compared city by city.</span></li>
           <li><b>2774 bars with live prices.</b> <span>Reported by people standing in them, shown as the median of recent reports — the same data the map runs on.</span></li>
           <li><b>Eight languages.</b> <span>Every city reads in its own language — Swedish, English, French, German, Spanish, Portuguese, Italian and Dutch — with an English twin for the rest of us.</span></li>
         </ul>
         <!--BEERSTATS:END-->
-      </div>
-    </section>
+          <a class="btn" href="./blog/what-does-beer-cost-around-the-world-reddit/">Around the world <span class="arw" aria-hidden="true">→</span></a>
+        </div>
 
-    <section aria-labelledby="bars-h">
-      <p class="label r">Sejdel for bars</p>
-      <div class="glass bars r s1">
-        <div class="txt">
+        <div class="glass tile t4 r s2">
+          <p class="tile-kicker">Plan the buy</p>
+          <h3 class="tile-h3">How much should the crew buy?</h3>
+          <p class="tile-p">The supply calculator turns people × hours × the level you're
+            after into bottles and cans — the same maths the PLAN tab runs.</p>
+          <a class="btn" href="./calculator/">Open the calculator <span class="arw" aria-hidden="true">→</span></a>
+        </div>
+
+        <div class="glass bars tile t12 r s1">
+          <div class="txt">
           <h3 id="bars-h">Run a bar? Get on the map.</h3>
           <p>Sejdel users are out, phone in hand, deciding where to go next. Land on the Deals
             map — from a simple pin to a rotating billboard at the top of the tab.</p>
@@ -839,6 +872,8 @@
         <div>
           <a class="btn" href="./pricing/">See pricing <span class="arw" aria-hidden="true">→</span></a>
         </div>
+        </div>
+
       </div>
     </section>
 
