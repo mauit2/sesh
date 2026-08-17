@@ -92,8 +92,8 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 // Query-shaped slugs, per language. {c}=city slug, {n}=threshold, {w}=currency word.
 const SLUG = {
   en: { cheap: (c) => `where-is-the-cheapest-beer-in-${c}-reddit`,
-        under: (n, w, c) => `beer-under-${n}-${w}-in-${c}`,
-        out:   (c) => `outdoor-seating-cheap-beer-${c}` },
+        under: (n, w, c) => `beer-under-${n}-${w}-in-${c}-reddit`,
+        out:   (c) => `best-outdoor-seating-cheap-beer-in-${c}-reddit` },
   de: { cheap: (c) => `wo-ist-das-bier-am-guenstigsten-in-${c}`,
         under: (n, w, c) => `bier-unter-${n}-${w}-${c}`,
         out:   (c) => `biergarten-guenstiges-bier-${c}` },
@@ -787,7 +787,10 @@ for (const [iso, list] of byCountry) {
   {
     const T = L.en;
     const countryName = C.name.en;
-    const rel = `blog/${slugify(countryName)}`;
+    // "how much is a beer in france reddit" — the hub IS that question.
+    const THE = new Set(["united-states", "united-kingdom", "netherlands"]);
+    const cSlug = slugify(countryName);
+    const rel = `blog/how-much-is-a-beer-in-${THE.has(cSlug) ? "the-" : ""}${cSlug}-reddit`;
     const bars = cities.reduce((a, c) => a + c.cheap.length, 0);
     const body = `
   <p class="lede">${esc(T.hubLede(countryName, bars, cities.length))}</p>
