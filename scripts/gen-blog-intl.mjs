@@ -812,22 +812,28 @@ for (const [iso, list] of byCountry) {
     const rel = `blog/how-much-is-a-beer-in-${THE.has(cSlug) ? "the-" : ""}${cSlug}-reddit`;
     const proseName = THE.has(cSlug) ? `the ${countryName}` : countryName;
     const bars = cities.reduce((a, c) => a + c.cheap.length, 0);
-    const body = `
-  <p class="lede">${esc(T.hubLede(proseName, bars, cities.length))}</p>
-  <p class="stamp">${esc(T.updated)} ${esc(dateIn("en"))}</p>
-  <h2>${esc(T.hubPick)}</h2>
-  <div class="citygrid">
-    ${cities.map((c) => {
+    // Built once, used on the country hub AND the world hub — every article
+    // must sit at most two clicks from the home page, so the world hub
+    // (linked from home) carries the full chip set for every city.
+    const grid = cities.map((c) => {
       const local = langOf(c.city);
       const links = chips("en", c, null);
+      // The FULL local chip row, not just the flagship: every page in both
+      // languages must be two clicks from the home page.
       const localLink = local !== "en"
-        ? `<ul class="chips"><li><a href="${urlFor(local, "cheap", c)}">${esc(L[local].langName)}</a></li></ul>` : "";
+        ? `<p class="meta" style="margin-top:8px">${esc(L[local].langName)}</p>${chips(local, c, null)}` : "";
       return `<div class="citycard">
       <h3><a class="cityname" href="${urlFor("en", "cheap", c)}">${esc(c.city)}</a></h3>
       <p class="meta">${c.cheap.length} bars · from ${money(c.cheap[0].price, C, "en")}</p>
       ${links}${localLink}
     </div>`;
-    }).join("\n")}
+    }).join("\n");
+    const body = `
+  <p class="lede">${esc(T.hubLede(proseName, bars, cities.length))}</p>
+  <p class="stamp">${esc(T.updated)} ${esc(dateIn("en"))}</p>
+  <h2>${esc(T.hubPick)}</h2>
+  <div class="citygrid">
+    ${grid}
   </div>
   ${mapCta(T, cities[0])}`;
     write(rel, page({
@@ -835,7 +841,7 @@ for (const [iso, list] of byCountry) {
       title: T.hubTitle(proseName), desc: T.hubLede(proseName, bars, cities.length),
       kicker: T.kicker(countryName), h1: T.hubH1(proseName), body, jsonld: null,
     }));
-    countrySummaries.push({ iso, name: countryName, cities: cities.length, bars, rel,
+    countrySummaries.push({ iso, name: countryName, cities: cities.length, bars, rel, grid,
       from: money(Math.min(...cities.map((x) => x.cheap[0].price)), C, "en") });
   }
 }
@@ -856,29 +862,32 @@ const seFrom = seRows.length ? `${Math.round(Math.min(...seRows.map((r) => Numbe
 const WORLD_REL = "blog/what-does-beer-cost-around-the-world-reddit";
 {
   const T = L.en;
-  const all = [
-    { iso: "SE", name: "Sweden", bars: seBars, cities: null, from: seFrom,
-      href: `${SITE}/blog/beer-prices-sweden/` },
-    ...countrySummaries.sort((a, b) => b.bars - a.bars)
-      .map((s) => ({ ...s, href: `${SITE}/${s.rel}/` })),
-  ].sort((a, b) => b.bars - a.bars);
-  const totalBars = all.reduce((a, c) => a + c.bars, 0);
+  const ranked = countrySummaries.sort((a, b) => b.bars - a.bars);
+  const totalBars = ranked.reduce((a, c) => a + c.bars, 0) + seBars;
+  const seSection = `
+  <h2>${flagEmoji("SE")} <a href="${SITE}/blog/beer-prices-sweden/">Sweden</a></h2>
+  <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">${seBars} bars${seFrom ? ` · from ${esc(seFrom)}` : ""}</p>
+  <ul class="chips">
+    <li><a href="${SITE}/blog/beer-prices-sweden/">All of Sweden</a></li>
+    <li><a href="${SITE}/blog/">City by city (English)</a></li>
+    <li><a href="${SITE}/blogg/">På svenska</a></li>
+  </ul>`;
   const body = `
-  <p class="lede">Reported beer prices from ${totalBars} bars across ${all.length} countries — the same live data the Sejdel map runs on, compared bar by bar. Pick a country; every one has its cities in the local language and English.</p>
+  <p class="lede">Reported beer prices from ${totalBars} bars across ${ranked.length + 1} countries — the same live data the Sejdel map runs on, compared bar by bar. Every city below is one click away, in the local language and English.</p>
   <p class="stamp">${esc(T.updated)} ${esc(dateIn("en"))}</p>
-  <h2>Pick a country</h2>
+  ${seSection}
+  ${ranked.map((s) => `
+  <h2>${flagEmoji(s.iso)} <a href="${SITE}/${s.rel}/">${esc(s.name)}</a></h2>
+  <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">${s.bars} bars · ${s.cities} ${s.cities === 1 ? "city" : "cities"} · from ${esc(s.from)}</p>
   <div class="citygrid">
-    ${all.map((c) => `<div class="citycard">
-      <h3><a class="cityname" href="${c.href}">${flagEmoji(c.iso)} ${esc(c.name)}</a></h3>
-      <p class="meta">${c.bars} bars${c.cities ? ` · ${c.cities} ${c.cities === 1 ? "city" : "cities"}` : ""}${c.from ? ` · from ${esc(c.from)}` : ""}</p>
-    </div>`).join("\n")}
-  </div>
+    ${s.grid}
+  </div>`).join("\n")}
   ${mapCta(T, null)}`;
   write(WORLD_REL, page({
     lang: "en", T, canonical: `${SITE}/${WORLD_REL}/`,
     alts: [{ lang: "en", href: `${SITE}/${WORLD_REL}/` }],
     title: "What does beer cost around the world? Live prices by country | Sejdel",
-    desc: `Beer prices from ${totalBars} bars in ${all.length} countries, reported by drinkers and compared city by city.`,
+    desc: `Beer prices from ${totalBars} bars in ${ranked.length + 1} countries, reported by drinkers and compared city by city.`,
     kicker: "Beer prices · Worldwide", h1: "What does beer cost around the world?",
     body, jsonld: null,
   }));

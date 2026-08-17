@@ -1358,6 +1358,7 @@ for (const lang of ["sv", "en"]) {
           <li><b>${esc(EN_NAME[cheapest.city] || cheapest.city)} is the cheapest city we cover.</b> <span>A median of ${perCl(cheapest.medianRate)}${vsRef}</span></li>
           <li><b>${esc(EN_NAME[widest.city] || widest.city)} has the widest spread.</b> <span>${perCl(widest.bestRate)} to ${perCl(widest.worstRate)}, so where you drink matters more than which city you are in.</span></li>
           <li><b>${cities.length} cities, both languages.</b> <span>${esc(names)}.</span></li>
+          <li><b><a href="./blog/what-does-beer-cost-around-the-world-reddit/">What does beer cost around the world? →</a></b> <span>The same comparison for every country we cover, in the local language and English.</span></li>
         </ul>
         <!--BEERSTATS:END-->`;
   const re = /<!--BEERSTATS:START-->[\s\S]*?<!--BEERSTATS:END-->/;
