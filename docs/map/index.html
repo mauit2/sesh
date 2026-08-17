@@ -331,7 +331,7 @@
   var SB_URL="https://lltuozmbxacxiepardys.supabase.co";
   var SB_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsdHVvem1ieGFjeGllcGFyZHlzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3MTIyMDgsImV4cCI6MjA5MjI4ODIwOH0.dQzFgHJbSkUqz5eJ8d_X85g5M7SPCTNfOD4nIV5dz9I";
 
-  var SERVINGS=[["25","25 cl"],["33","33 cl"],["40","40 cl"],["47.3","16 oz"],["50","50 cl"],["pint","Pint"]];
+  var SERVINGS=[["25","25 cl"],["28.5","Middy"],["33","33 cl"],["40","40 cl"],["42.5","Schooner"],["47.3","16 oz"],["50","50 cl"],["pint","Pint"]];
   // Common first, then a broad world set so any bar's currency can be chosen.
   var CURRENCIES=["SEK","NOK","DKK","EUR","GBP","USD","JPY","CHF","AUD","CAD","PLN","CZK",
     "AED","ARS","BGN","BRL","CLP","CNY","COP","EGP","HKD","HUF","IDR","ILS","INR","ISK","KRW","MAD",
@@ -349,7 +349,9 @@
   function esc(t){return String(t==null?"":t).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
   function servingLabel(x){if(x==="unknown")return "Size not stated";
     if(x==="all")return "beer, any size";
-    return (SERVINGS.filter(function(s){return s[0]===x;})[0]||["",x])[1];}
+    var hit=SERVINGS.filter(function(s){return s[0]===x;})[0];
+    if(hit)return hit[1];
+    return isFinite(Number(x))?x+" cl":x;}
   // Rows to DRAW for a serving: the exact size where reported, else the
   // bar's size-less price — same fallback the app uses, so an imported
   // "a beer costs $6 here" bar still exists on the map.

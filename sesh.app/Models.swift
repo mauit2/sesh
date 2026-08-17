@@ -860,7 +860,8 @@ struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
 /// A standard beer serving size (migration 063). Colour anchors scale with the
 /// serving so a cheap 25cl and a cheap pint both read green.
 enum BeerServing: String, CaseIterable, Identifiable {
-    case s25 = "25", s33 = "33", s40 = "40", oz16 = "47.3", s50 = "50", pint = "pint"
+    case s25 = "25", middy = "28.5", s33 = "33", s40 = "40", schooner = "42.5",
+         oz16 = "47.3", s50 = "50", pint = "pint"
     var id: String { rawValue }
     static let canonical = BeerServing.s40   // "stor stark" — the map default
 
@@ -868,8 +869,10 @@ enum BeerServing: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .s25: return "25 cl"
+        case .middy: return "Middy"
         case .s33: return "33 cl"
         case .s40: return "40 cl"
+        case .schooner: return "Schooner"
         case .oz16: return "16 oz"
         case .s50: return "50 cl"
         case .pint: return "Pint"
@@ -879,6 +882,8 @@ enum BeerServing: String, CaseIterable, Identifiable {
     var longLabel: String {
         switch self {
         case .s40: return "40 cl · stor stark"
+        case .middy: return "285 ml · middy"
+        case .schooner: return "425 ml · schooner"
         case .oz16: return "16 oz · US pint"
         default: return label
         }
@@ -887,8 +892,10 @@ enum BeerServing: String, CaseIterable, Identifiable {
     var cl: Double {
         switch self {
         case .s25: return 25
+        case .middy: return 28.5
         case .s33: return 33
         case .s40: return 40
+        case .schooner: return 42.5
         case .oz16: return 47.3
         case .s50: return 50
         case .pint: return 57

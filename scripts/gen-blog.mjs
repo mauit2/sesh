@@ -26,7 +26,7 @@ const SITE = "https://sejdel.com";
 const MIN_BARS = 10;
 
 // Representative centilitres. 'pint' is the imperial 568 ml (see migration 082).
-const CL = { "25": 25, "33": 33, "40": 40, "50": 50, pint: 56.8 };
+const CL = { "25": 25, "33": 33, "40": 40, "42.5": 42.5, "28.5": 28.5, "47.3": 47.3, "50": 50, pint: 56.8 };
 const SERVING_LABEL = { "25": "25 cl", "33": "33 cl", "40": "40 cl", "50": "50 cl", pint: "pint" };
 
 // English exonyms where they differ. Malmö and Lund keep their spelling in both.
@@ -89,7 +89,7 @@ const rows = prices
     lat: p.lat, lon: p.lon,
     serving: p.serving,
     price: Number(p.price),
-    cl: CL[p.serving] ?? null,
+    cl: CL[p.serving] ?? (Number.isFinite(Number(p.serving)) ? Number(p.serving) : null),
     reports: p.report_count,
     currency: p.currency,
     outdoor: p.outdoor === true,

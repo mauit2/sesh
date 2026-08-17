@@ -40,7 +40,9 @@ const MIN_OUT = 5;     // an outdoor page (terrace data is sparser abroad)
 const TABLE_CAP = 15;
 
 // Representative centilitres per serving. 47.3 is the US 16 oz pint.
-const CL = { "25": 25, "33": 33, "40": 40, "47.3": 47.3, "50": 50, pint: 56.8 };
+const CL = { "25": 25, "33": 33, "40": 40, "42.5": 42.5, "28.5": 28.5, "47.3": 47.3, "50": 50, pint: 56.8 };
+// Any other honest numeric pour (45, 35, 62 …) still ranks per centilitre.
+const clOf = (s) => CL[s] ?? (Number.isFinite(Number(s)) ? Number(s) : null);
 
 // ---------------------------------------------------------------- countries
 //
@@ -67,13 +69,16 @@ const COUNTRIES = {
         cityLang: { "geneva": "fr", "genève": "fr", "lausanne": "fr", "lugano": "it" },
         name: { en: "Switzerland", de: "Schweiz", fr: "Suisse", it: "Svizzera" } },
   TH: { cur: "THB", sym: "฿",   pre: true,  th: [100, 150],langs: ["en"], name: { en: "Thailand" } },
+  AU: { cur: "AUD", sym: "$",   pre: true,  th: [8, 10],   langs: ["en"], name: { en: "Australia" } },
+  NZ: { cur: "NZD", sym: "NZ$", pre: true,  th: [8, 10],   langs: ["en"], name: { en: "New Zealand" } },
+  IE: { cur: "EUR", sym: "€",   pre: true,  th: [5, 6],    langs: ["en"], name: { en: "Ireland" } },
   SG: { cur: "SGD", sym: "S$",  pre: true,  th: [8, 10],   langs: ["en"], name: { en: "Singapore" } },
   HK: { cur: "HKD", sym: "HK$", pre: true,  th: [50, 60],  langs: ["zh"], name: { en: "Hong Kong", zh: "香港" } },
 };
 
 // What the currency is called inside a slug, per language.
 const CUR_WORD = {
-  en: { USD: "dollars", GBP: "pounds", EUR: "euros", CHF: "francs", CAD: "dollars", BRL: "reais", THB: "baht", SGD: "dollars", HKD: "dollars" },
+  en: { USD: "dollars", GBP: "pounds", EUR: "euros", CHF: "francs", CAD: "dollars", BRL: "reais", THB: "baht", SGD: "dollars", HKD: "dollars", AUD: "dollars", NZD: "dollars" },
   de: { EUR: "euro", CHF: "franken" },
   fr: { EUR: "euros", CHF: "francs", CAD: "dollars" },
   es: { EUR: "euros" },
@@ -121,7 +126,8 @@ const SLUG = {
 //
 // Every user-visible sentence, per language. Values are functions where the
 // city's numbers are stamped in. English is the reference copy.
-const SERVING_LABEL = { "25": "25 cl", "33": "33 cl", "40": "40 cl", "47.3": "16 oz", "50": "50 cl", pint: "pint" };
+const SERVING_LABEL = { "25": "25 cl", "33": "33 cl", "40": "40 cl", "42.5": "schooner · 425 ml",
+  "28.5": "middy · 285 ml", "47.3": "16 oz", "50": "50 cl", pint: "pint" };
 
 const L = {
   en: {
@@ -464,7 +470,7 @@ const rows = prices
       city: cleanCity(v.city), country: v.country || null,
       lat: p.lat, lon: p.lon,
       serving: p.serving, price: Number(p.price),
-      cl: CL[p.serving] ?? null,
+      cl: clOf(p.serving),
       currency: p.currency, outdoor: p.outdoor === true,
     };
   })
@@ -596,7 +602,8 @@ function money(n, C, lang) {
   if (C.cur === "EUR" && lang !== "en") return `${s} €`;
   return C.pre ? `${C.sym}${s}` : `${s} ${C.sym}`;
 }
-const sizeLabel = (T, serving) => SERVING_LABEL[serving] || T.servingUnknown;
+const sizeLabel = (T, serving) => SERVING_LABEL[serving]
+  ?? (Number.isFinite(Number(serving)) ? `${serving} cl` : T.servingUnknown);
 
 function band(price, med) {
   if (!med) return "b2";
