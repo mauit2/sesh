@@ -570,7 +570,7 @@ ${jsonld ? (Array.isArray(jsonld) ? jsonld : [jsonld])
     <a class="brand" href="${SITE}/">Sejdel<span>.</span></a>
     <nav>
       <a href="${SITE}/map/">${esc(T.navMap)}</a>
-      <a href="${SITE}/blog/">${esc(T.navBlog)}</a>
+      <a href="${SITE}/blog/what-does-beer-cost-around-the-world-reddit/">${esc(T.navBlog)}</a>
       ${langNav}
     </nav>
   </header>
@@ -887,7 +887,7 @@ const WORLD_REL = "blog/what-does-beer-cost-around-the-world-reddit";
   const totalBars = ranked.reduce((a, c) => a + c.bars, 0) + seBars;
   const seMeta = `${seBars} bars${seCities ? ` · ${seCities} cities with pages` : ""}${seFrom ? ` · from ${esc(seFrom)}` : ""}`;
   const seSection = `
-  <h2>${flagEmoji("SE")} <a href="${SITE}/blog/beer-prices-sweden/">Sweden</a></h2>
+  <h2 id="c-se">${flagEmoji("SE")} <a href="${SITE}/blog/beer-prices-sweden/">Sweden</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">${seMeta}</p>
   ${seGrid ? `<div class="citygrid">
     ${seGrid}
@@ -896,12 +896,38 @@ const WORLD_REL = "blog/what-does-beer-cost-around-the-world-reddit";
     <li><a href="${SITE}/blog/">City by city (English)</a></li>
     <li><a href="${SITE}/blogg/">På svenska</a></li>
   </ul>`}`;
+  const navEntries = [
+    { id: "c-se", iso: "SE", name: "Sweden" },
+    ...ranked.map((s) => ({ id: `c-${s.iso.toLowerCase()}`, iso: s.iso, name: s.name })),
+  ];
+  const countryNav = `
+  <style>
+  html{scroll-behavior:smooth;}
+  .countryrail{position:fixed;top:96px;right:clamp(8px,2vw,30px);z-index:5;
+    display:flex;flex-direction:column;gap:3px;
+    background:rgba(22,16,11,.72);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+    border:1px solid var(--line);border-radius:15px;padding:10px;}
+  .countryrail b{font-family:var(--mono);font-weight:400;font-size:9px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--bronze);padding:0 9px 6px;}
+  .countryrail a{font-size:12.5px;font-weight:600;text-decoration:none;color:var(--cream-dim);
+    padding:4px 9px;border-radius:8px;white-space:nowrap;}
+  .countryrail a:hover{color:var(--cream);background:rgba(232,132,60,.15);}
+  @media (max-width:1279px){.countryrail{display:none;}}
+  </style>
+  <nav class="countryrail" aria-label="Jump to a country">
+    <b>Countries</b>
+    ${navEntries.map((e) => `<a href="#${e.id}">${flagEmoji(e.iso)} ${esc(e.name)}</a>`).join("\n    ")}
+  </nav>
+  <ul class="chips">
+    ${navEntries.map((e) => `<li><a href="#${e.id}">${flagEmoji(e.iso)} ${esc(e.name)}</a></li>`).join("\n    ")}
+  </ul>`;
   const body = `
   <p class="lede">Reported beer prices from ${totalBars} bars across ${ranked.length + 1} countries — the same live data the Sejdel map runs on, compared bar by bar. Every city below is one click away, in the local language and English.</p>
   <p class="stamp">${esc(T.updated)} ${esc(dateIn("en"))}</p>
+  ${countryNav}
   ${seSection}
   ${ranked.map((s) => `
-  <h2>${flagEmoji(s.iso)} <a href="${SITE}/${s.rel}/">${esc(s.name)}</a></h2>
+  <h2 id="c-${s.iso.toLowerCase()}">${flagEmoji(s.iso)} <a href="${SITE}/${s.rel}/">${esc(s.name)}</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">${s.bars} bars · ${s.cities} ${s.cities === 1 ? "city" : "cities"} with pages · from ${esc(s.from)}</p>
   <div class="citygrid">
     ${s.grid}

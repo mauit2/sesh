@@ -46,7 +46,12 @@
   .top{display:flex;align-items:center;gap:12px;margin-bottom:clamp(26px,6vw,46px);}
   .brand{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:23px;letter-spacing:-.01em;color:var(--cream);text-decoration:none;}
   .brand span{color:var(--whiskey);}
-  .top nav{margin-left:auto;display:flex;gap:14px;font-size:13.5px;font-weight:600;}
+  .top nav{margin-left:auto;display:flex;gap:8px;font-size:12.5px;font-weight:600;flex-wrap:wrap;}
+  .top nav a{display:inline-block;text-decoration:none;color:var(--cream-dim);
+    background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;
+    padding:6px 13px;transition:transform .1s ease-out;}
+  .top nav a:hover{color:var(--cream);border-color:rgba(232,132,60,.5);}
+  .top nav a:active{transform:scale(.97);}
   .kicker{font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--bronze);margin:0 0 10px;}
   h1{font-family:"Fraunces",Georgia,serif;font-weight:900;font-size:clamp(30px,6.4vw,46px);line-height:1.04;letter-spacing:-.025em;margin:0 0 14px;}
   h2{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:clamp(21px,3.6vw,27px);letter-spacing:-.015em;margin:44px 0 12px;}
@@ -158,7 +163,7 @@
     <a class="brand" href="https://sejdel.com/">Sejdel<span>.</span></a>
     <nav>
       <a href="https://sejdel.com/map/">Map</a>
-      <a href="https://sejdel.com/blog/">Blog</a>
+      <a href="https://sejdel.com/blog/what-does-beer-cost-around-the-world-reddit/">Blog</a>
       
     </nav>
   </header>
@@ -168,7 +173,50 @@
   <p class="lede">Reported beer prices from 2774 bars across 12 countries — the same live data the Sejdel map runs on, compared bar by bar. Every city below is one click away, in the local language and English.</p>
   <p class="stamp">Updated 17 August 2026</p>
   
-  <h2>🇸🇪 <a href="https://sejdel.com/blog/beer-prices-sweden/">Sweden</a></h2>
+  <style>
+  html{scroll-behavior:smooth;}
+  .countryrail{position:fixed;top:96px;right:clamp(8px,2vw,30px);z-index:5;
+    display:flex;flex-direction:column;gap:3px;
+    background:rgba(22,16,11,.72);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+    border:1px solid var(--line);border-radius:15px;padding:10px;}
+  .countryrail b{font-family:var(--mono);font-weight:400;font-size:9px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--bronze);padding:0 9px 6px;}
+  .countryrail a{font-size:12.5px;font-weight:600;text-decoration:none;color:var(--cream-dim);
+    padding:4px 9px;border-radius:8px;white-space:nowrap;}
+  .countryrail a:hover{color:var(--cream);background:rgba(232,132,60,.15);}
+  @media (max-width:1279px){.countryrail{display:none;}}
+  </style>
+  <nav class="countryrail" aria-label="Jump to a country">
+    <b>Countries</b>
+    <a href="#c-se">🇸🇪 Sweden</a>
+    <a href="#c-gb">🇬🇧 United Kingdom</a>
+    <a href="#c-us">🇺🇸 United States</a>
+    <a href="#c-fr">🇫🇷 France</a>
+    <a href="#c-it">🇮🇹 Italy</a>
+    <a href="#c-es">🇪🇸 Spain</a>
+    <a href="#c-pt">🇵🇹 Portugal</a>
+    <a href="#c-be">🇧🇪 Belgium</a>
+    <a href="#c-de">🇩🇪 Germany</a>
+    <a href="#c-ch">🇨🇭 Switzerland</a>
+    <a href="#c-nl">🇳🇱 Netherlands</a>
+    <a href="#c-ca">🇨🇦 Canada</a>
+  </nav>
+  <ul class="chips">
+    <li><a href="#c-se">🇸🇪 Sweden</a></li>
+    <li><a href="#c-gb">🇬🇧 United Kingdom</a></li>
+    <li><a href="#c-us">🇺🇸 United States</a></li>
+    <li><a href="#c-fr">🇫🇷 France</a></li>
+    <li><a href="#c-it">🇮🇹 Italy</a></li>
+    <li><a href="#c-es">🇪🇸 Spain</a></li>
+    <li><a href="#c-pt">🇵🇹 Portugal</a></li>
+    <li><a href="#c-be">🇧🇪 Belgium</a></li>
+    <li><a href="#c-de">🇩🇪 Germany</a></li>
+    <li><a href="#c-ch">🇨🇭 Switzerland</a></li>
+    <li><a href="#c-nl">🇳🇱 Netherlands</a></li>
+    <li><a href="#c-ca">🇨🇦 Canada</a></li>
+  </ul>
+  
+  <h2 id="c-se">🇸🇪 <a href="https://sejdel.com/blog/beer-prices-sweden/">Sweden</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">1312 bars · 30 cities with pages · from 29 kr</p>
   <div class="citygrid">
     <div class="citycard">
@@ -383,7 +431,7 @@
     </div>
   </div>
   
-  <h2>🇬🇧 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-the-united-kingdom-reddit/">United Kingdom</a></h2>
+  <h2 id="c-gb">🇬🇧 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-the-united-kingdom-reddit/">United Kingdom</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">707 bars · 8 cities with pages · from £1.71</p>
   <div class="citygrid">
     <div class="citycard">
@@ -428,7 +476,7 @@
     </div>
   </div>
 
-  <h2>🇺🇸 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-the-united-states-reddit/">United States</a></h2>
+  <h2 id="c-us">🇺🇸 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-the-united-states-reddit/">United States</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">218 bars · 4 cities with pages · from $1.5</p>
   <div class="citygrid">
     <div class="citycard">
@@ -453,7 +501,7 @@
     </div>
   </div>
 
-  <h2>🇫🇷 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-france-reddit/">France</a></h2>
+  <h2 id="c-fr">🇫🇷 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-france-reddit/">France</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">146 bars · 8 cities with pages · from 2 €</p>
   <div class="citygrid">
     <div class="citycard">
@@ -498,7 +546,7 @@
     </div>
   </div>
 
-  <h2>🇮🇹 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-italy-reddit/">Italy</a></h2>
+  <h2 id="c-it">🇮🇹 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-italy-reddit/">Italy</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">108 bars · 6 cities with pages · from 2.7 €</p>
   <div class="citygrid">
     <div class="citycard">
@@ -533,7 +581,7 @@
     </div>
   </div>
 
-  <h2>🇪🇸 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-spain-reddit/">Spain</a></h2>
+  <h2 id="c-es">🇪🇸 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-spain-reddit/">Spain</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">53 bars · 3 cities with pages · from 1.2 €</p>
   <div class="citygrid">
     <div class="citycard">
@@ -553,7 +601,7 @@
     </div>
   </div>
 
-  <h2>🇵🇹 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-portugal-reddit/">Portugal</a></h2>
+  <h2 id="c-pt">🇵🇹 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-portugal-reddit/">Portugal</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">49 bars · 3 cities with pages · from 0.5 €</p>
   <div class="citygrid">
     <div class="citycard">
@@ -573,7 +621,7 @@
     </div>
   </div>
 
-  <h2>🇧🇪 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-belgium-reddit/">Belgium</a></h2>
+  <h2 id="c-be">🇧🇪 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-belgium-reddit/">Belgium</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">48 bars · 3 cities with pages · from 1.5 €</p>
   <div class="citygrid">
     <div class="citycard">
@@ -593,7 +641,7 @@
     </div>
   </div>
 
-  <h2>🇩🇪 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-germany-reddit/">Germany</a></h2>
+  <h2 id="c-de">🇩🇪 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-germany-reddit/">Germany</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">42 bars · 2 cities with pages · from 1.9 €</p>
   <div class="citygrid">
     <div class="citycard">
@@ -608,7 +656,7 @@
     </div>
   </div>
 
-  <h2>🇨🇭 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-switzerland-reddit/">Switzerland</a></h2>
+  <h2 id="c-ch">🇨🇭 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-switzerland-reddit/">Switzerland</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">35 bars · 2 cities with pages · from CHF 3</p>
   <div class="citygrid">
     <div class="citycard">
@@ -623,7 +671,7 @@
     </div>
   </div>
 
-  <h2>🇳🇱 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-the-netherlands-reddit/">Netherlands</a></h2>
+  <h2 id="c-nl">🇳🇱 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-the-netherlands-reddit/">Netherlands</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">30 bars · 2 cities with pages · from 1.7 €</p>
   <div class="citygrid">
     <div class="citycard">
@@ -638,7 +686,7 @@
     </div>
   </div>
 
-  <h2>🇨🇦 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-canada-reddit/">Canada</a></h2>
+  <h2 id="c-ca">🇨🇦 <a href="https://sejdel.com/blog/how-much-is-a-beer-in-canada-reddit/">Canada</a></h2>
   <p class="meta" style="font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze)">26 bars · 1 city with pages · from $4</p>
   <div class="citygrid">
     <div class="citycard">

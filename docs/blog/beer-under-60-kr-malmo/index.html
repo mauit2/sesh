@@ -46,7 +46,12 @@
   .top{display:flex;align-items:center;gap:12px;margin-bottom:clamp(26px,6vw,46px);}
   .brand{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:23px;letter-spacing:-.01em;color:var(--cream);text-decoration:none;}
   .brand span{color:var(--whiskey);}
-  .top nav{margin-left:auto;display:flex;gap:14px;font-size:13.5px;font-weight:600;}
+  .top nav{margin-left:auto;display:flex;gap:8px;font-size:12.5px;font-weight:600;flex-wrap:wrap;}
+  .top nav a{display:inline-block;text-decoration:none;color:var(--cream-dim);
+    background:var(--bg-elev);border:1px solid var(--line);border-radius:999px;
+    padding:6px 13px;transition:transform .1s ease-out;}
+  .top nav a:hover{color:var(--cream);border-color:rgba(232,132,60,.5);}
+  .top nav a:active{transform:scale(.97);}
   .kicker{font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--bronze);margin:0 0 10px;}
   h1{font-family:"Fraunces",Georgia,serif;font-weight:900;font-size:clamp(30px,6.4vw,46px);line-height:1.04;letter-spacing:-.025em;margin:0 0 14px;}
   h2{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:clamp(21px,3.6vw,27px);letter-spacing:-.015em;margin:44px 0 12px;}
@@ -160,7 +165,7 @@
     <a class="brand" href="https://sejdel.com/">Sejdel<span>.</span></a>
     <nav>
       <a href="https://sejdel.com/map/">Map</a>
-      <a href="https://sejdel.com/blog/">Blog</a>
+      <a href="https://sejdel.com/blog/what-does-beer-cost-around-the-world-reddit/">Blog</a>
       <a href="https://sejdel.com/blogg/ol-under-60-kr-malmo/">Svenska</a>
     </nav>
   </header>
