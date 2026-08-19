@@ -380,7 +380,14 @@
   // under a filter): green at the local minimum, YELLOW AT THE MEDIAN, red
   // at the maximum. The old ratio scale (2x the cheapest = red) worked in
   // Sweden's tight 50-80 kr band but painted most of a $1-$10 city red.
+  var _anchorMemo={};   // reset whenever beerData reloads (see below)
   function localAnchors(row,all){
+    // Two pins in the same ~0.2° cell + currency share a 200 km neighbourhood,
+    // so they share anchors. Compute once per cell, not once per pin — the
+    // difference between an instant redraw and a multi-second main-thread
+    // freeze when a big country draws hundreds of pins over ~3.4k prices.
+    var key=row.currency+"|"+serving+"|"+Math.round(row.lat*5)+"|"+Math.round(row.lon*5);
+    var cached=_anchorMemo[key]; if(cached)return cached;
     var perVenue={};
     for(var i=0;i<all.length;i++){var q=all[i];
       if(q.currency!==row.currency)continue;
@@ -397,7 +404,8 @@
     if(!vals.length)vals=[row.price];
     vals.sort(function(a,b){return a-b;});
     var n=vals.length,med=n%2?vals[(n-1)/2]:(vals[n/2-1]+vals[n/2])/2;
-    return {min:vals[0],median:med,max:vals[n-1]};
+    var out={min:vals[0],median:med,max:vals[n-1]};
+    _anchorMemo[key]=out; return out;
   }
   // Grade the ROUNDED price — the number on the pill — so two pills that
   // read the same can never wear different colours. 0 at the local minimum,
@@ -636,7 +644,7 @@
       if(q.length<2){$("fResults").innerHTML="";return;}searchTimer=setTimeout(function(){doSearch(q);},280);});
 
     Promise.all([rpc("public_beer_prices"),rpc("public_deals")]).then(function(res){
-      beerData=res[0].map(function(r){r.price=+r.price;return r;});dealData=res[1];msgEl.style.display="none";
+      beerData=res[0].map(function(r){r.price=+r.price;return r;});_anchorMemo={};dealData=res[1];msgEl.style.display="none";
       rebuildSizeChips();render();
     }).catch(function(err){msgEl.textContent="Couldn't load the data.";console.error(err);});
     rpc("country_index").then(function(cs){countryStats=cs;renderCountryPanel();}).catch(function(){});
@@ -647,7 +655,8 @@
       clearTimeout(placeTimer);var q=this.value.trim();
       placeTimer=setTimeout(function(){searchPlaces(q);},300);
     });
-    map.addEventListener("region-change-end",function(){if(mode==="prices")rebuildSizeChips();});
+    var _rTimer;
+    map.addEventListener("region-change-end",function(){if(mode==="prices"){rebuildSizeChips();clearTimeout(_rTimer);_rTimer=setTimeout(function(){if(mode==="prices")render(true);},160);}});
   }
 
   // popupHtml may be a STRING or a FUNCTION. A function is evaluated when the
@@ -839,7 +848,8 @@
     });
   }
 
-    function render(){
+    var _didFit=false;
+    function render(skipFit){
     clearPins();
     if(mode==="sun"){
       $("legend").style.display="none";
@@ -857,17 +867,27 @@
       return;   // no auto-fit: sun pins follow wherever the user is looking
     }
     if(mode==="prices"){$("legend").style.display="";
-      displayRows(serving).forEach(function(r){
+      // Draw only the pins in (or near) the current viewport, capped.
+      // Drawing every priced venue worldwide as a MapKit annotation is
+      // what froze the map on a country/city click and on first load.
+      var rows=displayRows(serving),reg=map.region,MAXPINS=400;
+      if(reg){var rc=reg.center,rs=reg.span,mLat=rs.latitudeDelta*0.7,mLon=rs.longitudeDelta*0.7;
+        rows=rows.filter(function(r){return Math.abs(r.lat-rc.latitude)<=mLat&&Math.abs(r.lon-rc.longitude)<=mLon;});}
+      var total=rows.length;
+      if(rows.length>MAXPINS){var cc=reg?reg.center:{latitude:30,longitude:10};
+        rows.sort(function(a,b){return (Math.abs(a.lat-cc.latitude)+Math.abs(a.lon-cc.longitude))-(Math.abs(b.lat-cc.latitude)+Math.abs(b.lon-cc.longitude));});
+        rows=rows.slice(0,MAXPINS);}
+      rows.forEach(function(r){
         makePin(new mapkit.Coordinate(r.lat,r.lon),
           '<span class="pill" style="background:'+colorFor(r.price,localAnchors(r,beerData))+'">'+fmt(r.price,r.currency)+'</span>',
           function(){return popupBeer(r,localAnchors(r,beerData));},r.venue_id,"beer");});
-      var n=Object.keys(annById).length;countEl.textContent=n+(n===1?" bar":" bars");
+      var n=Object.keys(annById).length;countEl.textContent=n+(total>n?"+":"")+(n===1?" bar":" bars");
     }else{$("legend").style.display="none";
       dealData.forEach(function(d){var h=d.image_url?'<img class="art" src="'+esc(d.image_url)+'" alt="" />':'<div class="dot">🍺</div>';makePin(new mapkit.Coordinate(d.lat,d.lon),h,popupDeal(d));});
       countEl.textContent=dealData.length+(dealData.length===1?" deal":" deals");}
     // A deep link has already framed the city; auto-fitting would immediately
     // zoom back out to every pin and undo it.
-    if(!qLat&&layerAnn.length){try{map.showItems(layerAnn,{animate:false,padding:new mapkit.Padding(100,60,60,60),minimumSpan:new mapkit.CoordinateSpan(0.01,0.01)});}catch(e){}}
+    if(!qLat&&!skipFit&&!_didFit&&layerAnn.length){_didFit=true;try{map.showItems(layerAnn,{animate:false,padding:new mapkit.Padding(100,60,60,60),minimumSpan:new mapkit.CoordinateSpan(0.01,0.01)});}catch(e){}}
     // Open the linked bar's card. Done here rather than at boot because the
     // annotations only exist after a render, and only ONCE — re-selecting on
     // every render would reopen the callout each time the user changed filter.
@@ -1013,7 +1033,7 @@
 
   function validate(){$("fGo").disabled=!(addLoc&&$("fName").value.trim()&&parseFloat(($("fPrice").value||"").replace(",","."))>0);}
   function toast(t){var el=$("toast");el.textContent=t;el.classList.add("on");setTimeout(function(){el.classList.remove("on");},2600);}
-  async function reload(){var d=await rpc("public_beer_prices");beerData=d.map(function(r){r.price=+r.price;return r;});render();if($("drawer").classList.contains("open"))renderList();}
+  async function reload(){var d=await rpc("public_beer_prices");beerData=d.map(function(r){r.price=+r.price;return r;});_anchorMemo={};render();if($("drawer").classList.contains("open"))renderList();}
 
   async function submitAdd(){
     if(!addLoc)return;var price=parseFloat(($("fPrice").value||"").replace(",","."));$("fGo").disabled=true;$("fErr").textContent="";
