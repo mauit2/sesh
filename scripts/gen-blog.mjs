@@ -1368,8 +1368,18 @@ for (const lang of ["sv", "en"]) {
       ${svLinks}
     </div>`;
   }).join("\n");
+  // Globe markers for the homepage world map — one per Swedish city page,
+  // with its coordinates, median stor-stark, and the exact blog URL. Emitted
+  // here (not hand-maintained) so the globe's dots always match the posts.
+  const seGlobe = cities.map((c) => ({
+    city: EN_NAME[c.city] || c.city, country: "Sweden",
+    lat: Number(c.lat.toFixed(3)), lon: Number(c.lon.toFixed(3)),
+    med: Math.round(c.median40 ?? c.cheapest40 ?? 0), cur: "SEK", bars: c.bars,
+    url: `${SITE}/blog/cheapest-beer-${slugify(EN_NAME[c.city] || c.city)}/`,
+    home: c.city === "Stockholm",
+  }));
   writeFileSync(join(dirname(new URL(import.meta.url).pathname), ".se-summary.json"),
-    JSON.stringify({ bars: national.bars, cities: cities.length, grid }));
+    JSON.stringify({ bars: national.bars, cities: cities.length, grid, seGlobe }));
 }
 
 // ------------------------------------------------- homepage stats block

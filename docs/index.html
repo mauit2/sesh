@@ -546,6 +546,43 @@
   /* readability: fade the texture behind the content column */
   .dimple-scrim{position:fixed;inset:0;pointer-events:none;z-index:-1;
     background:linear-gradient(90deg,rgba(20,15,11,0) 0%,rgba(20,15,11,.30) 30%,rgba(20,15,11,.42) 50%,rgba(20,15,11,.30) 70%,rgba(20,15,11,0) 100%);}
+
+  /* ---------- homepage world globe ---------- */
+  .globe-tile{position:relative;overflow:hidden;padding:0;min-height:clamp(360px,44vw,520px);
+    background:radial-gradient(120% 90% at 50% 12%,#0e0b18 0%,#0a0712 55%,#08060e 100%);}
+  .globe-stage{position:absolute;inset:0;}
+  .globe-flat{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.92;}
+  .globe-flatpins{position:absolute;inset:0;}
+  .globe-loading{position:absolute;inset:0;display:grid;place-items:center;font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--bronze);}
+  .globe-head{position:absolute;top:0;left:0;right:0;z-index:3;padding:16px 18px 0;pointer-events:none;}
+  .globe-title{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:clamp(1.05rem,2.2vw,1.4rem);letter-spacing:-.02em;line-height:1.05;margin-top:6px;max-width:14ch;color:var(--cream);}
+  .globe-title em{font-style:italic;color:#e8a84a;}
+  .globe-sample{position:absolute;top:12px;right:14px;z-index:4;font-family:var(--mono);font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:var(--bronze);border:1px solid var(--line);border-radius:999px;padding:3px 8px;opacity:.85;background:rgba(14,11,20,.5);}
+  .globe-curwrap{position:absolute;bottom:13px;left:14px;z-index:4;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--bronze);display:flex;align-items:center;gap:5px;}
+  .globe-cur{background:rgba(14,11,20,.7);color:var(--cream);border:1px solid var(--line);border-radius:8px;padding:3px 6px;font-family:var(--mono);font-size:10px;cursor:pointer;}
+  .globe-zoom{position:absolute;right:12px;bottom:12px;z-index:4;display:flex;flex-direction:column;gap:6px;}
+  .globe-zoom button{width:34px;height:34px;border-radius:10px;border:1px solid var(--line);background:rgba(14,11,20,.72);color:var(--cream);font-size:18px;line-height:1;cursor:pointer;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);}
+  .globe-zoom button:hover{border-color:rgba(232,132,60,.5);}
+  .globe-reset{position:absolute;left:50%;transform:translateX(-50%);bottom:12px;z-index:5;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--cream);background:rgba(14,11,20,.62);border:1px solid var(--line);border-radius:999px;padding:7px 12px;cursor:pointer;opacity:0;transition:opacity .3s;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);}
+  .globe-reset.show{opacity:1;}
+  .gpin,.flatpin{position:relative;width:13px;height:13px;cursor:pointer;pointer-events:auto;}
+  .gpin{transform:translate(-50%,-50%);}
+  .flatpin{transform:translate(-50%,-50%);display:block;}
+  .gpin i,.flatpin i{position:absolute;inset:0;margin:auto;width:5.5px;height:5.5px;border-radius:50%;background:#e8a84a;box-shadow:0 0 0 2px rgba(8,6,14,.6),0 0 10px 2px rgba(232,168,74,.55);transition:transform .2s,box-shadow .2s;}
+  .gpin.hot i,.gpin:hover i,.flatpin:hover i,.flatpin:focus i{transform:scale(1.5);box-shadow:0 0 0 2px rgba(8,6,14,.6),0 0 20px 6px rgba(232,168,74,.9);}
+  .gpin.home::after,.flatpin.home::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1px solid rgba(232,168,74,.5);animation:gring 2.8s ease-out infinite;pointer-events:none;}
+  @keyframes gring{0%{transform:scale(.6);opacity:.7}70%,100%{transform:scale(2.2);opacity:0}}
+  .globe-card{position:absolute;z-index:6;min-width:186px;max-width:222px;background:rgba(12,9,18,.9);-webkit-backdrop-filter:blur(16px) saturate(1.2);backdrop-filter:blur(16px) saturate(1.2);border:1px solid rgba(232,132,60,.32);border-radius:14px;padding:12px 14px;box-shadow:0 20px 44px -20px rgba(0,0,0,.95);opacity:0;transform:translateY(5px) scale(.98);transition:opacity .2s,transform .2s;pointer-events:none;}
+  .globe-card.show{opacity:1;transform:none;pointer-events:auto;}
+  .gc-city{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:1.05rem;letter-spacing:-.01em;color:var(--cream);}
+  .gc-ctry{font-family:var(--mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--bronze);margin-top:2px;}
+  .gc-price{font-family:"Fraunces",Georgia,serif;font-weight:900;font-size:1.5rem;color:#e8a84a;margin:8px 0 1px;letter-spacing:-.02em;}
+  .gc-meta,.gc-conv{font-size:11.5px;color:var(--cream-dim);}
+  .gc-approx{opacity:.6;}
+  .gc-bars{font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--bronze);margin-top:7px;}
+  .gc-go{display:inline-flex;gap:6px;margin-top:9px;font-size:12px;font-weight:700;color:var(--whiskey);text-decoration:none;}
+  .gc-go:hover{gap:9px;}
+  @media (prefers-reduced-motion:reduce){.gpin.home::after,.flatpin.home::after{animation:none;}}
 </style>
 </head>
 <body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div><div class="dimple-scrim" aria-hidden="true"></div>
@@ -788,47 +825,30 @@
             number, and who was there — waiting for you in the morning.</p>
           <span class="shotnote">Rebuilt to match · real recap has photos in it</span>
         </article>
-        <div class="glass tile t7 r s1">
-          <p class="tile-kicker">Find the cheap pint</p>
-          <h2 id="map-h">The beer map, <em>everywhere.</em></h2>
-          <p class="lede">Zoom out and the whole world is on it. Every price is coloured
-            against what a beer actually costs in that region and that currency — so cheap
-            reads as cheap in Gothenburg, Lisbon or Tokyo, not just wherever the numbers
-            happen to be smallest.</p>
-          <ul class="plist">
-            <li><b>Any currency, anywhere.</b> <span>Prices follow the region you're in, and you can pick any currency in the world.</span></li>
-            <li><b>Filter by serving.</b> <span>25, 33, 40, 50 cl or a pint — compared like for like.</span></li>
-            <li><b>Live deals from bars.</b> <span>Offers near you tonight, right on the same map.</span></li>
-            <li><b>Add a price yourself.</b> <span>From the app or the web — search the bar, tap the price in.</span></li>
-          </ul>
-          <a class="btn" href="./map/">Open the map <span class="arw" aria-hidden="true">→</span></a>
+        <div class="glass tile t7 r s1 globe-tile" id="worldglobe" aria-labelledby="globe-h">
+          <div class="globe-stage"><div class="globe-loading">loading globe…</div></div>
+          <div class="globe-head">
+            <p class="tile-kicker">Beer prices · worldwide</p>
+            <p id="globe-h" class="globe-title">What does a beer cost <em>around the world?</em></p>
+          </div>
+          <span class="globe-sample" title="A sample of our live price data">Live data</span>
+          <label class="globe-curwrap">in <select class="globe-cur" aria-label="Show converted prices in this currency"></select></label>
+          <div class="globe-zoom"><button class="globe-zin" type="button" aria-label="Zoom in">+</button><button class="globe-zout" type="button" aria-label="Zoom out">−</button></div>
+          <button class="globe-reset" type="button" aria-label="Back to the world view">◎ World view</button>
+          <div class="globe-card" role="dialog" aria-live="polite"></div>
         </div>
 
         <div class="glass tile t5 r s2">
-          <p class="tile-kicker">How colours work</p>
-          <div class="scale">
-            <div class="row">
-              <span class="pill" style="background:#3fbf4a">45 kr</span>
-              <span class="who">Cheapest around here</span>
-            </div>
-            <div class="row">
-              <span class="pill" style="background:#8fc633">58 kr</span>
-              <span class="who">A fair pour</span>
-            </div>
-            <div class="row">
-              <span class="pill" style="background:#d9a52c">72 kr</span>
-              <span class="who">Getting steep</span>
-            </div>
-            <div class="row">
-              <span class="pill" style="background:#e8843c">85 kr</span>
-              <span class="who">Tourist pricing</span>
-            </div>
-            <div class="row">
-              <span class="pill" style="background:#d8452f">110 kr</span>
-              <span class="who">You're paying for the view</span>
-            </div>
-            <p class="cap">Colour is relative to the local cheapest — same logic, any currency</p>
-          </div>
+          <p class="tile-kicker">Find the cheap pint</p>
+          <h2 id="map-h">The beer map, <em>everywhere.</em></h2>
+          <p class="lede">Every price is coloured against what a beer actually costs in that
+            region and currency — so cheap reads as cheap in Gothenburg, Lisbon or Tokyo,
+            not just wherever the numbers happen to be smallest.</p>
+          <ul class="plist">
+            <li><b>Every blog city, on the globe.</b> <span>Spin it and drop into any city's price guide.</span></li>
+            <li><b>Any currency, any serving.</b> <span>Compared like for like, wherever you are.</span></li>
+          </ul>
+          <a class="btn" href="./map/">Open the map <span class="arw" aria-hidden="true">→</span></a>
         </div>
 
         <div class="glass tile t8 r s1">
@@ -898,5 +918,7 @@
   </footer>
 
   <script src="./beer.js" defer></script>
+  <script src="./globe-cities.js" defer></script>
+  <script src="./globe.js" defer></script>
 </body>
 </html>
