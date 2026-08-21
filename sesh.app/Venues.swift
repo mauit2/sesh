@@ -3414,13 +3414,13 @@ struct VenueChip: View {
             HStack(spacing: compact ? 9 : 12) {
                 ZStack {
                     Circle()
-                        .fill(venues.currentVenue == nil ? Color.cream.opacity(0.05) : Color.whiskey.opacity(0.18))
+                        .fill(venues.currentVenue == nil ? Color.whiskey.opacity(0.16) : Color.whiskey.opacity(0.20))
                         .frame(width: compact ? 28 : 32, height: compact ? 28 : 32)
                     Image(systemName: venues.currentVenue == nil
                           ? "mappin.and.ellipse"
                           : "mappin.circle.fill")
                         .font(.system(size: compact ? 12 : 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(venues.currentVenue == nil ? Color.bronze : Color.whiskey)
+                        .foregroundStyle(Color.whiskey)
                 }
 
                 if let v = venues.currentVenue {
@@ -3481,12 +3481,12 @@ struct VenueChip: View {
                         Text("LOCATION")
                             .font(.system(size: compact ? 9 : 10, weight: .semibold, design: .monospaced))
                             .tracking(compact ? 1.6 : 2.2)
-                            .foregroundStyle(Color.bronze)
-                        Text(compact ? "Check in" : prompt)
-                            .font(.system(size: compact ? 13 : 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.whiskey.opacity(0.9))
+                        Text(compact ? "Check in to a bar" : prompt)
+                            .font(.system(size: compact ? 13.5 : 14.5, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.cream)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.8)
+                            .minimumScaleFactor(0.75)
                     }
                 }
 
@@ -3499,21 +3499,26 @@ struct VenueChip: View {
                 }
             }
             .padding(.horizontal, compact ? 12 : 14)
-            .padding(.vertical, compact ? 10 : 12)
+            .padding(.vertical, compact ? 11 : 13)
             .background(
                 RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
-                    .fill(Color.inkElev.opacity(0.72))
+                    .fill(Color.inkElev)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
+                            .fill(Color.whiskey.opacity(0.09))
+                    )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
                     .strokeBorder(
                         venues.currentVenue == nil
-                            ? Color.cream.opacity(0.08)
-                            : Color.whiskey.opacity(0.45),
-                        lineWidth: 1
+                            ? Color.whiskey.opacity(0.42)
+                            : Color.whiskey.opacity(0.55),
+                        lineWidth: 1.2
                     )
             )
             .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
+            .shadow(color: Color.whiskey.opacity(0.18), radius: 11, y: 3)
         }
         .buttonStyle(PressScaleStyle())
     }

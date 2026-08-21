@@ -1305,6 +1305,14 @@ final class GhostMembersStore: ObservableObject {
         save()
     }
 
+    /// Append a batch of pre-built ghosts in one shot (one persist + one
+    /// sync) — used by the "add several" quick path.
+    func addMany(_ newMembers: [GhostMember]) {
+        guard !newMembers.isEmpty else { return }
+        members.append(contentsOf: newMembers)
+        save()
+    }
+
     func remove(_ id: UUID) {
         members.removeAll { $0.id == id }
         save()
@@ -10760,6 +10768,9 @@ private struct MenuSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var category: DrinkCategory = .beer
     @State private var addedTick: Int = 0
+    /// Manual entry for the "Other" catch-all category.
+    @State private var customCL: String = ""
+    @State private var customABV: String = ""
 
     private var groups: [OrderGroup] { aggregateOrder(order) }
 
@@ -10873,23 +10884,33 @@ private struct MenuSheet: View {
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 7) {
-                        ForEach(DrinkCatalog.options(for: category), id: \.self) { option in
-                            OptionRow(
-                                option: option,
-                                count: count(for: option),
-                                onAdd: {
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) {
-                                        onAdd(option)
-                                        addedTick &+= 1
-                                    }
-                                },
-                                onRemove: {
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) {
-                                        onRemove(option)
-                                    }
+                        if category.isCustom {
+                            CustomDrinkCard(clText: $customCL, abvText: $customABV) { option in
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) {
+                                    onAdd(option)
+                                    addedTick &+= 1
                                 }
-                            )
+                            }
                             .transition(.opacity)
+                        } else {
+                            ForEach(DrinkCatalog.options(for: category), id: \.self) { option in
+                                OptionRow(
+                                    option: option,
+                                    count: count(for: option),
+                                    onAdd: {
+                                        withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) {
+                                            onAdd(option)
+                                            addedTick &+= 1
+                                        }
+                                    },
+                                    onRemove: {
+                                        withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) {
+                                            onRemove(option)
+                                        }
+                                    }
+                                )
+                                .transition(.opacity)
+                            }
                         }
                     }
                     .padding(.horizontal, 22)
@@ -11066,6 +11087,143 @@ private struct OptionRow: View {
                 )
         )
         .animation(.spring(response: 0.35, dampingFraction: 0.75), value: count)
+    }
+}
+
+/// Manual drink entry for the "Other" category — the user dials in a size
+/// (cl) and strength (% ABV) and adds it to the tab. Also the natural home
+/// for anything scanned that doesn't map to a preset. Grams (and therefore
+/// BAC) come straight from `DrinkOption.grams`, same as every preset.
+private struct CustomDrinkCard: View {
+    @Binding var clText: String
+    @Binding var abvText: String
+    let onAdd: (DrinkOption) -> Void
+    @State private var addTick = 0
+
+    private var cl: Double? {
+        let v = Double(clText.replacingOccurrences(of: ",", with: "."))
+        guard let v, v > 0, v <= 500 else { return nil }
+        return v
+    }
+    /// ABV percent (0…100]; anything outside is rejected.
+    private var abvPct: Double? {
+        let v = Double(abvText.replacingOccurrences(of: ",", with: "."))
+        guard let v, v > 0, v <= 100 else { return nil }
+        return v
+    }
+    private var abvOutOfRange: Bool {
+        guard let v = Double(abvText.replacingOccurrences(of: ",", with: ".")) else { return false }
+        return v <= 0 || v > 100
+    }
+    private var option: DrinkOption? {
+        guard let cl, let abvPct else { return nil }
+        let pctLabel = abvPct == abvPct.rounded() ? String(Int(abvPct)) : String(format: "%.1f", abvPct)
+        let clLabel = cl == cl.rounded() ? String(Int(cl)) : String(format: "%.1f", cl)
+        return DrinkOption(
+            category: .other,
+            name: "Custom drink",
+            detail: "\(clLabel) cl · \(pctLabel)%",
+            volumeML: cl * 10,
+            abv: abvPct / 100.0
+        )
+    }
+    /// Live "standard drinks" readout (12 g of alcohol per standard drink,
+    /// matching the rest of the app).
+    private var stdDrinks: Double? {
+        guard let option else { return nil }
+        return option.grams / 12.0
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            entryField(kicker: "SIZE", text: $clText, placeholder: "33", suffix: "CL")
+            VStack(alignment: .leading, spacing: 6) {
+                entryField(kicker: "ALCOHOL", text: $abvText, placeholder: "5.0", suffix: "% ABV")
+                if abvOutOfRange {
+                    Text("Alcohol % must be between 0 and 100.")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color(red: 0.85, green: 0.40, blue: 0.34))
+                }
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: "drop.fill")
+                    .font(.system(size: 9, weight: .black))
+                    .foregroundStyle(Color.whiskey.opacity(stdDrinks == nil ? 0.25 : 0.9))
+                Text(stdDrinks.map { String(format: "≈ %.1f standard drinks", $0) }
+                        ?? "Enter size and % to add")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(Color.bronze)
+                    .contentTransition(.numericText(value: stdDrinks ?? 0))
+            }
+            .padding(.top, 2)
+
+            Button {
+                guard let option else { return }
+                onAdd(option)
+                addTick &+= 1
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                    Text("ADD TO TAB")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .tracking(2.2)
+                }
+                .foregroundStyle(option == nil ? Color.bronze : Color.ink)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .fill(option == nil ? Color.cream.opacity(0.06) : Color.whiskey)
+                )
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(option == nil)
+            .animation(.easeOut(duration: 0.2), value: option == nil)
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.cream.opacity(0.028))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.07), lineWidth: 1)
+        )
+        .sensoryFeedback(.impact(weight: .light), trigger: addTick)
+    }
+
+    @ViewBuilder
+    private func entryField(kicker: String, text: Binding<String>, placeholder: String, suffix: String) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(kicker)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .tracking(2)
+                .foregroundStyle(Color.bronze)
+            HStack {
+                TextField("", text: text, prompt: Text(placeholder)
+                    .foregroundStyle(Color.cream.opacity(0.35)))
+                    .textFieldStyle(.plain)
+                    .keyboardType(.decimalPad)
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                Text(suffix)
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.bronze)
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(Color.smoke.opacity(0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+            )
+        }
     }
 }
 
@@ -11479,27 +11637,35 @@ private struct GroupBar: View {
     /// Compact = the side-by-side variant used under the BAC readout: smaller
     /// chrome, shortened idle copy, no chevron, lighter shadow.
     var compact: Bool = false
+    /// When true, the tile is a permanent "Invite friends" CTA even while a
+    /// group is active — the join code lives in the header bar instead, so
+    /// this tile stays a clean invite entry point. (LIVE screen.)
+    var alwaysInvite: Bool = false
     let onTap: () -> Void
+
+    /// Show the invite CTA rather than the code+count — either idle, or
+    /// because the code has been lifted to the header.
+    private var showInvite: Bool { alwaysInvite || session == nil }
 
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: compact ? 9 : 12) {
                 ZStack {
                     Circle()
-                        .fill(session == nil ? Color.cream.opacity(0.05) : Color.whiskey.opacity(0.18))
+                        .fill(Color.whiskey.opacity(0.20))
                         .frame(width: compact ? 28 : 32, height: compact ? 28 : 32)
-                    Image(systemName: session == nil ? "person.2" : "person.2.fill")
+                    Image(systemName: "person.2.fill")
                         .font(.system(size: compact ? 12 : 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(session == nil ? Color.bronze : Color.whiskey)
+                        .foregroundStyle(Color.whiskey)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(scope.label) GROUP")
+                    Text(showInvite ? "INVITE" : "\(scope.label) GROUP")
                         .font(.system(size: compact ? 9 : 10, weight: .semibold, design: .monospaced))
                         .tracking(compact ? 1.6 : 2.2)
-                        .foregroundStyle(session == nil ? Color.bronze : Color.whiskey)
+                        .foregroundStyle(Color.whiskey)
                         .lineLimit(1)
-                    if let s = session {
+                    if !showInvite, let s = session {
                         if compact {
                             Text(s.joinCode)
                                 .font(.system(size: 14, weight: .black, design: .monospaced))
@@ -11521,8 +11687,8 @@ private struct GroupBar: View {
                             }
                         }
                     } else {
-                        Text(compact ? "Start a group" : "Drink together in \(scope.label.lowercased())")
-                            .font(.system(size: compact ? 13 : 14, weight: .semibold, design: .rounded))
+                        Text(compact ? "Invite friends" : "Invite friends to \(scope.label.lowercased())")
+                            .font(.system(size: compact ? 13.5 : 14.5, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.cream)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
@@ -11534,27 +11700,190 @@ private struct GroupBar: View {
                 if !compact {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.bronze)
+                        .foregroundStyle(Color.whiskey.opacity(0.7))
                 }
             }
             .padding(.horizontal, compact ? 12 : 14)
-            .padding(.vertical, compact ? 10 : 12)
+            .padding(.vertical, compact ? 11 : 13)
             .background(
                 RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
-                    .fill(Color.inkElev.opacity(0.72))
+                    .fill(Color.inkElev)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
+                            .fill(Color.whiskey.opacity(0.09))
+                    )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
-                    .strokeBorder(
-                        session == nil
-                            ? Color.cream.opacity(0.08)
-                            : Color.whiskey.opacity(0.35),
-                        lineWidth: 1
-                    )
+                    .strokeBorder(Color.whiskey.opacity(0.42), lineWidth: 1.2)
             )
             .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
+            .shadow(color: Color.whiskey.opacity(0.18), radius: 11, y: 3)
         }
         .buttonStyle(PressScaleStyle())
+    }
+}
+
+/// Full-width "you're in this group" banner pinned near the top of the LIVE
+/// screen. Surfaces the join code prominently so it's shareable at a glance;
+/// tapping opens the group sheet (members, share, end). The side tiles then
+/// stay clean — the group tile becomes a permanent "Invite friends" CTA.
+private struct GroupCodeBar: View {
+    let code: String
+    let memberCount: Int
+    var onTap: (() -> Void)? = nil
+
+    private var content: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(Color.whiskey.opacity(0.22))
+                    .frame(width: 34, height: 34)
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.whiskey)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text("LIVE GROUP")
+                    .font(.system(size: 9.5, weight: .black, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.whiskey)
+                Text(code)
+                    .font(.system(size: 20, weight: .black, design: .monospaced))
+                    .tracking(3)
+                    .foregroundStyle(Color.cream)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            Spacer(minLength: 0)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text("\(memberCount)")
+                    .font(.system(size: 18, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .monospacedDigit()
+                Text(memberCount == 1 ? "person" : "people")
+                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.bronze)
+            }
+            if onTap != nil {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.whiskey.opacity(0.7))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.whiskey.opacity(0.13))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1.2)
+        )
+        .shadow(color: Color.whiskey.opacity(0.15), radius: 12, y: 4)
+    }
+
+    var body: some View {
+        if let onTap {
+            Button(action: onTap) { content }
+                .buttonStyle(PressScaleStyle())
+        } else {
+            content
+        }
+    }
+}
+
+/// The three LIVE sub-views. The BAC hero + drink dock stay pinned; this
+/// swaps the middle so the screen is one focused thing at a time.
+enum LiveTab: String, CaseIterable, Identifiable {
+    case night, group, recap
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .night: return "NIGHT"
+        case .group: return "GROUP"
+        // Display name for the drink-history tab — the timestamped list of
+        // everything you've logged tonight.
+        case .recap: return "DRINKS"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .night: return "moon.stars.fill"
+        case .group: return "person.2.fill"
+        // Drink glass — SF Symbols has no beer mug, and mug.fill reads as
+        // coffee; wineglass is the clean "your drinks" mark.
+        case .recap: return "wineglass.fill"
+        }
+    }
+}
+
+/// Segmented switch under the BAC readout. Active segment fills whiskey;
+/// GROUP and RECAP carry a small live count so you know what's waiting in
+/// each without opening it.
+private struct LiveSegmentControl: View {
+    @Binding var selection: LiveTab
+    /// People in the group — badged on GROUP (0 hides it).
+    var groupCount: Int = 0
+    /// Drinks logged tonight — badged on RECAP (0 hides it).
+    var drinkCount: Int = 0
+
+    private func badge(for tab: LiveTab) -> Int {
+        switch tab {
+        case .group: return groupCount
+        case .recap: return drinkCount
+        case .night: return 0
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(LiveTab.allCases) { tab in
+                let active = selection == tab
+                Button {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+                        selection = tab
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: tab.icon)
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                        Text(tab.label)
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .tracking(1.4)
+                        let n = badge(for: tab)
+                        if n > 0 {
+                            Text("\(n)")
+                                .font(.system(size: 9.5, weight: .black, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(active ? Color.whiskey : Color.ink)
+                                .frame(minWidth: 16, minHeight: 16)
+                                .background(Circle().fill(active ? Color.ink.opacity(0.85) : Color.whiskey.opacity(0.9)))
+                        }
+                    }
+                    .foregroundStyle(active ? Color.ink : Color.cream.opacity(0.6))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .fill(active ? Color.whiskey : Color.clear)
+                    )
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+        }
+        .padding(4)
+        .background(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .fill(Color.cream.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.08), lineWidth: 1)
+        )
     }
 }
 
@@ -13305,6 +13634,10 @@ private struct LiveSeshView: View {
     /// in solo mode. Persists between taps so a "round of shots" doesn't
     /// require flipping back and forth for each one.
     @State private var shareMode = false
+    /// Which LIVE sub-view is showing. The BAC hero + log dock stay pinned;
+    /// this switches the middle between the night, the group, and the recap
+    /// so the screen is one focused view at a time instead of a long stack.
+    @State private var liveTab: LiveTab = .night
 
     /// The end-of-night story. Non-nil presents the full-screen recap;
     /// the actual sesh teardown runs from the recap's Done button so
@@ -13725,8 +14058,10 @@ private struct LiveSeshView: View {
             .presentationBackground(Color.ink)
         }
         .sheet(isPresented: $addPersonOpen) {
-            AddPersonSheet { name, sex, age, weightKg in
-                ghosts.add(name: name, sex: sex, age: age, weightKg: weightKg)
+            AddPersonSheet(startNumber: ghosts.members.count + 1) { newGhosts in
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                    ghosts.addMany(newGhosts)
+                }
             }
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
@@ -14130,12 +14465,8 @@ private struct LiveSeshView: View {
                 )
             }
 
-            TabHintChip(
-                "Tap a tile at the bottom to log a drink the moment you sip it.",
-                key: "live"
-            )
-
-            // Readout leads — same single hero card as PLAN.
+            // Readout leads — same single hero card as PLAN. Always visible,
+            // above the tab switch, so your BAC never scrolls away.
             TonightHeroCard(
                 bac: bac,
                 status: status,
@@ -14144,8 +14475,33 @@ private struct LiveSeshView: View {
                 hoursEU: hoursUntil(threshold: 0.02, now: now),
                 hoursUS: hoursUntil(threshold: 0.08, now: now)
             )
-            // Group + check-in side by side beneath the readout — still one
-            // glance away at half the vertical footprint.
+
+            // One focused view at a time instead of a long stack of cards.
+            LiveSegmentControl(
+                selection: $liveTab,
+                groupCount: inGroup ? group.members.count : 0,
+                drinkCount: totalDrinkCount
+            )
+
+            switch liveTab {
+            case .night: nightTab(now: now)
+            case .group: groupTab(now: now)
+            case .recap: recapTab(now: now)
+            }
+            Spacer(minLength: 24)
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 14)
+        .padding(.bottom, 16)
+    }
+
+    // MARK: - LIVE tabs
+
+    /// NIGHT — where you are and your night's photos. The two quick setup
+    /// actions (invite / check in) lead, then the Night Snaps journey.
+    @ViewBuilder
+    private func nightTab(now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
                 if embedded, let onOpenGroupSheet {
                     GroupBar(
@@ -14153,6 +14509,7 @@ private struct LiveSeshView: View {
                         session: group.session,
                         memberCount: group.members.count,
                         compact: true,
+                        alwaysInvite: true,
                         onTap: onOpenGroupSheet
                     )
                 }
@@ -14164,16 +14521,10 @@ private struct LiveSeshView: View {
                     onTap: { venueOpen = true }
                 )
             }
-            // Night snaps — every stop so far with its photos (plus the
-            // "between bars" page when not checked in anywhere). Camera or
-            // library, attach to any stop of the night; everything rides
-            // straight into the end-of-night recap.
             LiveJourneyPhotosSection(
                 journey: journey,
                 pukeCandidates: pukeCandidates,
                 onRemoveStop: { stop in
-                    // Removing the bar you're currently at also checks you
-                    // out, so the chip + roster stop showing it.
                     if stop.kind == .bar, venues.currentVenue?.id == stop.venueId {
                         venues.currentVenue = nil
                     }
@@ -14183,45 +14534,65 @@ private struct LiveSeshView: View {
                 inFollowingGroup: inGroup && group.followingGroupVenue,
                 inGroup: inGroup,
                 onLooseSpotChanged: { spot in
-                    // Share the pre-game / between location with the group
-                    // when you're following it; otherwise it stays local.
                     if inGroup, group.followingGroupVenue {
                         Task { await group.setGroupLooseSpot(spot) }
                     }
                 }
             )
-            if inGroup, let sid = group.session?.id {
-                // Squad schnaps are taken IN this card, separately from the
-                // personal Night Schnaps above — group photos never enter
-                // the journey, so they stay out of recaps/Nightline posts.
-                GroupSnapsStrip(
-                    snaps: groupSnaps,
-                    sessionId: sid,
-                    stopName: { venues.currentVenue?.name },
-                    nameFor: { pid in group.memberProfiles[pid]?.name ?? "?" },
-                    avatarFor: { pid in group.memberProfiles[pid]?.avatarURL },
-                    saveToJourney: { data, date in
-                        // Saved squad schnaps become loose journey photos at
-                        // their original time — the recap files them onto the
-                        // right leg of the night automatically.
-                        journey.addLoosePhoto(data, at: date)
-                    }
+        }
+    }
+
+    /// GROUP — the crew: join code, everyone's BAC + share-a-round, the
+    /// roast, squad snaps, plus manually-added guests. Solo shows an invite
+    /// call-to-action instead of the roster.
+    @ViewBuilder
+    private func groupTab(now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if inGroup {
+                if let code = group.session?.joinCode {
+                    GroupCodeBar(
+                        code: code,
+                        memberCount: group.members.count,
+                        onTap: onOpenGroupSheet
+                    )
+                }
+                LiveGroupRoster(
+                    group: group,
+                    selfId: profile.id,
+                    now: now,
+                    isSharing: shareMode,
+                    onShareDrink: (group.members.count + group.ghosts.count) > 1
+                        ? { withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { shareMode = true } }
+                        : nil
+                )
+                // Squad Schnaps — group photos, right below the roster so
+                // the crew and their pics sit together.
+                if let sid = group.session?.id {
+                    GroupSnapsStrip(
+                        snaps: groupSnaps,
+                        sessionId: sid,
+                        stopName: { venues.currentVenue?.name },
+                        nameFor: { pid in group.memberProfiles[pid]?.name ?? "?" },
+                        avatarFor: { pid in group.memberProfiles[pid]?.avatarURL },
+                        saveToJourney: { data, date in
+                            journey.addLoosePhoto(data, at: date)
+                        }
+                    )
+                }
+                LiveRoastCard(group: group, profile: profile, now: now)
+            } else if let onOpenGroupSheet {
+                GroupBar(
+                    scope: .live,
+                    session: nil,
+                    memberCount: 0,
+                    compact: false,
+                    onTap: onOpenGroupSheet
                 )
             }
-            if inGroup {
-                LiveGroupRoster(group: group, selfId: profile.id, now: now)
-                LiveRoastCard(group: group, profile: profile, now: now)
-            }
-            // Manually-added ghost members — always shown in live mode.
-            // Acts as the "+ Add person" entry point even when there are
-            // no ghosts yet, so the affordance is always discoverable.
             LiveGhostSection(
                 ghosts: ghosts,
                 now: now,
                 bacFor: { ghost in
-                    // In a group, route through SessionService so the
-                    // guest gets their share of shared rounds; solo uses
-                    // the guest's own drinks only.
                     inGroup
                         ? group.liveBAC(forGhost: ghost, now: now)
                         : ghosts.bac(for: ghost, now: now)
@@ -14233,14 +14604,18 @@ private struct LiveSeshView: View {
                     addPersonOpen = true
                 }
             )
+        }
+    }
+
+    /// RECAP — the night so far: your drink timeline and the estimate's
+    /// fine print.
+    @ViewBuilder
+    private func recapTab(now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
             timelineSection(now: now)
             Disclaimer()
                 .padding(.top, 4)
-            Spacer(minLength: 24)
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 14)
-        .padding(.bottom, 16)
     }
 
     /// Picks one of the status's funny lines, rotated by drink count so the
@@ -14854,28 +15229,11 @@ private struct LiveSeshView: View {
                         .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .fill(Color.whiskey.opacity(0.12)))
                         .transition(.opacity)
-                } else {
-                    HStack {
-                        Spacer()
-                        Button {
-                            withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { shareMode = true }
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "person.2.fill")
-                                    .font(.system(size: 9.5, weight: .bold, design: .rounded))
-                                Text("BUYING A ROUND?")
-                                    .font(.system(size: 9, weight: .black, design: .monospaced))
-                                    .tracking(1.2)
-                            }
-                            .foregroundStyle(Color.cream.opacity(0.55))
-                            .padding(.horizontal, 11).padding(.vertical, 7)
-                            .background(Capsule().fill(Color.cream.opacity(0.06)))
-                            .overlay(Capsule().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
-                        }
-                        .buttonStyle(PressScaleStyle())
-                    }
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
+                // The "share a round" entry point now lives in the group
+                // roster (next to everyone's BAC) — see LiveGroupRoster's
+                // onShareDrink. The dock keeps only the armed banner and the
+                // confirmation, which are feedback tied to the drink tiles.
             }
 
             HStack(spacing: 8) {
@@ -15090,6 +15448,12 @@ private struct LiveGroupRoster: View {
     @ObservedObject var group: SessionService
     let selfId: UUID
     let now: Date
+    /// True while a shared round is armed — the next drink tap logs for
+    /// everyone. Swaps the share button for an "armed" hint.
+    var isSharing: Bool = false
+    /// Arms a shared round. nil when it's just you (nobody to share with),
+    /// which hides the button entirely.
+    var onShareDrink: (() -> Void)? = nil
 
     fileprivate struct Row: Identifiable {
         let id: UUID
@@ -15139,6 +15503,75 @@ private struct LiveGroupRoster: View {
                     LiveRosterRow(row: row, rank: idx, isLeader: idx == 0 && row.bac > 0)
                 }
             }
+
+            // Share a drink with the whole group — arms one shared round,
+            // right where everyone's BAC is visible so it's obvious who
+            // it's for. The dock shows the "armed" banner + confirmation.
+            if let onShareDrink {
+                if isSharing {
+                    HStack(spacing: 8) {
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.whiskey)
+                        Text("Round armed — tap a drink to log it for everyone")
+                            .font(.system(size: 12, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.whiskey)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 13).padding(.vertical, 11)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.whiskey.opacity(0.12))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1)
+                    )
+                    .transition(.opacity)
+                } else {
+                    Button(action: onShareDrink) {
+                        HStack(spacing: 11) {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.whiskey.opacity(0.18))
+                                    .frame(width: 34, height: 34)
+                                Image(systemName: "person.2.fill")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.whiskey)
+                            }
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("SHARE A ROUND")
+                                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                                    .tracking(1.6)
+                                    .foregroundStyle(Color.whiskey)
+                                Text("Share a drink with everyone in the group")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.cream)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.75)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.whiskey.opacity(0.7))
+                        }
+                        .padding(.horizontal, 13).padding(.vertical, 11)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.whiskey.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(PressScaleStyle())
+                    .transition(.opacity)
+                }
+            }
         }
         .padding(18)
         .background(
@@ -15149,6 +15582,7 @@ private struct LiveGroupRoster: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .strokeBorder(Color.cream.opacity(0.07), lineWidth: 1)
         )
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: isSharing)
     }
 }
 
@@ -15516,13 +15950,39 @@ private struct LiveGhostRow: View {
 /// disabled until there's a non-empty name — everything else has a
 /// reasonable default.
 struct AddPersonSheet: View {
-    var onSave: (_ name: String, _ sex: Sex, _ age: Int, _ weightKg: Double) -> Void
+    /// Returns the built ghost(s). One in "detailed" mode, N in "several".
+    var onSave: ([GhostMember]) -> Void
+    /// Where quick auto-numbering starts ("Guest 3", "Guest 4"…) so a batch
+    /// continues the existing roster rather than colliding with it.
+    var startNumber: Int = 1
     @Environment(\.dismiss) private var dismiss
 
+    enum EntryMode: String, CaseIterable, Identifiable { case several, detailed; var id: String { rawValue } }
+
+    /// Rough guest profiles for the quick "just a number" path — enough to
+    /// get a believable group estimate without asking for every stat.
+    enum GuestKind: String, CaseIterable, Identifiable {
+        case mixed, guys, girls
+        var id: String { rawValue }
+        var label: String { self == .mixed ? "Mixed" : self == .guys ? "Guys" : "Girls" }
+        /// (sex, weightKg) for the i-th guest (0-based). Mixed alternates.
+        func profile(_ i: Int) -> (Sex, Double) {
+            switch self {
+            case .guys:  return (.male, 82)
+            case .girls: return (.female, 66)
+            case .mixed: return i % 2 == 0 ? (.male, 82) : (.female, 66)
+            }
+        }
+    }
+
+    @State private var entryMode: EntryMode = .several
     @State private var name: String = ""
     @State private var sex: Sex = .male
     @State private var age: Double = 28
     @State private var weight: Double = 75
+    // Quick "several" path.
+    @State private var count: Double = 4
+    @State private var kind: GuestKind = .mixed
     @FocusState private var nameFocused: Bool
 
     private var canSave: Bool {
@@ -15536,45 +15996,13 @@ struct AddPersonSheet: View {
                 VStack(alignment: .leading, spacing: 22) {
                     header
 
-                    nameField
+                    modePicker
 
-                    InputRow(
-                        kicker: "01",
-                        title: "Sex",
-                        valueText: sex.short,
-                        unit: "",
-                        accent: Color.whiskey
-                    ) {
-                        SexToggle(sex: $sex, accent: Color.whiskey)
+                    if entryMode == .several {
+                        quickSection
+                    } else {
+                        detailedSection
                     }
-
-                    InputRow(
-                        kicker: "02",
-                        title: "Age",
-                        valueText: "\(Int(age))",
-                        unit: "yrs",
-                        accent: Color.whiskey
-                    ) {
-                        TintedSlider(value: $age, range: 18...80, step: 1, accent: Color.whiskey)
-                    }
-
-                    InputRow(
-                        kicker: "03",
-                        title: "Weight",
-                        valueText: "\(Int(weight))",
-                        unit: "kg",
-                        accent: Color.whiskey
-                    ) {
-                        TintedSlider(value: $weight, range: 40...160, step: 1, accent: Color.whiskey)
-                    }
-
-                    saveButton
-
-                    Text("Stats stay on your phone. We use them to estimate this person's BAC the same way we do yours.")
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.45))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 4)
 
                     Spacer(minLength: 24)
                 }
@@ -15584,7 +16012,119 @@ struct AddPersonSheet: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onAppear { nameFocused = true }
+        .onAppear { if entryMode == .detailed { nameFocused = true } }
+    }
+
+    /// Two-way switch: a quick headcount for a rough estimate, or the full
+    /// per-person form. Defaults to the quick path.
+    private var modePicker: some View {
+        HStack(spacing: 0) {
+            ForEach(EntryMode.allCases) { m in
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                        entryMode = m
+                        nameFocused = (m == .detailed)
+                    }
+                } label: {
+                    Text(m == .several ? "SEVERAL" : "ONE PERSON")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(1.6)
+                        .foregroundStyle(entryMode == m ? Color.ink : Color.cream.opacity(0.6))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .fill(entryMode == m ? Color.whiskey : Color.clear)
+                        )
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+        }
+        .padding(4)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+    }
+
+    // MARK: Quick "several" path
+
+    private var quickSection: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            InputRow(
+                kicker: "01",
+                title: "How many?",
+                valueText: "\(Int(count))",
+                unit: Int(count) == 1 ? "person" : "people",
+                accent: Color.whiskey
+            ) {
+                TintedSlider(value: $count, range: 1...30, step: 1, accent: Color.whiskey)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Text("02")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .tracking(2).foregroundStyle(Color.bronze)
+                    Text("TYPICAL GUEST")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .tracking(2.4).foregroundStyle(Color.cream.opacity(0.78))
+                }
+                HStack(spacing: 0) {
+                    ForEach(GuestKind.allCases) { k in
+                        Button {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { kind = k }
+                        } label: {
+                            Text(k.label)
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(kind == k ? Color.ink : Color.cream.opacity(0.65))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                        .fill(kind == k ? Color.whiskey : Color.clear)
+                                )
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+                }
+                .padding(4)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.05)))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.cream.opacity(0.08), lineWidth: 1))
+            }
+
+            quickSaveButton
+
+            Text("A rough estimate using average builds — no names needed. Switch to “One person” to enter exact stats. Add or edit anyone afterwards.")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.45))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 4)
+        }
+    }
+
+    // MARK: Detailed per-person path
+
+    private var detailedSection: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            nameField
+
+            InputRow(kicker: "01", title: "Sex", valueText: sex.short, unit: "", accent: Color.whiskey) {
+                SexToggle(sex: $sex, accent: Color.whiskey)
+            }
+            InputRow(kicker: "02", title: "Age", valueText: "\(Int(age))", unit: "yrs", accent: Color.whiskey) {
+                TintedSlider(value: $age, range: 18...80, step: 1, accent: Color.whiskey)
+            }
+            InputRow(kicker: "03", title: "Weight", valueText: "\(Int(weight))", unit: "kg", accent: Color.whiskey) {
+                TintedSlider(value: $weight, range: 40...160, step: 1, accent: Color.whiskey)
+            }
+
+            saveButton
+
+            Text("Stats stay on your phone. We use them to estimate this person's BAC the same way we do yours.")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.45))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 4)
+        }
     }
 
     private var header: some View {
@@ -15595,12 +16135,12 @@ struct AddPersonSheet: View {
                         .fill(Color.whiskey)
                         .frame(width: 7, height: 7)
                         .shadow(color: Color.whiskey.opacity(0.8), radius: 5)
-                    Text("ADD PERSON")
+                    Text(entryMode == .several ? "ADD PEOPLE" : "ADD PERSON")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .tracking(2.6)
                         .foregroundStyle(Color.whiskey)
                 }
-                Text("New guest")
+                Text(entryMode == .several ? "Who's coming?" : "New guest")
                     .font(.system(size: 28, weight: .black, design: .rounded))
                     .italic()
                     .foregroundStyle(Color.cream)
@@ -15706,10 +16246,47 @@ struct AddPersonSheet: View {
         .opacity(canSave ? 1.0 : 0.6)
     }
 
+    private var quickSaveButton: some View {
+        let n = Int(count)
+        return Button(action: commitQuick) {
+            HStack(spacing: 10) {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.cream))
+                Text(n == 1 ? "ADD 1 PERSON" : "ADD \(n) PEOPLE")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .tracking(2.0)
+                    .foregroundStyle(Color.ink)
+                Spacer()
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.ink.opacity(0.55))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.whiskey))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.whiskey.opacity(0.6), lineWidth: 1))
+            .shadow(color: Color.whiskey.opacity(0.45), radius: 18, y: 8)
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+
     private func commit() {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        onSave(trimmed, sex, Int(age), weight)
+        onSave([GhostMember(name: trimmed, sex: sex, age: Int(age), weightKg: weight)])
+        dismiss()
+    }
+
+    private func commitQuick() {
+        let n = max(1, Int(count))
+        let built: [GhostMember] = (0..<n).map { i in
+            let (s, w) = kind.profile(i)
+            return GhostMember(name: "Guest \(startNumber + i)", sex: s, age: 28, weightKg: w)
+        }
+        onSave(built)
         dismiss()
     }
 }
@@ -15967,6 +16544,9 @@ private struct LiveMenuSheet: View {
     @State private var selectedCategory: DrinkCategory = .beer
     /// Drives the full-screen barcode scan flow.
     @State private var scanning = false
+    /// Manual entry for the "Other" catch-all category.
+    @State private var customCL: String = ""
+    @State private var customABV: String = ""
 
     private var specialsHeader: String {
         if let n = venueName, !n.isEmpty { return "Specials at \(n)" }
@@ -16181,9 +16761,18 @@ private struct LiveMenuSheet: View {
                 .padding(.horizontal, -22)
 
                 VStack(spacing: 8) {
-                    // Built-in catalog drinks first…
-                    ForEach(DrinkCatalog.options(for: selectedCategory), id: \.name) { option in
-                        catalogRow(option, isSaved: false)
+                    if selectedCategory.isCustom {
+                        // "Other" has no fixed presets — the user dials in the
+                        // size and strength by hand. Same DrinkOption/BAC math
+                        // as every catalog row; onPick logs it and dismisses.
+                        CustomDrinkCard(clText: $customCL, abvText: $customABV) { option in
+                            onPick(option)
+                        }
+                    } else {
+                        // Built-in catalog drinks first…
+                        ForEach(DrinkCatalog.options(for: selectedCategory), id: \.name) { option in
+                            catalogRow(option, isSaved: false)
+                        }
                     }
                     // …then the user's own saved scanned / manual drinks for
                     // this category, under a clear header. Filled bookmark

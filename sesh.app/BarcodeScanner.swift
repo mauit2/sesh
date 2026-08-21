@@ -65,7 +65,7 @@ enum BeverageLocalCache {
         return ScannedBeverage(
             barcode: barcode,
             name: e.name,
-            category: DrinkCategory(rawValue: e.category) ?? .beer,
+            category: DrinkCategory(rawValue: e.category) ?? .other,
             volumeML: e.volumeML,
             abv: e.abv,
             source: .localCache
@@ -171,7 +171,7 @@ final class BeverageLookupService: ObservableObject {
             return ScannedBeverage(
                 barcode: barcode,
                 name: r.name,
-                category: DrinkCategory(rawValue: r.category) ?? .beer,
+                category: DrinkCategory(rawValue: r.category) ?? .other,
                 volumeML: r.volume_ml,
                 abv: r.abv,
                 source: .ownCatalog
@@ -606,7 +606,9 @@ private struct BarcodeConfirmView: View {
         self.onLog = onLog
         self.onCancel = onCancel
         _name = State(initialValue: beverage.name ?? "")
-        _category = State(initialValue: beverage.category ?? .beer)
+        // No recognised OFF category → land in the "Other" catch-all so the
+        // user just confirms the size/% rather than untangling a wrong guess.
+        _category = State(initialValue: beverage.category ?? .other)
         _volumeText = State(initialValue: beverage.volumeML.map { String(Int($0.rounded())) } ?? "")
         _abvText = State(initialValue: beverage.abv.map { String(format: "%.1f", $0 * 100) } ?? "")
     }

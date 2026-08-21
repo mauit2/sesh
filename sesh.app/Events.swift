@@ -1327,11 +1327,10 @@ struct EventDetailSheet: View {
                 .presentationBackground(Color.ink)
         }
         .sheet(isPresented: $addGuestOpen) {
-            AddPersonSheet { name, sex, age, weightKg in
+            AddPersonSheet(startNumber: (event?.ghosts.count ?? 0) + 1) { newGhosts in
                 guard let ev = event else { return }
-                let ghost = GhostMember(name: name, sex: sex, age: age, weightKg: weightKg)
                 let t: Task<Void, Never> = Task {
-                    await events.setGhosts(eventId: ev.id, ev.ghosts + [ghost])
+                    await events.setGhosts(eventId: ev.id, ev.ghosts + newGhosts)
                 }
                 _ = t
             }

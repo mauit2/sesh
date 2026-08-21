@@ -211,7 +211,7 @@ enum Status: String {
 // MARK: - Drinks catalog
 
 enum DrinkCategory: String, CaseIterable, Identifiable, Codable {
-    case beer, wine, sparkling, whisky, vodka, gin, cocktail, cider
+    case beer, wine, sparkling, whisky, vodka, gin, cocktail, cider, seltzer, tequila, other
     var id: String { rawValue }
 
     var label: String {
@@ -224,6 +224,9 @@ enum DrinkCategory: String, CaseIterable, Identifiable, Codable {
         case .gin:       return "Gin"
         case .cocktail:  return "Cocktail"
         case .cider:     return "Cider"
+        case .seltzer:   return "Seltzer"
+        case .tequila:   return "Tequila"
+        case .other:     return "Other"
         }
     }
 
@@ -237,8 +240,17 @@ enum DrinkCategory: String, CaseIterable, Identifiable, Codable {
         case .gin:       return "🍹"
         case .cocktail:  return "🍸"
         case .cider:     return "🐱"
+        case .seltzer:   return "🫧"
+        case .tequila:   return "🌵"
+        case .other:     return "🍶"
         }
     }
+
+    /// `.other` is a manual catch-all: the user dials in ABV and size by
+    /// hand, and it's where a scanned beverage lands when nothing else
+    /// matches. It has no fixed presets — the menu shows a custom entry
+    /// card instead of a preset list.
+    var isCustom: Bool { self == .other }
 }
 
 enum GlyphOverride: Hashable {
@@ -345,6 +357,21 @@ enum DrinkCatalog {
                 .init(category: .cider, name: "Bottle of cider", detail: "33 cl · 4.5%", volumeML: 330, abv: 0.045),
                 .init(category: .cider, name: "Pint of cider",   detail: "50 cl · 4.5%", volumeML: 500, abv: 0.045),
             ]
+        case .seltzer:
+            return [
+                .init(category: .seltzer, name: "Hard seltzer", detail: "33 cl · 5%",   volumeML: 330, abv: 0.05),
+                .init(category: .seltzer, name: "Slim can",     detail: "35.5 cl · 5%", volumeML: 355, abv: 0.05),
+                .init(category: .seltzer, name: "Tall seltzer", detail: "50 cl · 5%",   volumeML: 500, abv: 0.05),
+            ]
+        case .tequila:
+            return [
+                .init(category: .tequila, name: "Shot of tequila", detail: "4 cl · 40%", volumeML: 40, abv: 0.40),
+                .init(category: .tequila, name: "Double tequila",  detail: "8 cl · 40%", volumeML: 80, abv: 0.40),
+            ]
+        case .other:
+            // Custom catch-all — no fixed presets. The order menu shows a
+            // manual ABV + size entry card for this category instead.
+            return []
         }
     }
 }
