@@ -10,7 +10,7 @@
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
 <title>Privacy Policy — Sejdel</title>
-<meta name="description" content="Privacy Policy for the Sejdel app — what we collect, why, how long it lives, and the choices you have." />
+<meta name="description" content="Privacy Notice for the Sejdel app — what we collect, why, how long it lives, who we share it with, and the choices you have." />
 <link rel="canonical" href="https://sejdel.com/privacy/" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -114,7 +114,7 @@
     color:var(--cream-dim);font-size:15.5px;
   }
   .callout b{color:var(--cream);font-weight:700;}
-  .lede{color:var(--cream-dim);font-size:18px;margin:0 0 40px;}
+  .lede{color:var(--cream-dim);font-size:18px;margin:0 0 28px;}
 
   h2{
     font-family:"Fraunces",Georgia,serif;font-weight:700;
@@ -138,6 +138,13 @@
   li{margin:9px 0;}
   li::marker{color:var(--whiskey);}
   strong{color:var(--cream);font-weight:600;}
+  em.inshort{color:var(--bronze);font-style:italic;}
+
+  /* table of contents */
+  .toc{margin:14px 0 8px;padding-left:20px;}
+  .toc li{margin:6px 0;}
+  .toc a{font-size:15.5px;border-bottom-color:transparent;}
+  .toc a:hover{border-bottom-color:var(--whiskey);}
 
   table{
     width:100%;border-collapse:collapse;margin:18px 0 8px;font-size:15px;
@@ -150,7 +157,8 @@
   }
   td{padding:12px 14px;border-bottom:1px solid rgba(243,233,216,.06);vertical-align:top;}
   tr:last-child td{border-bottom:none;}
-  td:last-child{font-family:var(--mono);font-size:13px;color:var(--whiskey);white-space:nowrap;}
+  td:last-child{font-family:var(--mono);font-size:13px;color:var(--whiskey);white-space:nowrap;text-align:center;}
+  .tablewrap{overflow-x:auto;}
 
   .foot{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
     color:var(--cream-dim);font-size:14px;}
@@ -190,233 +198,704 @@
   <div class="bubbles" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
   <main class="wrap">
     <p class="eyebrow reveal d1"><span class="dot"></span>Sejdel App</p>
-    <h1 class="reveal d2">Privacy <em>Policy.</em></h1>
-    <p class="dates reveal d3"><b>Effective:</b> 5 July 2026 &nbsp;·&nbsp; <b>Last updated:</b> 14 August 2026</p>
+    <h1 class="reveal d2">Privacy <em>Notice.</em></h1>
+    <p class="dates reveal d3"><b>Last updated:</b> 23 August 2026</p>
 
-    <p class="lede reveal d3">This policy explains what information Sejdel collects, why, how long it
-      lives, and the choices you have. Sejdel is a social blood-alcohol-content (BAC) estimation and
-      drink-tracking app: you log your night, see live estimates, and share it — only as much as
-      you choose — with friends and your group.</p>
+    <p class="lede reveal d3">This Privacy Notice for <strong>Sejdel</strong> (&ldquo;we,&rdquo; &ldquo;us,&rdquo; or
+      &ldquo;our&rdquo;) describes how and why we might access, collect, store, use, and/or share
+      (&ldquo;process&rdquo;) your personal information when you use our services (&ldquo;Services&rdquo;),
+      including when you:</p>
+    <ul class="reveal d3">
+      <li>Visit our website at <a href="https://sejdel.com">sejdel.com</a>, or any website of ours
+        that links to this Privacy Notice;</li>
+      <li>Download and use our mobile application (<strong>Sejdel</strong>), or any other application
+        of ours that links to this Privacy Notice;</li>
+      <li>Use <strong>Sejdel</strong> — a mobile app for people who go out. It lets you log your
+        drinks and see a real-time, estimated blood alcohol content (BAC), pace your night, and get
+        a rough time-to-sober. You can start or join a live group with a share code to see friends'
+        BAC in real time, share rounds, and capture photos of the night; add friends and optionally
+        see who's checked in nearby; browse a map of beer prices and bar deals; plan events; and
+        optionally connect Apple Health to view calories burned vs. consumed, steps, and heart rate
+        for a night out;</li>
+      <li>Engage with us in other related ways, including any marketing or events.</li>
+    </ul>
 
-    <div class="callout reveal d4"><b>Sejdel is not a medical, legal, or safety device.</b> BAC values are
-      Widmark-formula <em>estimates</em> based on what you enter, for entertainment and
-      harm-reduction awareness only. Never rely on them to decide whether to drive or operate
-      machinery.</div>
+    <div class="callout reveal d4"><b>Sejdel is not a medical, legal, or safety device.</b> BAC figures are
+      Widmark-formula <em>estimates</em> based on what you enter, for awareness and entertainment
+      only. Never rely on them to decide whether to drive or operate machinery.</div>
+
+    <p class="reveal d4"><strong>Questions or concerns?</strong> Reading this Privacy Notice will help
+      you understand your privacy rights and choices. We are responsible for making decisions about
+      how your personal information is processed. If you do not agree with our policies and practices,
+      please do not use our Services. If you still have any questions or concerns, please contact us
+      at <a href="mailto:privacy@sejdel.com">privacy@sejdel.com</a>.</p>
 
     <section>
-    <h2><span class="num">01</span>Who we are</h2>
-    <p>Sejdel App is operated by an individual developer (sole proprietor) enrolled in the Apple
-      Developer Program.</p>
-    <p><strong>Contact:</strong> <a href="mailto:contact@sejdel.com">contact@sejdel.com</a></p>
+    <h2><span class="num">—</span>Summary of key points</h2>
+    <p><em class="inshort">This summary provides key points from our Privacy Notice, but you can find
+      out more details about any of these topics by clicking the link following each key point or by
+      using our <a href="#toc">table of contents</a> below to find the section you are looking for.</em></p>
+
+    <p><strong>What personal information do we process?</strong> When you visit, use, or navigate our
+      Services, we may process personal information depending on how you interact with us and the
+      Services, the choices you make, and the products and features you use. Learn more about
+      <a href="#personalinfo">personal information you disclose to us</a>.</p>
+
+    <p><strong>Do we process any sensitive personal information?</strong> Some of the information may
+      be considered &ldquo;special&rdquo; or &ldquo;sensitive&rdquo; in certain jurisdictions — for
+      Sejdel, this means your <strong>health data</strong> and <strong>precise geolocation</strong>.
+      We process sensitive personal information when necessary with your consent or as otherwise
+      permitted by applicable law. Learn more about <a href="#sensitiveinfo">sensitive information we
+      process</a>.</p>
+
+    <p><strong>Do we collect any information from third parties?</strong> We do not collect any
+      information from third parties.</p>
+
+    <p><strong>How do we process your information?</strong> We process your information to provide,
+      improve, and administer our Services, communicate with you, for security and fraud prevention,
+      and to comply with law. We process your information only when we have a valid legal reason to
+      do so. Learn more about <a href="#infouse">how we process your information</a>.</p>
+
+    <p><strong>In what situations and with which parties do we share personal information?</strong>
+      We may share information in specific situations and with specific categories of third parties.
+      Learn more about <a href="#whoshare">when and with whom we share your personal information</a>.</p>
+
+    <p><strong>How do we keep your information safe?</strong> We have adequate organizational and
+      technical processes and procedures in place to protect your personal information. However, no
+      electronic transmission over the internet or information storage technology can be guaranteed
+      to be 100% secure. Learn more about <a href="#infosafe">how we keep your information safe</a>.</p>
+
+    <p><strong>What are your rights?</strong> Depending on where you are located geographically, the
+      applicable privacy law may mean you have certain rights regarding your personal information.
+      Learn more about <a href="#privacyrights">your privacy rights</a>.</p>
+
+    <p><strong>How do you exercise your rights?</strong> The easiest way to exercise your rights is by
+      visiting <a href="https://sejdel.com/contact/">https://sejdel.com/contact/</a>, or by
+      contacting us. We will consider and act upon any request in accordance with applicable data
+      protection laws.</p>
     </section>
 
-    <section>
-    <h2><span class="num">02</span>Information we collect</h2>
-    <p>We only collect what the app needs to function.</p>
+    <section id="toc">
+    <h2><span class="num">—</span>Table of contents</h2>
+    <ul class="toc">
+      <li><a href="#infocollect">1. What information do we collect?</a></li>
+      <li><a href="#infouse">2. How do we process your information?</a></li>
+      <li><a href="#legalbases">3. What legal bases do we rely on to process your personal information?</a></li>
+      <li><a href="#whoshare">4. When and with whom do we share your personal information?</a></li>
+      <li><a href="#intltransfers">5. Is your information transferred internationally?</a></li>
+      <li><a href="#inforetain">6. How long do we keep your information?</a></li>
+      <li><a href="#infosafe">7. How do we keep your information safe?</a></li>
+      <li><a href="#infominors">8. Do we collect information from minors?</a></li>
+      <li><a href="#privacyrights">9. What are your privacy rights?</a></li>
+      <li><a href="#DNT">10. Controls for do-not-track features</a></li>
+      <li><a href="#uslaws">11. Do United States residents have specific privacy rights?</a></li>
+      <li><a href="#otherlaws">12. Do other regions have specific privacy rights?</a></li>
+      <li><a href="#clausea">13. Apple Health (HealthKit)</a></li>
+      <li><a href="#policyupdates">14. Do we make updates to this notice?</a></li>
+      <li><a href="#contact">15. How can you contact us about this notice?</a></li>
+      <li><a href="#request">16. How can you review, update, or delete the data we collect from you?</a></li>
+    </ul>
+    </section>
 
-    <h3>Information you provide</h3>
+    <section id="infocollect">
+    <h2><span class="num">01</span>What information do we collect?</h2>
+
+    <h3 id="personalinfo">Personal information you disclose to us</h3>
+    <p><em class="inshort">In Short: We collect personal information that you provide to us.</em></p>
+    <p>We collect personal information that you voluntarily provide to us when you register on the
+      Services, express an interest in obtaining information about us or our products and Services,
+      when you participate in activities on the Services, or otherwise when you contact us.</p>
+    <p><strong>Personal Information Provided by You.</strong> The personal information that we collect
+      depends on the context of your interactions with us and the Services, the choices you make, and
+      the products and features you use. The personal information we collect may include the following:</p>
     <ul>
-      <li><strong>Account details:</strong> your email address, to create and authenticate your
-        account, and a unique <strong>@username</strong> other users can search to find and
-        friend you.</li>
-      <li><strong>Profile information:</strong> display name, age, biological sex, and body
-        weight. Sex and weight are required inputs to the Widmark BAC calculation; age confirms
-        you meet the legal drinking age. <strong>Your sex and weight are never shown to other
-        users</strong> — shared BAC values are computed on our servers so those inputs never
-        leave the database (see section&nbsp;06).</li>
-      <li><strong>Optional profile photo (avatar):</strong> if you choose to add one, it is
-        stored on our servers and shown to other users alongside your name.</li>
-      <li><strong>Drink and session data:</strong> drinks you log (type, volume, ABV, timestamp),
-        live sessions and plans you start or join, groups, shared rounds, and manually added
-        guests (name, sex, age, weight you enter for them).</li>
-      <li><strong>Friends and invites:</strong> friend requests you send or accept, and session
-        invites between you and other users.</li>
-      <li><strong>Photos you choose to share</strong> (see section&nbsp;05 for exactly who sees
-        what and for how long):
+      <li>names</li>
+      <li>phone numbers</li>
+      <li>email addresses</li>
+      <li>usernames</li>
+      <li>passwords</li>
+      <li>date of birth / age</li>
+      <li>sex</li>
+      <li>body weight</li>
+      <li>profile photo</li>
+    </ul>
+
+    <h3 id="sensitiveinfo">Sensitive information</h3>
+    <p>When necessary, with your consent or as otherwise permitted by applicable law, we process the
+      following categories of sensitive information:</p>
+    <ul>
+      <li>health data</li>
+      <li>precise geolocation</li>
+    </ul>
+
+    <h3>Application data</h3>
+    <p>If you use our application(s), we also may collect the following information if you choose to
+      provide us with access or permission:</p>
+    <ul>
+      <li><strong>Geolocation Information.</strong> We may request access or permission to track
+        location-based information from your mobile device, either continuously or while you are
+        using our mobile application(s), to provide certain location-based services. If you wish to
+        change our access or permissions, you may do so in your device's settings.</li>
+      <li><strong>Mobile Device Access.</strong> We may request access or permission to certain
+        features from your mobile device, including your mobile device's camera, contacts, storage,
+        Apple Health, and other features. If you wish to change our access or permissions, you may do
+        so in your device's settings.</li>
+      <li><strong>Mobile Device Data.</strong> We automatically collect device information (such as
+        your mobile device ID, model, and manufacturer), operating system, version information and
+        system configuration information, device and application identification numbers, browser type
+        and version, hardware model, Internet service provider and/or mobile carrier, and Internet
+        Protocol (IP) address. If you are using our application(s), we may also collect information
+        about the phone network associated with your mobile device, your mobile device's operating
+        system or platform, the type of mobile device you use, your mobile device's unique device ID,
+        and information about the features of our application(s) you accessed.</li>
+      <li><strong>Push Notifications.</strong> We may request to send you push notifications regarding
+        your account or certain features of the application(s). If you wish to opt out from receiving
+        these types of communications, you may turn them off in your device's settings.</li>
+    </ul>
+    <p>This information is primarily needed to maintain the security and operation of our
+      application(s), for troubleshooting, and for our internal analytics and reporting purposes.</p>
+    <p>All personal information that you provide to us must be true, complete, and accurate, and you
+      must notify us of any changes to such personal information.</p>
+
+    <h3>Information automatically collected</h3>
+    <p><em class="inshort">In Short: Some information — such as your Internet Protocol (IP) address
+      and/or browser and device characteristics — is collected automatically when you visit our
+      Services.</em></p>
+    <p>We automatically collect certain information when you visit, use, or navigate the Services.
+      This information does not reveal your specific identity (like your name or contact information)
+      but may include device and usage information, such as your IP address, browser and device
+      characteristics, operating system, language preferences, referring URLs, device name, country,
+      location, information about how and when you use our Services, and other technical information.
+      This information is primarily needed to maintain the security and operation of our Services, and
+      for our internal analytics and reporting purposes.</p>
+    <p>The information we collect includes:</p>
+    <ul>
+      <li><strong>Log and Usage Data.</strong> Log and usage data is service-related, diagnostic,
+        usage, and performance information our servers automatically collect when you access or use
+        our Services and which we record in log files. Depending on how you interact with us, this
+        log data may include your IP address, device information, browser type, and settings and
+        information about your activity in the Services (such as the date/time stamps associated with
+        your usage, pages and files viewed, searches, and other actions you take such as which
+        features you use), device event information (such as system activity, error reports, and
+        hardware settings).</li>
+      <li><strong>Device Data.</strong> We collect device data such as information about your computer,
+        phone, tablet, or other device you use to access the Services. Depending on the device used,
+        this device data may include information such as your IP address (or proxy server), device and
+        application identification numbers, location, browser type, hardware model, Internet service
+        provider and/or mobile carrier, operating system, and system configuration information.</li>
+      <li><strong>Location Data.</strong> We collect location data such as information about your
+        device's location, which can be either precise or imprecise. How much information we collect
+        depends on the type and settings of the device you use to access the Services. You can opt out
+        of allowing us to collect this information either by refusing access to the information or by
+        disabling your location setting on your device. However, if you choose to opt out, you may not
+        be able to use certain aspects of the Services.</li>
+    </ul>
+    </section>
+
+    <section id="infouse">
+    <h2><span class="num">02</span>How do we process your information?</h2>
+    <p><em class="inshort">In Short: We process your information to provide, improve, and administer
+      our Services, communicate with you, for security and fraud prevention, and to comply with law.
+      We may also process your information for other purposes only with your prior explicit consent.</em></p>
+    <p><strong>We process your personal information for a variety of reasons, depending on how you
+      interact with our Services, including:</strong></p>
+    <ul>
+      <li><strong>To facilitate account creation and authentication and otherwise manage user
+        accounts.</strong> We may process your information so you can create and log in to your
+        account, as well as keep your account in working order.</li>
+      <li><strong>To deliver and facilitate delivery of services to the user.</strong> We may process
+        your information to provide you with the requested service.</li>
+      <li><strong>To respond to user inquiries and offer support to users.</strong> We may process
+        your information to respond to your inquiries and solve any potential issues you might have
+        with the requested service.</li>
+      <li><strong>To send administrative information to you.</strong> We may process your information
+        to send you details about our products and services, changes to our terms and policies, and
+        other similar information.</li>
+      <li><strong>To enable user-to-user communications.</strong> We may process your information if
+        you choose to use any of our offerings that allow for communication with another user.</li>
+      <li><strong>To request feedback.</strong> We may process your information when necessary to
+        request feedback and to contact you about your use of our Services.</li>
+      <li><strong>To send you marketing and promotional communications.</strong> We may process the
+        personal information you send to us for our marketing purposes, if this is in accordance with
+        your marketing preferences. You can opt out of our marketing emails at any time (see
+        <a href="#privacyrights">What are your privacy rights?</a> below).</li>
+      <li><strong>To protect our Services.</strong> We may process your information as part of our
+        efforts to keep our Services safe and secure, including fraud monitoring and prevention.</li>
+      <li><strong>To identify usage trends.</strong> We may process information about how you use our
+        Services to better understand how they are being used so we can improve them.</li>
+      <li><strong>To save or protect an individual's vital interest.</strong> We may process your
+        information when necessary to save or protect an individual's vital interest, such as to
+        prevent harm.</li>
+      <li><strong>To provide safety and harm-reduction insights.</strong> Using the drinks you log and
+        your profile (sex, body weight, age), we calculate an estimated blood alcohol content,
+        time-to-sober, and pacing prompts. (Retention period: kept while your account is active;
+        deleted when you remove the session or delete your account.)</li>
+    </ul>
+    </section>
+
+    <section id="legalbases">
+    <h2><span class="num">03</span>What legal bases do we rely on to process your information?</h2>
+    <p><em class="inshort">In Short: We only process your personal information when we believe it is
+      necessary and we have a valid legal reason (i.e., legal basis) to do so under applicable law,
+      like with your consent, to comply with laws, to provide you with services to enter into or
+      fulfill our contractual obligations, to protect your rights, or to fulfill our legitimate
+      business interests.</em></p>
+
+    <h3>If you are located in the EU or UK, this section applies to you.</h3>
+    <p>The General Data Protection Regulation (GDPR) and UK GDPR require us to explain the valid legal
+      bases we rely on in order to process your personal information. As such, we may rely on the
+      following legal bases to process your personal information:</p>
+    <ul>
+      <li><strong>Consent.</strong> We may process your information if you have given us permission
+        (i.e., consent) to use your personal information for a specific purpose. You can
+        <a href="#withdrawconsent">withdraw your consent</a> at any time.</li>
+      <li><strong>Performance of a Contract.</strong> We may process your personal information when we
+        believe it is necessary to fulfill our contractual obligations to you, including providing our
+        Services or at your request prior to entering into a contract with you.</li>
+      <li><strong>Legitimate Interests.</strong> We may process your information when we believe it is
+        reasonably necessary to achieve our legitimate business interests and those interests do not
+        outweigh your interests and fundamental rights and freedoms. For example, we may process your
+        personal information for some of the purposes described in order to:
         <ul>
-          <li><em>Night schnaps</em> — photos of your own night stay <strong>on your device</strong>
-            unless you share them one of the ways below.</li>
-          <li><em>Squad schnaps</em> — photos you take in the squad card are uploaded and visible
-            to your group for the night, then deleted.</li>
-          <li><em>Live stories</em> — photos you post to the Tonight strip are uploaded and
-            visible to your accepted friends for 24 hours, then deleted. A story can include a
-            caption and, if you leave them attached, your estimated BAC and current location
-            label at the moment of posting.</li>
-          <li><em>Posted nights</em> — recaps you explicitly post to the Nightline feed
-            (photos, stops, stats) are uploaded and visible to your friends until you delete
-            the post.</li>
+          <li>Send users information about special offers and discounts on our products and services;</li>
+          <li>Analyze how our Services are used so we can improve them to engage and retain users;</li>
+          <li>Diagnose problems and/or prevent fraudulent activities;</li>
+          <li>Understand how our users use our products and services so we can improve user experience;</li>
+          <li>Help users understand their estimated level of intoxication and make safer, more informed
+            decisions while drinking.</li>
         </ul>
       </li>
+      <li><strong>Legal Obligations.</strong> We may process your information where we believe it is
+        necessary for compliance with our legal obligations, such as to cooperate with a law
+        enforcement body or regulatory agency, exercise or defend our legal rights, or disclose your
+        information as evidence in litigation in which we are involved.</li>
+      <li><strong>Vital Interests.</strong> We may process your information where we believe it is
+        necessary to protect your vital interests or the vital interests of a third party, such as
+        situations involving potential threats to the safety of any person.</li>
     </ul>
 
-    <h3>Information collected with your permission</h3>
-    <ul>
-      <li><strong>Location (while using the app):</strong> used to find nearby bars and venues,
-        to check in, and — if you opt to mark one — to save a pre-game or between-bars spot.
-        Exact marked-spot coordinates live in your on-device journey; when you are in a group
-        session, check-ins and spots you add for the group are shared with that group so everyone's
-        recap shows the night's route. Location is never used for background tracking and never
-        sold.</li>
-      <li><strong>Camera &amp; photo library:</strong> used to scan beverage barcodes (processed
-        on-device, never uploaded) and to take or pick the photos described above. Photos are
-        only ever uploaded through the explicit share features.</li>
-      <li><strong>Push notification token:</strong> if you enable notifications, a device token
-        is stored so we can notify you about likes, comments, friend requests, and session
-        invites.</li>
-      <li><strong>Contacts (finding friends):</strong> if you tap &ldquo;find friends from
-        contacts&rdquo; and grant access, the app reads your address book <strong>on your
-        device</strong> to work out which of your contacts already use Sejdel.
-        <strong>We never upload your contacts.</strong> Each phone number and email address is
-        normalised, combined with a fixed app value and turned into an irreversible
-        <a href="https://en.wikipedia.org/wiki/SHA-2">SHA-256</a> digest on the device; only
-        those digests are sent. They are compared against digests of registered users in a
-        single query and then discarded &mdash; <strong>we store nothing whatsoever about
-        people who do not have a Sejdel account</strong>, including no record that they appeared
-        in anyone's contacts. Names and numbers of contacts who are not users never leave your
-        phone; when you invite someone, the message is composed in Apple's own Messages sheet
-        and sent by you, not by us.</li>
-      <li><strong>Your own phone number (optional):</strong> if you add a number so friends can
-        find you, we store only its digest &mdash; computed the same way, on your device.
-        <strong>We do not store your phone number itself</strong>, anywhere. You can remove your
-        digests at any time with &ldquo;Remove my codes&rdquo; in your profile, which stops you
-        being discoverable without affecting your account. The digest of your account email is
-        stored for the same purpose.</li>
-    </ul>
-    <p style="font-size:14px;color:var(--cream-dim);">A note on what digests can and cannot do:
-      hashing is one-way, so a digest cannot be turned back into a phone number by reading it.
-      It is not magic, though &mdash; because there are a limited number of possible phone
-      numbers, someone who obtained our database could test candidate numbers against a digest.
-      That is why we never store raw numbers, why the digest table is readable by no one but its
-      owner, and why matching happens inside a restricted database function that returns
-      profiles and never digests.</p>
-
-    <h3>Information shared while you're live</h3>
-    <ul>
-      <li><strong>Live pulse:</strong> while a live session of yours is running, your
-        <strong>accepted friends</strong> can see that you're out, your estimated BAC, your drink
-        count, the venue you're checked into, and — in a group session — who you're with and their
-        estimated BAC. This presence record is deleted when your night ends.</li>
-    </ul>
-
-    <h3>Information collected automatically</h3>
-    <ul>
-      <li>Basic technical data needed to operate the service (authentication tokens and
-        timestamps).</li>
-    </ul>
-    <p>We do <strong>not</strong> use third-party advertising or analytics/tracking SDKs, and we
-      do not use the Apple Advertising Identifier (IDFA).</p>
+    <h3>If you are located in Canada, this section applies to you.</h3>
+    <p>We may process your information if you have given us specific permission (i.e., express consent)
+      to use your personal information for a specific purpose, or in situations where your permission
+      can be inferred (i.e., implied consent). You can
+      <a href="#withdrawconsent">withdraw your consent</a> at any time.</p>
+    <p>In some exceptional cases, we may be legally permitted under applicable law to process your
+      information without your consent, including, for example: if collection is clearly in the
+      interests of an individual and consent cannot be obtained in a timely way; for investigations
+      and fraud detection and prevention; for business transactions provided certain conditions are
+      met; if it is contained in a witness statement and the collection is necessary to assess,
+      process, or settle an insurance claim; for identifying injured, ill, or deceased persons and
+      communicating with next of kin; if we have reasonable grounds to believe an individual has been,
+      is, or may be a victim of financial abuse; if it is reasonable to expect collection and use with
+      consent would compromise the availability or the accuracy of the information and the collection
+      is reasonable for purposes related to investigating a breach of an agreement or a contravention
+      of the laws of Canada or a province; if disclosure is required to comply with a subpoena,
+      warrant, court order, or rules of the court relating to the production of records; if it was
+      produced by an individual in the course of their employment, business, or profession and the
+      collection is consistent with the purposes for which the information was produced; if the
+      collection is solely for journalistic, artistic, or literary purposes; or if the information is
+      publicly available and is specified by the regulations. We may also disclose de-identified
+      information for approved research or statistics projects, subject to ethics oversight and
+      confidentiality commitments.</p>
     </section>
 
-    <section>
-    <h2><span class="num">03</span>How we use your information</h2>
+    <section id="whoshare">
+    <h2><span class="num">04</span>When and with whom do we share your personal information?</h2>
+    <p><em class="inshort">In Short: We may share information in specific situations described in this
+      section and/or with the following categories of third parties.</em></p>
+    <p><strong>Vendors, Consultants, and Other Third-Party Service Providers.</strong> We may share
+      your data with third-party vendors, service providers, contractors, or agents
+      (&ldquo;third parties&rdquo;) who perform services for us or on our behalf and require access to
+      such information to do that work. We have contracts in place with our third parties, which are
+      designed to help safeguard your personal information. This means that they cannot do anything
+      with your personal information unless we have instructed them to do it. They will also not share
+      your personal information with any organization apart from us. They also commit to protect the
+      data they hold on our behalf and to retain it for the period we instruct.</p>
+    <p>The categories of third parties we may share personal information with are as follows:</p>
     <ul>
-      <li>create and secure your account and sign you in;</li>
-      <li>calculate and display your estimated BAC and time-to-sober;</li>
-      <li>power live sessions, groups, shared rounds, the group route, leaderboards, and
-        recaps (personal and group);</li>
-      <li>power the social features you use: friends, invites, the live pulse, stories, squad
-        schnaps, and the Nightline feed;</li>
-      <li>show nearby venues and current venue deals when you grant location access;</li>
-      <li>look up beverages you scan;</li>
-      <li>send notifications you have opted into;</li>
-      <li>maintain, debug, and improve the app.</li>
+      <li>Cloud Computing Services</li>
+      <li>Data Storage Service Providers</li>
+      <li>User Account Registration &amp; Authentication Services</li>
+      <li>Maps &amp; Location Services</li>
     </ul>
-    <p>We do <strong>not</strong> sell your personal information, and we do not use it for
-      third-party advertising.</p>
+    <p>We also may need to share your personal information in the following situations:</p>
+    <ul>
+      <li><strong>Business Transfers.</strong> We may share or transfer your information in connection
+        with, or during negotiations of, any merger, sale of company assets, financing, or acquisition
+        of all or a portion of our business to another company.</li>
+      <li><strong>Other Users.</strong> When you share personal information (for example, by posting
+        comments, contributions, or other content to the Services) or otherwise interact with public
+        areas of the Services, such personal information may be viewed by all users and may be publicly
+        made available outside the Services in perpetuity. Similarly, other users will be able to view
+        descriptions of your activity, communicate with you within our Services, and view your profile.</li>
+    </ul>
     </section>
 
-    <section>
-    <h2><span class="num">04</span>How your information is shared</h2>
-    <ul>
-      <li><strong>With your accepted friends:</strong> your name, @username, avatar, live pulse
-        (while a night is running), stories you post, and nights you post to the feed.</li>
-      <li><strong>With your group:</strong> during a group session, members see your name, avatar,
-        estimated BAC, drink count, shared rounds, the group's route (check-ins and stops added
-        for the group), and squad schnaps. The group recap each member keeps includes this
-        shared night.</li>
-      <li><strong>Service providers:</strong> our backend (database, authentication, storage,
-        and functions) is hosted on <a href="https://supabase.com/privacy">Supabase</a>. Push
-        notifications are delivered through Apple's Push Notification service. These providers
-        process data on our behalf and are not permitted to use it for their own purposes.</li>
-      <li><strong>Legal:</strong> we may disclose information if required by law.</li>
-    </ul>
-    <p>People who are not your friends and not in your group see nothing beyond what's needed to
-      find you: your name and @username in user search.</p>
+    <section id="intltransfers">
+    <h2><span class="num">05</span>Is your information transferred internationally?</h2>
+    <p><em class="inshort">In Short: We may transfer, store, and process your information in countries
+      other than your own.</em></p>
+    <p>Our servers are located in <strong>Ireland</strong>. Regardless of your location, please be
+      aware that your information may be transferred to, stored by, and processed by us in our
+      facilities and in the facilities of the third parties with whom we may share your personal
+      information (see <a href="#whoshare">When and with whom do we share your personal information?</a>
+      above), including facilities in the <strong>United States</strong> and other countries.</p>
+    <p>If you are a resident in the European Economic Area (EEA), United Kingdom (UK), or Switzerland,
+      then these countries may not necessarily have data protection laws or other similar laws as
+      comprehensive as those in your country. However, we will take all necessary measures to protect
+      your personal information in accordance with this Privacy Notice and applicable law.</p>
+    <h3>European Commission's Standard Contractual Clauses</h3>
+    <p>We have implemented measures to protect your personal information, including by using the
+      European Commission's Standard Contractual Clauses for transfers of personal information between
+      our group companies and between us and our third-party providers. These clauses require all
+      recipients to protect all personal information that they process originating from the EEA or UK
+      in accordance with European data protection laws and regulations. Our Standard Contractual
+      Clauses can be provided upon request. We have implemented similar appropriate safeguards with our
+      third-party service providers and partners and further details can be provided upon request.</p>
     </section>
 
-    <section>
-    <h2><span class="num">05</span>How long things live</h2>
-    <p>Sejdel is built around the night — most shared content is deliberately short-lived:</p>
+    <section id="inforetain">
+    <h2><span class="num">06</span>How long do we keep your information?</h2>
+    <p><em class="inshort">In Short: We keep your information for as long as necessary to fulfill the
+      purposes outlined in this Privacy Notice unless otherwise required by law.</em></p>
+    <p>We will only keep your personal information for as long as it is necessary for the purposes set
+      out in this Privacy Notice, unless a longer retention period is required or permitted by law
+      (such as tax, accounting, or other legal requirements). No purpose in this notice will require us
+      keeping your personal information for longer than the period of time in which users have an
+      account with us.</p>
+    <p>When we have no ongoing legitimate business need to process your personal information, we will
+      either delete or anonymize such information, or, if this is not possible (for example, because
+      your personal information has been stored in backup archives), then we will securely store your
+      personal information and isolate it from any further processing until deletion is possible.</p>
+    </section>
+
+    <section id="infosafe">
+    <h2><span class="num">07</span>How do we keep your information safe?</h2>
+    <p><em class="inshort">In Short: We aim to protect your personal information through a system of
+      organizational and technical security measures.</em></p>
+    <p>We have implemented appropriate and reasonable technical and organizational security measures
+      designed to protect the security of any personal information we process. However, despite our
+      safeguards and efforts to secure your information, no electronic transmission over the Internet
+      or information storage technology can be guaranteed to be 100% secure, so we cannot promise or
+      guarantee that hackers, cybercriminals, or other unauthorized third parties will not be able to
+      defeat our security and improperly collect, access, steal, or modify your information. Although
+      we will do our best to protect your personal information, transmission of personal information to
+      and from our Services is at your own risk. You should only access the Services within a secure
+      environment.</p>
+    </section>
+
+    <section id="infominors">
+    <h2><span class="num">08</span>Do we collect information from minors?</h2>
+    <p><em class="inshort">In Short: We do not knowingly collect data from or market to children under
+      18 years of age or the equivalent age as specified by law in your jurisdiction.</em></p>
+    <p>We do not knowingly collect, solicit data from, or market to children under 18 years of age or
+      the equivalent age as specified by law in your jurisdiction, nor do we knowingly sell such
+      personal information. By using the Services, you represent that you are at least 18 or the
+      equivalent age as specified by law in your jurisdiction or that you are the parent or guardian of
+      such a minor and consent to such minor dependent's use of the Services. If we learn that personal
+      information from users less than 18 years of age or the equivalent age as specified by law in
+      your jurisdiction has been collected, we will deactivate the account and take reasonable measures
+      to promptly delete such data from our records. If you become aware of any data we may have
+      collected from children under age 18 or the equivalent age as specified by law in your
+      jurisdiction, please contact us at <a href="mailto:privacy@sejdel.com">privacy@sejdel.com</a>.</p>
+    </section>
+
+    <section id="privacyrights">
+    <h2><span class="num">09</span>What are your privacy rights?</h2>
+    <p><em class="inshort">In Short: Depending on your state of residence in the US or in some regions,
+      such as the European Economic Area (EEA), United Kingdom (UK), Switzerland, and Canada, you have
+      rights that allow you greater access to and control over your personal information. You may
+      review, change, or terminate your account at any time, depending on your country, province, or
+      state of residence.</em></p>
+    <p>In some regions (like the EEA, UK, Switzerland, and Canada), you have certain rights under
+      applicable data protection laws. These may include the right (i) to request access and obtain a
+      copy of your personal information, (ii) to request rectification or erasure; (iii) to restrict
+      the processing of your personal information; (iv) if applicable, to data portability; and (v) not
+      to be subject to automated decision-making. If a decision that produces legal or similarly
+      significant effects is made solely by automated means, we will inform you, explain the main
+      factors, and offer a simple way to request human review. In certain circumstances, you may also
+      have the right to object to the processing of your personal information. You can make such a
+      request by contacting us by using the contact details provided in the section
+      <a href="#contact">How can you contact us about this notice?</a> below.</p>
+    <p>We will consider and act upon any request in accordance with applicable data protection laws.</p>
+    <p>If you are located in the UK and are unhappy with how we have handled your personal information,
+      you can make a complaint directly to us. This is in addition to the rights you have under the UK
+      General Data Protection Regulation and the Data Protection Act 2018.</p>
+    <p><strong>How to contact us:</strong></p>
+    <ul>
+      <li><strong>Online:</strong> <a href="https://sejdel.com/contact/">https://sejdel.com/contact/</a></li>
+      <li><strong>Email:</strong> <a href="mailto:privacy@sejdel.com">privacy@sejdel.com</a></li>
+    </ul>
+    <p><strong>What happens after you complain:</strong></p>
+    <ul>
+      <li>We will acknowledge your complaint within 30 days of receiving it.</li>
+      <li>We will investigate without unjustifiable or excessive delay.</li>
+      <li>We will keep you informed of progress and explain the outcome.</li>
+    </ul>
+    <p>If you are not happy with our final response, you can refer your complaint to the Information
+      Commissioner's Office, the UK supervisory authority:</p>
+    <ul>
+      <li><strong>Website:</strong> <a href="http://ico.org.uk/make-a-complaint" rel="noopener noreferrer" target="_blank">ico.org.uk/make-a-complaint</a></li>
+      <li><strong>Helpline:</strong> 0303 123 1113</li>
+      <li><strong>Post:</strong> Information Commissioner's Office, Wycliffe House, Water Lane, Wilmslow, Cheshire, SK9 5AF</li>
+    </ul>
+    <p>If you are located in the EEA or UK and you believe we are unlawfully processing your personal
+      information, you also have the right to complain to your
+      <a href="https://ec.europa.eu/justice/data-protection/bodies/authorities/index_en.htm" rel="noopener noreferrer" target="_blank">Member State data protection authority</a>
+      or <a href="https://ico.org.uk/make-a-complaint/data-protection-complaints/data-protection-complaints/" rel="noopener noreferrer" target="_blank">UK data protection authority</a>.</p>
+    <p>If you are located in Switzerland, you may contact the
+      <a href="https://www.edoeb.admin.ch/edoeb/en/home.html" rel="noopener noreferrer" target="_blank">Federal Data Protection and Information Commissioner</a>.</p>
+
+    <h3 id="withdrawconsent">Withdrawing your consent</h3>
+    <p>If we are relying on your consent to process your personal information, which may be express
+      and/or implied consent depending on the applicable law, you have the right to withdraw your
+      consent at any time. You can withdraw your consent at any time by contacting us by using the
+      contact details provided in the section <a href="#contact">How can you contact us about this
+      notice?</a> below or updating your preferences. However, please note that this will not affect
+      the lawfulness of the processing before its withdrawal nor, when applicable law allows, will it
+      affect the processing of your personal information conducted in reliance on lawful processing
+      grounds other than consent.</p>
+
+    <h3>Opting out of marketing and promotional communications</h3>
+    <p>You can unsubscribe from our marketing and promotional communications at any time by clicking on
+      the unsubscribe link in the emails that we send, or by contacting us using the details provided
+      in the section <a href="#contact">How can you contact us about this notice?</a> below. You will
+      then be removed from the marketing lists. However, we may still communicate with you — for
+      example, to send you service-related messages that are necessary for the administration and use
+      of your account, to respond to service requests, or for other non-marketing purposes.</p>
+
+    <h3>Account information</h3>
+    <p>If you would at any time like to review or change the information in your account or terminate
+      your account, you can log in to your account settings and update your user account. Upon your
+      request to terminate your account, we will deactivate or delete your account and information from
+      our active databases. However, we may retain some information in our files to prevent fraud,
+      troubleshoot problems, assist with any investigations, enforce our legal terms and/or comply with
+      applicable legal requirements.</p>
+    <p>If you have questions or comments about your privacy rights, you may email us at
+      <a href="mailto:privacy@sejdel.com">privacy@sejdel.com</a>.</p>
+    </section>
+
+    <section id="DNT">
+    <h2><span class="num">10</span>Controls for do-not-track features</h2>
+    <p>Most web browsers and some mobile operating systems and mobile applications include a
+      Do-Not-Track (&ldquo;DNT&rdquo;) feature or setting you can activate to signal your privacy
+      preference not to have data about your online browsing activities monitored and collected. At
+      this stage, no uniform technology standard for recognizing and implementing DNT signals has been
+      finalized. As such, we do not currently respond to DNT browser signals or any other mechanism
+      that automatically communicates your choice not to be tracked online. If a standard for online
+      tracking is adopted that we must follow in the future, we will inform you about that practice in a
+      revised version of this Privacy Notice.</p>
+    <p>California law requires us to let you know how we respond to web browser DNT signals. Because
+      there currently is not an industry or legal standard for recognizing or honoring DNT signals, we
+      do not respond to them at this time.</p>
+    </section>
+
+    <section id="uslaws">
+    <h2><span class="num">11</span>Do United States residents have specific privacy rights?</h2>
+    <p><em class="inshort">In Short: If you are a resident of California, Colorado, Connecticut,
+      Delaware, Florida, Indiana, Iowa, Kentucky, Maryland, Minnesota, Montana, Nebraska, New
+      Hampshire, New Jersey, Oregon, Rhode Island, Tennessee, Texas, Utah, or Virginia, you may have
+      the right to request access to and receive details about the personal information we maintain
+      about you and how we have processed it, correct inaccuracies, get a copy of, or delete your
+      personal information. You may also have the right to withdraw your consent to our processing of
+      your personal information. These rights may be limited in some circumstances by applicable law.</em></p>
+
+    <h3>Categories of personal information we collect</h3>
+    <p>The table below shows the categories of personal information we have collected in the past
+      twelve (12) months. The table includes illustrative examples of each category and does not
+      reflect the personal information we collect from you. For a comprehensive inventory of all
+      personal information we process, please refer to the section
+      <a href="#infocollect">What information do we collect?</a></p>
+    <div class="tablewrap">
     <table>
-      <tr><th>Data</th><th>Visible to</th><th>Lifetime</th></tr>
-      <tr><td>Live pulse (BAC, venue, drink count)</td><td>Accepted friends</td><td>until night ends</td></tr>
-      <tr><td>Live stories</td><td>Accepted friends</td><td>24 hours</td></tr>
-      <tr><td>Squad schnaps</td><td>Your group</td><td>until session ends*</td></tr>
-      <tr><td>Group route &amp; session data</td><td>Your group</td><td>retained</td></tr>
-      <tr><td>Posted nights (feed)</td><td>Accepted friends</td><td>until you delete</td></tr>
-      <tr><td>Night recaps &amp; journey photos</td><td>Only you</td><td>on your device</td></tr>
-      <tr><td>Account &amp; profile</td><td>—</td><td>until account deletion</td></tr>
-      <tr><td>Your contact digests (phone/email)</td><td>No one — matching only</td><td>until you remove them or delete your account</td></tr>
-      <tr><td>Digests you send when scanning contacts</td><td>—</td><td>not stored (discarded after the query)</td></tr>
+      <tr><th>Category</th><th>Examples</th><th>Collected</th></tr>
+      <tr><td>A. Identifiers</td><td>Contact details, such as real name, alias, postal address, telephone or mobile contact number, unique personal identifier, online identifier, Internet Protocol address, email address, and account name</td><td>YES</td></tr>
+      <tr><td>B. Personal information as defined in the California Customer Records statute</td><td>Name, contact information, education, employment, employment history, and financial information</td><td>YES</td></tr>
+      <tr><td>C. Protected classification characteristics under state or federal law</td><td>Gender, age, date of birth, race and ethnicity, national origin, marital status, and other demographic data</td><td>YES</td></tr>
+      <tr><td>D. Commercial information</td><td>Transaction information, purchase history, financial details, and payment information</td><td>NO</td></tr>
+      <tr><td>E. Biometric information</td><td>Fingerprints and voiceprints</td><td>NO</td></tr>
+      <tr><td>F. Internet or other similar network activity</td><td>Browsing history, search history, online behavior, interest data, and interactions with our and other websites, applications, systems, and advertisements</td><td>YES</td></tr>
+      <tr><td>G. Geolocation data</td><td>Device location</td><td>YES</td></tr>
+      <tr><td>H. Audio, electronic, sensory, or similar information</td><td>Images and audio, video or call recordings created in connection with our business activities</td><td>YES</td></tr>
+      <tr><td>I. Professional or employment-related information</td><td>Business contact details in order to provide you our Services at a business level or job title, work history, and professional qualifications if you apply for a job with us</td><td>NO</td></tr>
+      <tr><td>J. Education information</td><td>Student records and directory information</td><td>NO</td></tr>
+      <tr><td>K. Inferences drawn from collected personal information</td><td>Inferences drawn from any of the collected personal information listed above to create a profile or summary about, for example, an individual's preferences and characteristics</td><td>NO</td></tr>
+      <tr><td>L. Sensitive personal information</td><td>Health data, account login information, precise geolocation, and contents of email or text messages</td><td>YES</td></tr>
     </table>
-    <p style="font-size:14px;color:var(--cream-dim);">*Members can save individual squad schnaps
-      into their own recap before the session ends; unsaved copies are purged by a scheduled
-      cleanup (at most 48 hours). Expired stories and schnaps are deleted from storage, not just
-      hidden.</p>
-    </section>
+    </div>
+    <p>We only collect sensitive personal information, as defined by applicable privacy laws or the
+      purposes allowed by law or with your consent. Sensitive personal information may be used, or
+      disclosed to a service provider or contractor, for additional, specified purposes. You may have
+      the right to limit the use or disclosure of your sensitive personal information. We do not collect
+      or process sensitive personal information for the purpose of inferring characteristics about you.</p>
+    <p>We may also collect other personal information outside of these categories through instances
+      where you interact with us in person, online, or by phone or mail in the context of: receiving
+      help through our customer support channels; participation in customer surveys or contests; and
+      facilitation in the delivery of our Services and to respond to your inquiries.</p>
+    <p>We will use and retain the collected personal information as needed to provide the Services or,
+      for each category listed above (A, B, C, F, G, H, and L), for as long as the user has an account
+      with us.</p>
 
-    <section>
-    <h2><span class="num">06</span>Security</h2>
+    <h3>Sources of personal information</h3>
+    <p>Learn more about the sources of personal information we collect in
+      <a href="#infocollect">What information do we collect?</a></p>
+
+    <h3>How we use and share personal information</h3>
+    <p>Learn more about how we use your personal information in the section
+      <a href="#infouse">How do we process your information?</a></p>
+    <p><strong>Will your information be shared with anyone else?</strong> We may disclose your personal
+      information with our service providers pursuant to a written contract between us and each service
+      provider. Learn more about how we disclose personal information in the section
+      <a href="#whoshare">When and with whom do we share your personal information?</a></p>
+    <p>We may use your personal information for our own business purposes, such as for undertaking
+      internal research for technological development and demonstration. This is not considered to be
+      &ldquo;selling&rdquo; of your personal information. We have not sold or shared any personal
+      information to third parties for a business or commercial purpose in the preceding twelve (12)
+      months. We have disclosed the following categories of personal information to third parties for a
+      business or commercial purpose in the preceding twelve (12) months:</p>
     <ul>
-      <li>All traffic between the app, this website, and our servers is encrypted in transit
-        (HTTPS/TLS).</li>
-      <li>Every database table is protected by row-level security: friend-gated and group-gated
-        reads are enforced by the database itself, not just the app.</li>
-      <li>Shared BAC values are computed server-side so your body weight and sex are never
-        exposed to other users' devices.</li>
-      <li>Ephemeral media (stories, squad schnaps) is removed by automated cleanup jobs.</li>
-      <li>On a shared device, each signed-in account's local night data is stored separately.</li>
-      <li>Contact matching never transmits a phone number or email address, and the digest table
-        is restricted so no user can read another user's digests.</li>
+      <li>Category A. Identifiers</li>
+      <li>Category B. Personal information as defined in the California Customer Records law</li>
+      <li>Category C. Characteristics of protected classifications under state or federal law</li>
+      <li>Category F. Internet or other electronic network activity information</li>
+      <li>Category G. Geolocation data</li>
+      <li>Category H. Audio, electronic, visual, and similar information</li>
+      <li>Category L. Sensitive personal information</li>
     </ul>
-    </section>
+    <p>The categories of third parties to whom we disclosed personal information for a business or
+      commercial purpose can be found under
+      <a href="#whoshare">When and with whom do we share your personal information?</a></p>
 
-    <section>
-    <h2><span class="num">07</span>Your choices &amp; rights</h2>
+    <h3>Your rights</h3>
+    <p>You have rights under certain US state data protection laws. However, these rights are not
+      absolute, and in certain cases, we may decline your request as permitted by law. These rights
+      include:</p>
     <ul>
-      <li><strong>Delete content in-app:</strong> your own stories, squad schnaps, posted nights,
-        past-night recaps, and journey photos can be deleted from inside the app.</li>
-      <li><strong>Permissions:</strong> location, camera, photos, and notifications are optional
-        and controlled in iOS Settings; core drink logging works without them.</li>
-      <li><strong>Friends:</strong> only accepted friends ever see your pulse, stories, or posts —
-        you control who that is.</li>
-      <li><strong>Contact discovery:</strong> entirely optional. Contacts access can be revoked in
-        iOS Settings, and &ldquo;Remove my codes&rdquo; in your profile deletes the digests that
-        make you findable. Neither affects anything else in the app.</li>
-      <li><strong>Account &amp; data deletion:</strong> email
-        <a href="mailto:contact@sejdel.com">contact@sejdel.com</a> from your account address and
-        we will delete your account and associated server data. Depending on where you live (e.g.
-        EU/EEA under GDPR), you may also have rights to access, correct, or export your data —
-        the same address handles those requests.</li>
+      <li><strong>Right to know</strong> whether or not we are processing your personal data;</li>
+      <li><strong>Right to access</strong> your personal data;</li>
+      <li><strong>Right to correct</strong> inaccuracies in your personal data;</li>
+      <li><strong>Right to request</strong> the deletion of your personal data;</li>
+      <li><strong>Right to obtain a copy</strong> of the personal data you previously shared with us;</li>
+      <li><strong>Right to non-discrimination</strong> for exercising your rights;</li>
+      <li><strong>Right to opt out</strong> of the processing of your personal data if it is used for
+        targeted advertising (or sharing as defined under California's privacy law), the sale of
+        personal data, or profiling in furtherance of decisions that produce legal or similarly
+        significant effects (&ldquo;profiling&rdquo;).</li>
     </ul>
+    <p>Depending upon the state where you live, you may also have the right to access the categories of
+      personal data being processed; obtain a list of the categories of third parties to which we have
+      disclosed personal data; obtain a list of specific third parties to which we have disclosed
+      personal data; review, understand, question, and correct how personal data has been profiled;
+      limit the use and disclosure of sensitive personal data; and opt out of the collection of
+      sensitive data and personal data collected through the operation of a voice or facial recognition
+      feature, as permitted by the applicable law in your state.</p>
+
+    <h3>How to exercise your rights</h3>
+    <p>To exercise these rights, you can contact us by visiting
+      <a href="https://sejdel.com/contact/">https://sejdel.com/contact/</a>, by emailing us at
+      <a href="mailto:privacy@sejdel.com">privacy@sejdel.com</a>, or by referring to the contact
+      details at the bottom of this document.</p>
+    <p>Under certain US state data protection laws, you can designate an authorized agent to make a
+      request on your behalf. We may deny a request from an authorized agent that does not submit proof
+      that they have been validly authorized to act on your behalf in accordance with applicable laws.</p>
+
+    <h3>Request verification</h3>
+    <p>Upon receiving your request, we will need to verify your identity to determine you are the same
+      person about whom we have the information in our system. We will only use personal information
+      provided in your request to verify your identity or authority to make the request. However, if we
+      cannot verify your identity from the information already maintained by us, we may request that you
+      provide additional information for the purposes of verifying your identity and for security or
+      fraud-prevention purposes. If you submit the request through an authorized agent, we may need to
+      collect additional information to verify your identity before processing your request and the
+      agent will need to provide a written and signed permission from you to submit such request on your
+      behalf.</p>
+
+    <h3>Appeals</h3>
+    <p>Under certain US state data protection laws, if we decline to take action regarding your request,
+      you may appeal our decision by emailing us at
+      <a href="mailto:privacy@sejdel.com">privacy@sejdel.com</a>. We will inform you in writing of any
+      action taken or not taken in response to the appeal, including a written explanation of the
+      reasons for the decisions. If your appeal is denied, you may submit a complaint to your state
+      attorney general.</p>
+
+    <h3>California &ldquo;Shine The Light&rdquo; law</h3>
+    <p>California Civil Code Section 1798.83, also known as the &ldquo;Shine The Light&rdquo; law,
+      permits our users who are California residents to request and obtain from us, once a year and free
+      of charge, information about categories of personal information (if any) we disclosed to third
+      parties for direct marketing purposes and the names and addresses of all third parties with which
+      we shared personal information in the immediately preceding calendar year. If you are a California
+      resident and would like to make such a request, please submit your request in writing to us by
+      using the contact details provided in the section
+      <a href="#contact">How can you contact us about this notice?</a></p>
     </section>
 
-    <section>
-    <h2><span class="num">08</span>Age</h2>
-    <p>Sejdel is intended only for people of legal drinking age in their country and is rated 17+
-      on the App&nbsp;Store. We do not knowingly collect information from anyone below the legal
-      drinking age; if you believe we have, contact us and we will delete it.</p>
+    <section id="otherlaws">
+    <h2><span class="num">12</span>Do other regions have specific privacy rights?</h2>
+    <p><em class="inshort">In Short: You may have additional rights based on the country you reside in.</em></p>
+    <h3>Australia and New Zealand</h3>
+    <p>We collect and process your personal information under the obligations and conditions set by
+      Australia's Privacy Act 1988 and New Zealand's Privacy Act 2020 (Privacy Act). This Privacy Notice
+      satisfies the notice requirements defined in both Privacy Acts, in particular: what personal
+      information we collect from you, from which sources, for which purposes, and other recipients of
+      your personal information.</p>
+    <p>If you do not wish to provide the personal information necessary to fulfill their applicable
+      purpose, it may affect our ability to provide our services, in particular: to offer you the
+      products or services that you want; respond to or help with your requests; manage your account
+      with us; and confirm your identity and protect your account.</p>
+    <p>At any time, you have the right to request access to or correction of your personal information.
+      You can make such a request by contacting us by using the contact details provided in the section
+      <a href="#request">How can you review, update, or delete the data we collect from you?</a></p>
+    <p>If you believe we are unlawfully processing your personal information, you have the right to
+      submit a complaint about a breach of the Australian Privacy Principles to the
+      <a href="https://www.oaic.gov.au/privacy/privacy-complaints/lodge-a-privacy-complaint-with-us" rel="noopener noreferrer" target="_blank">Office of the Australian Information Commissioner</a>
+      and a breach of New Zealand's Privacy Principles to the
+      <a href="https://www.privacy.org.nz/your-rights/making-a-complaint/" rel="noopener noreferrer" target="_blank">Office of New Zealand Privacy Commissioner</a>.</p>
     </section>
 
-    <section>
-    <h2><span class="num">09</span>Changes to this policy</h2>
-    <p>If we change this policy in a meaningful way, we'll update the date at the top and, for
-      significant changes, note it in the app. Continued use of Sejdel after a change means you
-      accept the updated policy.</p>
+    <section id="clausea">
+    <h2><span class="num">13</span>Apple Health (HealthKit)</h2>
+    <p>With your permission, Sejdel reads certain data from Apple Health — such as steps, heart rate,
+      active energy, and body weight — to show your in-app activity (&ldquo;Sesh Vitals&rdquo;) and
+      improve your BAC estimate, and it writes the calories and number of drinks you log back to Apple
+      Health. Data accessed through HealthKit is used only to provide these features. We do not use
+      Apple Health data for advertising or marketing, we do not sell or share it, and we do not use it
+      for any purpose related to insurance eligibility, credit, or similar decisions. Health data read
+      from your device is processed to display these features and is not required to use the rest of the
+      app. You can turn this off at any time in Sejdel's settings, and you can review or revoke access
+      in Apple's Health app.</p>
+    </section>
+
+    <section id="policyupdates">
+    <h2><span class="num">14</span>Do we make updates to this notice?</h2>
+    <p><em class="inshort">In Short: Yes, we will update this notice as necessary to stay compliant with
+      relevant laws.</em></p>
+    <p>We may update this Privacy Notice from time to time. The updated version will be indicated by an
+      updated &ldquo;Last updated&rdquo; date at the top of this Privacy Notice. If we make material
+      changes to this Privacy Notice, we may notify you either by prominently posting a notice of such
+      changes or by directly sending you a notification. We encourage you to review this Privacy Notice
+      frequently to be informed of how we are protecting your information.</p>
+    </section>
+
+    <section id="contact">
+    <h2><span class="num">15</span>How can you contact us about this notice?</h2>
+    <p>If you have questions or comments about this notice, you may email us at
+      <a href="mailto:privacy@sejdel.com">privacy@sejdel.com</a>, or reach us through our
+      contact form at <a href="https://sejdel.com/contact/">https://sejdel.com/contact/</a>.</p>
+    </section>
+
+    <section id="request">
+    <h2><span class="num">16</span>How can you review, update, or delete the data we collect from you?</h2>
+    <p>Based on the applicable laws of your country or state of residence in the US, you may have the
+      right to request access to the personal information we collect from you, details about how we have
+      processed it, correct inaccuracies, or delete your personal information. You may also have the
+      right to withdraw your consent to our processing of your personal information. These rights may be
+      limited in some circumstances by applicable law. To request to review, update, or delete your
+      personal information, please visit
+      <a href="https://sejdel.com/contact/">https://sejdel.com/contact/</a>.</p>
     </section>
 
     <div class="foot">
-      <p>Questions? <a href="mailto:contact@sejdel.com">contact@sejdel.com</a>
+      <p>Questions? <a href="mailto:privacy@sejdel.com">privacy@sejdel.com</a>
         &nbsp;·&nbsp; <a href="../contact/">Contact</a>
         &nbsp;·&nbsp; See also the <a href="../terms/">Terms of Use</a>.</p>
       <a class="back" href="../">← Back to Sejdel</a>
