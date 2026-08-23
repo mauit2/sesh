@@ -265,6 +265,23 @@ struct DrinkOption: Hashable {
     let abv: Double
     var customGlyph: GlyphOverride? = nil
     var grams: Double { volumeML * abv * 0.789 }
+
+    /// Rough calories: 7 kcal per gram of ethanol, plus a small carbohydrate
+    /// component for styles that carry sugar/carbs (beer, cider, cocktails…).
+    /// Approximate on purpose — always shown labelled as an estimate.
+    var kcal: Double {
+        let carbKcalPerML: Double
+        switch category {
+        case .beer, .cider, .seltzer:                  carbKcalPerML = 0.16
+        case .wine, .sparkling:                        carbKcalPerML = 0.10
+        case .cocktail:                                carbKcalPerML = 0.30
+        case .whisky, .vodka, .gin, .tequila, .other:  carbKcalPerML = 0.0
+        }
+        return grams * 7.0 + volumeML * carbKcalPerML
+    }
+
+    /// Standard drinks at the app's 12 g reference (matches BAC/pacing).
+    var standardDrinks: Double { grams / 12.0 }
 }
 
 struct OrderItem: Identifiable {

@@ -8670,6 +8670,8 @@ private struct ProfileSheet: View {
     /// being replayed full-screen.
     @StateObject private var nightHistory = RecapHistoryStore()
     @State private var replayRecap: NightRecap? = nil
+    /// Apple Health opt-in state (drink calories + sesh vitals).
+    @ObservedObject private var health = HealthService.shared
 
     private let postCols = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
@@ -8829,6 +8831,29 @@ private struct ProfileSheet: View {
                                     .foregroundStyle(Color.cream.opacity(0.55))
                                     .fixedSize(horizontal: false, vertical: true)
                                     .padding(.horizontal, 4)
+                            }
+                        }
+                        if health.isAvailable {
+                            LoungePickerField(label: "APPLE HEALTH") {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Toggle(isOn: Binding(
+                                        get: { health.isConnected },
+                                        set: { on in
+                                            if on { Task { await health.connect() } }
+                                            else { health.disconnect() }
+                                        }
+                                    )) {
+                                        Text("Sync drinks & sesh vitals with Apple Health")
+                                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(Color.cream)
+                                    }
+                                    .toggleStyle(SwitchToggleStyle(tint: .whiskey))
+                                    Text("Writes each drink's calories and standard drinks to Health, and reads your steps, heart rate and active energy during a sesh. Estimates only.")
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.55))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .padding(.horizontal, 4)
+                                }
                             }
                         }
                         LoungePickerField(label: "LET FRIENDS FIND YOU") {
@@ -11799,24 +11824,26 @@ private struct GroupCodeBar: View {
 /// The three LIVE sub-views. The BAC hero + drink dock stay pinned; this
 /// swaps the middle so the screen is one focused thing at a time.
 enum LiveTab: String, CaseIterable, Identifiable {
-    case night, group, recap
+    case night, group, recap, vitals
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .night: return "NIGHT"
-        case .group: return "GROUP"
+        case .night:  return "NIGHT"
+        case .group:  return "GROUP"
         // Display name for the drink-history tab — the timestamped list of
         // everything you've logged tonight.
-        case .recap: return "DRINKS"
+        case .recap:  return "DRINKS"
+        case .vitals: return "VITALS"
         }
     }
     var icon: String {
         switch self {
-        case .night: return "moon.stars.fill"
-        case .group: return "person.2.fill"
+        case .night:  return "moon.stars.fill"
+        case .group:  return "person.2.fill"
         // Drink glass — SF Symbols has no beer mug, and mug.fill reads as
         // coffee; wineglass is the clean "your drinks" mark.
-        case .recap: return "wineglass.fill"
+        case .recap:  return "wineglass.fill"
+        case .vitals: return "bolt.heart.fill"
         }
     }
 }
@@ -11835,7 +11862,7 @@ private struct LiveSegmentControl: View {
         switch tab {
         case .group: return groupCount
         case .recap: return drinkCount
-        case .night: return 0
+        case .night, .vitals: return 0
         }
     }
 
@@ -11848,19 +11875,21 @@ private struct LiveSegmentControl: View {
                         selection = tab
                     }
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 4) {
                         Image(systemName: tab.icon)
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
                         Text(tab.label)
-                            .font(.system(size: 11, weight: .black, design: .monospaced))
-                            .tracking(1.4)
+                            .font(.system(size: 10, weight: .black, design: .monospaced))
+                            .tracking(0.6)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                         let n = badge(for: tab)
                         if n > 0 {
                             Text("\(n)")
-                                .font(.system(size: 9.5, weight: .black, design: .rounded))
+                                .font(.system(size: 9, weight: .black, design: .rounded))
                                 .monospacedDigit()
                                 .foregroundStyle(active ? Color.whiskey : Color.ink)
-                                .frame(minWidth: 16, minHeight: 16)
+                                .frame(minWidth: 15, minHeight: 15)
                                 .background(Circle().fill(active ? Color.ink.opacity(0.85) : Color.whiskey.opacity(0.9)))
                         }
                     }
@@ -13714,6 +13743,16 @@ private struct LiveSeshView: View {
         inGroup ? group.totalDrinkCount(for: profile.id) : live.drinks.count
     }
 
+    /// Approximate calories from the drinks YOU logged this sesh — the "in"
+    /// side of the Sesh Vitals net. Solo uses the full per-category estimate;
+    /// group rows only carry volume/ABV, so they're ethanol-only (7 kcal/g).
+    private var myDrinkKcal: Double {
+        if inGroup {
+            return group.drinks(for: profile.id).reduce(0) { $0 + $1.grams * 7.0 }
+        }
+        return live.drinks.reduce(0) { $0 + $1.option().kcal }
+    }
+
     /// Logs a drink in the right backing store. Optimistic UI is built in
     /// to both paths (LiveSeshState + SessionService). In group mode the
     /// `shareMode` toggle decides whether the drink goes onto the user's
@@ -13724,6 +13763,9 @@ private struct LiveSeshView: View {
 
     private func logDrink(_ option: DrinkOption) {
         recents.record(option)
+        // Mirror your own drink into Apple Health (calories + standard
+        // drinks). No-ops entirely unless you've connected Health.
+        HealthService.shared.log(option)
         if inGroup {
             let isShared = shareMode
             if isShared {
@@ -14484,9 +14526,10 @@ private struct LiveSeshView: View {
             )
 
             switch liveTab {
-            case .night: nightTab(now: now)
-            case .group: groupTab(now: now)
-            case .recap: recapTab(now: now)
+            case .night:  nightTab(now: now)
+            case .group:  groupTab(now: now)
+            case .recap:  recapTab(now: now)
+            case .vitals: vitalsTab(now: now)
             }
             Spacer(minLength: 24)
         }
@@ -14615,6 +14658,26 @@ private struct LiveSeshView: View {
             timelineSection(now: now)
             Disclaimer()
                 .padding(.top, 4)
+        }
+    }
+
+    /// VITALS — calories in vs out, steps and heart rate over the sesh, from
+    /// Apple Health. Shows a "start a sesh" hint before the night's begun.
+    @ViewBuilder
+    private func vitalsTab(now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if let start = startTime {
+                SeshVitalsCard(start: start, now: now, drinkKcal: myDrinkKcal)
+            } else {
+                Text("Log your first drink to start the sesh — your calories burned, steps and heart rate show up here once it's running.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.cream.opacity(0.035)))
+                    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.cream.opacity(0.07), lineWidth: 1))
+            }
         }
     }
 
@@ -15444,6 +15507,177 @@ private struct LiveShareModePicker: View {
 /// Group leaderboard for the live experience. Sorts by per-drink Widmark BAC
 /// (drunkest first), so the leader bubbles to the top and the roast card
 /// below has a clear target. Each row ticks live via the shared `now` Date.
+/// "Sesh Vitals" — what your body did between the sesh starting and now.
+/// Reads Active Energy (calories burned), Steps and Heart Rate from Apple
+/// Health over the sesh window, paired with the calories from what you drank
+/// for a net. Degrades gracefully: unsupported device → hidden; not connected
+/// → a Connect button; no data → a gentle note; no heart rate (needs a Watch)
+/// → that stat simply hides.
+private struct SeshVitalsCard: View {
+    let start: Date
+    let now: Date
+    let drinkKcal: Double
+
+    @ObservedObject private var health = HealthService.shared
+    @State private var vitals = HealthService.Vitals()
+    @State private var connecting = false
+
+    /// Re-query at most every 30s while the tab is open.
+    private var bucket: Int { Int(now.timeIntervalSince1970 / 30) }
+    var body: some View {
+        Group {
+            if health.isAvailable {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "bolt.heart.fill")
+                            .font(.system(size: 10, weight: .black))
+                            .foregroundStyle(Color.whiskey)
+                        Text("SESH VITALS")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .tracking(2.4)
+                            .foregroundStyle(Color.bronze)
+                        Spacer()
+                    }
+                    if !health.isConnected {
+                        connectCTA
+                    } else {
+                        grid
+                    }
+                }
+                .padding(18)
+                .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.cream.opacity(0.035)))
+                .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.cream.opacity(0.07), lineWidth: 1))
+                .task(id: bucket) {
+                    guard health.isConnected else { return }
+                    vitals = await health.vitals(from: start, to: now)
+                }
+            }
+        }
+    }
+
+    /// Warm green for the "burned" side (matches the price-cheap green).
+    private var burnGreen: Color { Color(red: 0.49, green: 0.79, blue: 0.42) }
+    private var consumed: Double { max(drinkKcal, 0) }
+    private var burned: Double { max(vitals.activeKcal ?? 0, 0) }
+
+    private var grid: some View {
+        VStack(spacing: 12) {
+            // The headline: calories in vs out, live.
+            HStack(spacing: 10) {
+                stat(icon: "wineglass.fill", value: "\(Int(consumed.rounded()))", unit: "kcal in", tint: Color.whiskey)
+                stat(icon: "flame.fill", value: vitals.activeKcal.map { "\(Int($0.rounded()))" } ?? "—", unit: "kcal burned", tint: burnGreen)
+            }
+            balance
+            // Secondary: steps + heart rate (HR only with an Apple Watch).
+            HStack(spacing: 10) {
+                stat(icon: "figure.walk", value: vitals.steps.map(stepStr) ?? "—", unit: "steps")
+                if let hr = vitals.avgHeartRate {
+                    stat(icon: "heart.fill",
+                         value: "\(Int(hr.rounded()))",
+                         unit: vitals.peakHeartRate.map { "avg · \(Int($0.rounded())) peak" } ?? "avg bpm")
+                } else {
+                    stat(icon: "heart.fill", value: "—", unit: "bpm · needs watch")
+                }
+            }
+            Text("Calories are estimates. Burned, steps and heart rate come from Apple Health over this sesh.")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.4))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// A proportional in-vs-out bar with the running net beneath it.
+    private var balance: some View {
+        let total = max(consumed + burned, 1)
+        let net = consumed - burned
+        return VStack(spacing: 7) {
+            GeometryReader { geo in
+                HStack(spacing: 3) {
+                    Capsule().fill(Color.whiskey)
+                        .frame(width: max(4, geo.size.width * consumed / total))
+                    Capsule().fill(burnGreen)
+                        .frame(width: max(4, geo.size.width * burned / total))
+                }
+            }
+            .frame(height: 9)
+            HStack(spacing: 6) {
+                Text("NET")
+                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                    .tracking(2).foregroundStyle(Color.bronze)
+                Text(net >= 0 ? "you're up" : "you're down")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.6))
+                Spacer()
+                Text("\(net >= 0 ? "+" : "")\(Int(net.rounded())) kcal")
+                    .font(.system(size: 15, weight: .black, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(net >= 0 ? Color.whiskey : burnGreen)
+            }
+        }
+    }
+
+    private func stat(icon: String, value: String, unit: String, tint: Color = .whiskey) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundStyle(tint)
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(tint.opacity(0.14)))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value)
+                    .font(.system(size: 18, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.6)
+                Text(unit.uppercased())
+                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(Color.bronze)
+                    .lineLimit(1).minimumScaleFactor(0.7)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.03)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(tint.opacity(0.18), lineWidth: 1))
+    }
+
+    private func stepStr(_ n: Double) -> String {
+        n >= 1000 ? String(format: "%.1fk", n / 1000) : "\(Int(n))"
+    }
+
+    private var connectCTA: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("See how much you moved and burned tonight — steps, heart rate and active calories, straight from Apple Health.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.6))
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                connecting = true
+                Task {
+                    await health.connect()
+                    vitals = await health.vitals(from: start, to: now)
+                    connecting = false
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "heart.fill").font(.system(size: 12, weight: .bold))
+                    Text("CONNECT APPLE HEALTH")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(1.4)
+                }
+                .foregroundStyle(Color.ink)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color.whiskey))
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(connecting)
+        }
+    }
+}
+
 private struct LiveGroupRoster: View {
     @ObservedObject var group: SessionService
     let selfId: UUID
