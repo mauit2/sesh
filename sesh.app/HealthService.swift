@@ -76,6 +76,14 @@ final class HealthService: ObservableObject {
 
     // MARK: Write — one logged drink
 
+    /// Unlike reads, WRITE status is queryable — use it to detect the
+    /// common failure where the permission sheet was dismissed without
+    /// flipping the write toggles (saves then fail silently forever).
+    var writeDenied: Bool {
+        guard isAvailable else { return false }
+        return writeTypes.contains { store.authorizationStatus(for: $0) == .sharingDenied }
+    }
+
     /// Save a drink's calories + standard-drink count to Health. Safe to call
     /// on every log: it silently no-ops when disconnected, and per-type
     /// write-denials are swallowed.
@@ -93,7 +101,20 @@ final class HealthService: ObservableObject {
                 start: date, end: date
             ),
         ]
-        store.save(samples) { _, _ in }
+        // If the write toggles were never decided (sheet swiped past), ask
+        // again first — the system sheet only re-shows undetermined types,
+        // so this is a no-op for users who already answered.
+        let undetermined = writeTypes.contains {
+            store.authorizationStatus(for: $0) == .notDetermined
+        }
+        if undetermined {
+            Task {
+                try? await store.requestAuthorization(toShare: writeTypes, read: [])
+                store.save(samples) { _, _ in }
+            }
+        } else {
+            store.save(samples) { _, _ in }
+        }
     }
 
     // MARK: Read — sesh vitals over a window

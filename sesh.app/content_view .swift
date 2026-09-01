@@ -9024,6 +9024,13 @@ private struct ProfileSheet: View {
                                         .foregroundStyle(Color.cream.opacity(0.55))
                                         .fixedSize(horizontal: false, vertical: true)
                                         .padding(.horizontal, 4)
+                                    if health.isConnected && health.writeDenied {
+                                        Text("Writing is switched OFF in Health, so drinks aren't being recorded. Open Health → profile → Apps → Sejdel and allow Dietary Energy + Alcoholic Beverages.")
+                                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(Status.drunk.color)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                            .padding(.horizontal, 4)
+                                    }
                                 }
                             }
                         }
@@ -14048,6 +14055,8 @@ private struct LiveSeshView: View {
     private func burstAddAnother() {
         guard let last = burstDrinks.last else { return }
         recents.record(last.option)
+        // Every logging path mirrors into Health — this one used to slip by.
+        HealthService.shared.log(last.option)
         if inGroup {
             Task {
                 if let id = await group.addDrink(last.option, shared: false) {
@@ -15140,6 +15149,8 @@ private struct LiveSeshView: View {
     /// without re-scanning or opening the picker.
     private func addAnother(_ g: LiveDrinkGroup) {
         recents.record(g.option)
+        // Every logging path mirrors into Health — this one used to slip by.
+        HealthService.shared.log(g.option)
         if inGroup {
             let isShared = g.isShared
             // The timeline's "+" is a logging path like any other, so it

@@ -59,6 +59,11 @@ enum ShareCardStyle: String, CaseIterable, Identifiable {
 struct RouteMapSnapshot {
     let image: UIImage
     let points: [CGPoint]
+    /// The actual WALKING route between the stops (Apple Maps directions),
+    /// already projected into snapshot space — so the line follows streets
+    /// instead of cutting straight through buildings. Falls back to the
+    /// straight segment for any leg directions can't solve.
+    let path: [CGPoint]
     let size: CGSize
 
     /// Ghost-strip size used inside the transparent sticker.
@@ -95,9 +100,46 @@ struct RouteMapSnapshot {
             MKMapSnapshotter(options: options).start { s, _ in cont.resume(returning: s) }
         }
         guard let snap else { return nil }
+
+        // The crawl as actually walked: Apple Maps walking directions for
+        // each leg, stitched together. Any failed leg degrades to its
+        // straight segment.
+        var path: [CGPoint] = []
+        if coords.count > 1 {
+            for i in 0..<(coords.count - 1) {
+                let legCoords = await walkingLeg(from: coords[i], to: coords[i + 1])
+                path.append(contentsOf: legCoords.map { snap.point(for: $0) })
+            }
+        }
+
         return RouteMapSnapshot(image: snap.image,
                                 points: coords.map { snap.point(for: $0) },
+                                path: path,
                                 size: size)
+    }
+
+    /// One walking leg's coordinates — the routed polyline, or just the
+    /// two endpoints when directions fail (offline, unroutable, …).
+    private static func walkingLeg(
+        from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D
+    ) async -> [CLLocationCoordinate2D] {
+        let req = MKDirections.Request()
+        req.source = MKMapItem(placemark: MKPlacemark(coordinate: a))
+        req.destination = MKMapItem(placemark: MKPlacemark(coordinate: b))
+        req.transportType = .walking
+        let route: MKRoute? = await withCheckedContinuation { cont in
+            MKDirections(request: req).calculate { resp, _ in
+                cont.resume(returning: resp?.routes.first)
+            }
+        }
+        guard let route else { return [a, b] }
+        let poly = route.polyline
+        var buf = [CLLocationCoordinate2D](
+            repeating: kCLLocationCoordinate2DInvalid, count: poly.pointCount
+        )
+        poly.getCoordinates(&buf, range: NSRange(location: 0, length: poly.pointCount))
+        // Pin the leg to the exact bar dots at both ends.
+        return [a] + buf + [b]
     }
 }
 
@@ -151,10 +193,9 @@ struct ShareNightStats {
 
     var stopsLabel: String { "\(recap.locatedStops.count)" }
 
-    var units: Double {
-        recap.stops.flatMap(\.drinks).reduce(0) { $0 + $1.grams } / 12.0
-    }
-    var unitsLabel: String { String(format: "%.1f", units) }
+    /// Plain drink count — "9 drinks" reads honestly on a story;
+    /// standard-unit math stays an in-app detail.
+    var drinksLabel: String { "\(recap.totalDrinks)" }
 
     var bacLabel: String { "\(unit.formatted(recap.peakBAC))\(unit.symbol)" }
 
@@ -269,19 +310,17 @@ struct NightShareCard: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// The full 2×4 numbers block: stops · units · pace · peak BAC over
-    /// steps · kcal · crawled · duration.
+    /// The numbers block: stops · drinks · peak BAC over
+    /// pace · crawled · duration.
     private var statGrid: some View {
         VStack(spacing: 13) {
             HStack(spacing: 0) {
                 shareStat(stats.stopsLabel, "STOPS")
-                shareStat(stats.unitsLabel, "UNITS")
-                shareStat(stats.paceLabel, "PACE")
+                shareStat(stats.drinksLabel, "DRINKS")
                 shareStat(stats.bacLabel, "PEAK BAC", tint: .whiskey)
             }
             HStack(spacing: 0) {
-                shareStat(stats.stepsLabel, "STEPS")
-                shareStat(stats.kcalLabel, "KCAL")
+                shareStat(stats.paceLabel, "PACE")
                 shareStat(stats.crawledLabel, "CRAWLED")
                 shareStat(stats.durationLabel, "TIME OUT")
             }
@@ -313,7 +352,7 @@ struct NightShareCard: View {
                             .overlay(Color.ink.opacity(0.18))
                             .opacity(0.55)
                             .mask(RoundedRectangle(cornerRadius: 30).padding(12).blur(radius: 14))
-                        RouteSketch(stops: recap.locatedStops, fixedPoints: snap.points)
+                        RouteSketch(stops: recap.locatedStops, fixedPoints: snap.points, fixedPath: snap.path)
                     } else {
                         RouteSketch(stops: recap.locatedStops)
                     }
@@ -365,7 +404,7 @@ struct NightShareCard: View {
                 Image(uiImage: snap.image)
                     .resizable()
                     .frame(width: snap.size.width, height: snap.size.height)
-                RouteSketch(stops: recap.locatedStops, fixedPoints: snap.points)
+                RouteSketch(stops: recap.locatedStops, fixedPoints: snap.points, fixedPath: snap.path)
                     .frame(width: snap.size.width, height: snap.size.height)
             } else {
                 Color.ink
@@ -445,7 +484,7 @@ struct NightShareCard: View {
             HStack(spacing: 8) {
                 wordmark(18)
                 Spacer()
-                Text("\(stats.stopsLabel) STOPS · \(stats.unitsLabel) UNITS · \(stats.bacLabel)")
+                Text("\(stats.stopsLabel) STOPS · \(stats.drinksLabel) DRINKS · \(stats.bacLabel)")
                     .font(.system(size: 10, weight: .black, design: .monospaced))
                     .tracking(1.2)
                     .foregroundStyle(Color.cream.opacity(0.9))
@@ -475,7 +514,7 @@ struct NightShareCard: View {
                     .foregroundStyle(Color.cream.opacity(0.75))
             }
             HStack(spacing: 0) {
-                shareStat(stats.unitsLabel, "UNITS", valueSize: 24)
+                shareStat(stats.drinksLabel, "DRINKS", valueSize: 24)
                 shareStat(stats.paceLabel, "PACE", valueSize: 24)
             }
             HStack(spacing: 0) {
@@ -510,6 +549,9 @@ private struct RouteSketch: View {
     /// When set (map mode), dots land on these exact snapshot points so
     /// they sit on the actual streets.
     var fixedPoints: [CGPoint]? = nil
+    /// The walked street route (projected) — drawn instead of straight
+    /// stop-to-stop segments when available.
+    var fixedPath: [CGPoint]? = nil
     /// Fatter line + dots for the route-forward variants.
     var emphasized: Bool = false
 
@@ -520,16 +562,17 @@ private struct RouteSketch: View {
                               width: max(geo.size.width - inset * 2, 1),
                               height: max(geo.size.height - inset * 2, 1))
             let pts = fixedPoints ?? Self.project(stops, into: rect)
+            let line = (fixedPath?.count ?? 0) > 1 ? fixedPath! : pts
             let lw: CGFloat = emphasized ? 4.5 : 3
             let dot: CGFloat = emphasized ? 13 : 11
 
             ZStack {
-                if pts.count > 1 {
-                    routePath(pts)
+                if line.count > 1 {
+                    routePath(line)
                         .stroke(Color.whiskey.opacity(0.55),
                                 style: StrokeStyle(lineWidth: lw + 4, lineCap: .round, lineJoin: .round))
                         .blur(radius: 4)
-                    routePath(pts)
+                    routePath(line)
                         .stroke(Color.whiskey,
                                 style: StrokeStyle(lineWidth: lw, lineCap: .round, lineJoin: .round))
                         .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
@@ -706,13 +749,18 @@ struct NightShareSheet: View {
         ZStack {
             NightShareCard(recap: recap, style: s, assets: assets)
                 .background(
-                    // Transparent variants preview over a story-ish photo
-                    // gradient so the transparency is obvious.
+                    // Transparent variants preview over the brand's own
+                    // surface — ink, a whiskey glow, and the concave
+                    // sejdel-glass dimples (this backdrop is preview-only;
+                    // the exported PNG stays fully transparent).
                     s.isTransparent
-                    ? AnyView(LinearGradient(
-                        colors: [Color(red: 0.16, green: 0.13, blue: 0.22),
-                                 Color(red: 0.35, green: 0.18, blue: 0.14)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing))
+                    ? AnyView(ZStack {
+                        Color.ink
+                        DimpleDriftBackground(strength: 0.17, speed: 7, scale: 1.2)
+                        RadialGradient(colors: [Color.whiskey.opacity(0.22), .clear],
+                                       center: .init(x: 0.85, y: 0.0),
+                                       startRadius: 10, endRadius: 360)
+                    })
                     : AnyView(Color.clear)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 22))
