@@ -2051,6 +2051,9 @@ struct PostDetailView: View {
     let onClose: () -> Void
 
     @State private var shareStoryOpen = false
+    /// The crawl as actually walked (Apple Maps directions, cached per
+    /// recap) — drives the map line and the CRAWLED figure.
+    @State private var walk: WalkedRoute? = nil
     @State private var gallery: PhotoGallery?
     @State private var liked = false
     @State private var likeCount = 0
@@ -2134,7 +2137,7 @@ struct PostDetailView: View {
                     HStack(spacing: 10) {
                         stat("\(post.recap.stops.filter { $0.kind == .bar }.count)", "stops")
                         stat("\(post.recap.totalDrinks)", "drinks")
-                        stat(crawlDistanceString(post.recap.crawlMeters), "crawled")
+                        stat(crawlDistanceString(walk?.meters ?? post.recap.crawlMeters), "crawled")
                         if post.includeBAC {
                             let unit = BACUnitSetting.current()
                             stat("\(unit.formatted(post.recap.peakBAC))\(unit.symbol)", "peak")
@@ -2164,7 +2167,9 @@ struct PostDetailView: View {
                                 }
                             }
                             if coords.count > 1 {
-                                MapPolyline(coordinates: coords)
+                                // The walked streets when directions have
+                                // landed; straight legs until then.
+                                MapPolyline(coordinates: walk?.coords ?? coords)
                                     .stroke(Color.whiskey, lineWidth: 3)
                             }
                         }
@@ -2220,7 +2225,9 @@ struct PostDetailView: View {
         }
         .task {
             if !loadedLike { liked = post.likedByMe; likeCount = post.likeCount; loadedLike = true }
+            async let w = WalkedRoute.cached(for: post.recap)
             comments = await feed?.comments(post.id) ?? []
+            walk = await w
         }
     }
 

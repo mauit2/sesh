@@ -2131,6 +2131,10 @@ struct NightRecapView: View {
     @State private var showPostComposer = false
     /// Strava-style transparent story sticker (route + stats) → share sheet.
     @State private var shareStoryOpen = false
+    /// The crawl as actually walked (Apple Maps directions, cached per
+    /// recap) — the flyover line and the crawled figure both use it.
+    @State private var walk: WalkedRoute? = nil
+    private var crawledMeters: Double { walk?.meters ?? recap.crawlMeters }
     @State private var camera: MapCameraPosition = .automatic
     /// Set the first time the user navigates manually — kills the
     /// auto-advance so the story stays where they put it.
@@ -2187,6 +2191,7 @@ struct NightRecapView: View {
         .contentShape(Rectangle())
         .onTapGesture { advance() }
         .task(id: stage) { await autoAdvance() }
+        .task { walk = await WalkedRoute.cached(for: recap) }
         .onAppear { aimCamera(for: .intro, animated: false) }
         .photosPicker(isPresented: $libraryPickerOpen, selection: $pickerItem, matching: .images)
         .onChange(of: pickerItem) { _, item in
@@ -2222,9 +2227,22 @@ struct NightRecapView: View {
 
     private var journeyMap: some View {
         Map(position: $camera, interactionModes: []) {
-            // Route so far: grows stop by stop as the story advances.
+            // Route so far: grows stop by stop as the story advances —
+            // along the actual walked streets once directions land.
             let visible = visibleCoordinates
-            if visible.count >= 2 {
+            let routed: [CLLocationCoordinate2D]? = {
+                guard let walk, visibleLocatedStops.count >= 2 else { return nil }
+                let legs = min(visibleLocatedStops.count - 1, walk.legEnds.count)
+                guard legs >= 1 else { return nil }
+                return Array(walk.coords.prefix(walk.legEnds[legs - 1]))
+            }()
+            if let routed, routed.count >= 2 {
+                MapPolyline(coordinates: routed)
+                    .stroke(
+                        Color.whiskey,
+                        style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [1, 9])
+                    )
+            } else if visible.count >= 2 {
                 MapPolyline(coordinates: visible)
                     .stroke(
                         Color.whiskey,
@@ -2648,7 +2666,7 @@ struct NightRecapView: View {
                 stat(value: durationLabel, label: "ON THE TOWN")
             }
 
-            if recap.crawlMeters > 0 {
+            if crawledMeters > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "figure.walk")
                         .font(.system(size: 11, weight: .bold, design: .rounded))
@@ -2927,9 +2945,9 @@ struct NightRecapView: View {
     }
 
     private var distanceLabel: String {
-        recap.crawlMeters >= 1000
-            ? String(format: "%.1f km", recap.crawlMeters / 1000)
-            : "\(Int(recap.crawlMeters)) m"
+        crawledMeters >= 1000
+            ? String(format: "%.1f km", crawledMeters / 1000)
+            : "\(Int(crawledMeters)) m"
     }
 
     private var cardBackground: some View {

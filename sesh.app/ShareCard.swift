@@ -31,13 +31,14 @@ enum ShareCardStyle: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     /// STICKER = transparent PNG (floats over your story photo);
-    /// CARD = opaque, shares anywhere as a normal image.
+    /// CARD = opaque, shares anywhere as a normal image. "TRANSPARENT" is
+    /// the full branded recap as a see-through sticker.
     var label: String {
         switch self {
         case .transparent: return "MAP STICKER"
         case .photo:       return "PHOTO CARD"
         case .map:         return "MAP CARD"
-        case .branded:     return "SEJDEL CARD"
+        case .branded:     return "TRANSPARENT"
         case .route:       return "ROUTE STICKER"
         case .stats:       return "STATS STICKER"
         }
@@ -47,8 +48,8 @@ enum ShareCardStyle: String, CaseIterable, Identifiable {
     /// clipboard-paste flow to survive Instagram.
     var isTransparent: Bool {
         switch self {
-        case .photo, .map, .branded: return false
-        case .transparent, .route, .stats: return true
+        case .photo, .map: return false
+        case .transparent, .branded, .route, .stats: return true
         }
     }
 }
@@ -63,6 +64,21 @@ enum ShareCardStyle: String, CaseIterable, Identifiable {
 struct WalkedRoute {
     let coords: [CLLocationCoordinate2D]
     let meters: Double
+    /// coords index just past each leg — lets the recap flyover grow the
+    /// routed path stop by stop as the story advances.
+    let legEnds: [Int]
+
+    /// One directions fetch per recap, ever — the share sheet, the post
+    /// detail and the recap flyover all pull from here.
+    @MainActor private static var cache: [UUID: WalkedRoute] = [:]
+
+    @MainActor
+    static func cached(for recap: NightRecap) async -> WalkedRoute? {
+        if let hit = cache[recap.id] { return hit }
+        guard let w = await load(for: recap.locatedStops) else { return nil }
+        cache[recap.id] = w
+        return w
+    }
 
     static func load(for stops: [RecapStop]) async -> WalkedRoute? {
         let stopCoords: [CLLocationCoordinate2D] = stops.compactMap { s in
@@ -72,6 +88,7 @@ struct WalkedRoute {
         guard stopCoords.count > 1 else { return nil }
         var coords: [CLLocationCoordinate2D] = []
         var meters: Double = 0
+        var legEnds: [Int] = []
         for i in 0..<(stopCoords.count - 1) {
             let a = stopCoords[i], b = stopCoords[i + 1]
             let req = MKDirections.Request()
@@ -100,8 +117,9 @@ struct WalkedRoute {
                 meters += CLLocation(latitude: a.latitude, longitude: a.longitude)
                     .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
             }
+            legEnds.append(coords.count)
         }
-        return WalkedRoute(coords: coords, meters: meters)
+        return WalkedRoute(coords: coords, meters: meters, legEnds: legEnds)
     }
 }
 
@@ -171,9 +189,9 @@ struct ShareAssets {
     static func load(for recap: NightRecap) async -> ShareAssets {
         async let v = HealthService.shared.vitals(from: recap.startedAt, to: recap.endedAt)
         async let p = loadFirstPhoto(recap)
-        // Directions first — both snapshots and the abstract variants
-        // draw the same walked path.
-        let walk = await WalkedRoute.load(for: recap.locatedStops)
+        // Directions first (cached per recap) — both snapshots and the
+        // abstract variants draw the same walked path.
+        let walk = await WalkedRoute.cached(for: recap)
         async let g = RouteMapSnapshot.load(for: recap.locatedStops,
                                             size: RouteMapSnapshot.ghostSize, walk: walk)
         async let c = RouteMapSnapshot.load(for: recap.locatedStops,
@@ -460,47 +478,34 @@ struct NightShareCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 24))
     }
 
-    // ---- 4. SEJDEL (opaque branded) ------------------------------------
+    // ---- 4. TRANSPARENT (the full branded recap, see-through) ----------
 
     private var brandedCard: some View {
-        ZStack {
-            Color.ink
-            // The app's whiskey atmosphere, baked flat.
-            RadialGradient(colors: [Color.whiskey.opacity(0.28), .clear],
-                           center: .init(x: 0.85, y: 0.02), startRadius: 10, endRadius: 380)
-            RadialGradient(colors: [Color.bronze.opacity(0.16), .clear],
-                           center: .init(x: 0.0, y: 0.1), startRadius: 10, endRadius: 320)
-
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .firstTextBaseline) {
-                    wordmark(34)
-                    Spacer()
-                    Text(stats.dateLabel)
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .tracking(1.8)
-                        .foregroundStyle(Color.bronze)
-                }
-                Text("THE SESH RECAP")
-                    .font(.system(size: 10, weight: .black, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Color.bronze)
-                    .padding(.top, 6)
-
-                Spacer(minLength: 12)
-                RouteSketch(stops: recap.locatedStops, walkCoords: assets.walk?.coords, emphasized: true)
-                    .frame(height: 250)
-                Spacer(minLength: 12)
-
-                statGrid
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                wordmark(34)
+                Spacer()
+                Text(stats.dateLabel)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .tracking(1.8)
+                    .foregroundStyle(Color.cream.opacity(0.85))
             }
-            .padding(24)
+            Text("THE SESH RECAP")
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .tracking(3)
+                .foregroundStyle(Color.whiskey)
+                .padding(.top, 6)
+
+            Spacer(minLength: 12)
+            RouteSketch(stops: recap.locatedStops, walkCoords: assets.walk?.coords, emphasized: true)
+                .frame(height: 250)
+            Spacer(minLength: 12)
+
+            statGrid
         }
+        .padding(24)
+        .legibleOnAnyStory()
         .frame(width: 360, height: 560)
-        .clipShape(RoundedRectangle(cornerRadius: 24))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24)
-                .strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1)
-        )
     }
 
     // ---- 5. ROUTE (transparent, route only) ----------------------------
