@@ -15,6 +15,7 @@
 
 import SwiftUI
 import UIKit
+import SCSDKCreativeKit
 import MapKit
 import UniformTypeIdentifiers
 
@@ -710,6 +711,10 @@ struct NightShareSheet: View {
     @State private var rendered: [ShareCardStyle: URL] = [:]
     @State private var toast: String? = nil
 
+    /// Snap's Creative Kit needs the API object alive until its completion
+    /// fires — a local would be deallocated mid-handoff.
+    @State private var snapAPI = SCSDKSnapAPI()
+
     var body: some View {
         ZStack {
             AtmosphereBackground(accent: .whiskey)
@@ -752,8 +757,8 @@ struct NightShareSheet: View {
                         .transition(.opacity)
                 } else {
                     Text(style.isTransparent
-                         ? "Transparent sticker — INSTAGRAM pins it straight onto your story; COPY to paste it anywhere else."
-                         : "A full card — INSTAGRAM makes it your story background, or share it anywhere.")
+                         ? "Transparent sticker — INSTAGRAM or SNAPCHAT pins it straight onto your story; COPY to paste it anywhere else."
+                         : "A full card — INSTAGRAM or SNAPCHAT makes it your story, or share it anywhere.")
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.5))
                         .multilineTextAlignment(.center)
@@ -761,8 +766,9 @@ struct NightShareSheet: View {
                 }
 
                 // Actions — Strava's row, honestly implemented.
-                HStack(spacing: 22) {
+                HStack(spacing: 14) {
                     actionButton("camera.fill", "INSTAGRAM") { shareToInstagram() }
+                    actionButton("bolt.horizontal.fill", "SNAPCHAT") { shareToSnapchat() }
                     actionButton("doc.on.doc.fill", "COPY") { copySticker() }
                     actionButton("arrow.down.to.line", "SAVE") { saveToPhotos() }
                     if let url = currentURL() {
@@ -893,6 +899,42 @@ struct NightShareSheet: View {
                 // clipboard for a manual paste anywhere.
                 UIPasteboard.general.setData(data, forPasteboardType: UTType.png.identifier)
                 toast = "Instagram isn't installed — sticker copied to the clipboard instead."
+            }
+        }
+    }
+
+    /// Snapchat's Creative Kit: transparent variants ride into the camera
+    /// as a movable sticker (over whatever the user snaps); opaque cards go
+    /// in as the photo itself. Falls back to the clipboard when Snapchat
+    /// isn't installed.
+    private func shareToSnapchat() {
+        guard let data = pngData(), let img = UIImage(data: data) else { return }
+        // Without this guard the Snap SDK bounces users out to snapchat.com
+        // in Safari when the app is missing — clipboard is kinder.
+        guard UIApplication.shared.canOpenURL(URL(string: "snapchat://")!) else {
+            UIPasteboard.general.setData(data, forPasteboardType: UTType.png.identifier)
+            toast = "Snapchat isn't installed — sticker copied to the clipboard instead."
+            return
+        }
+        let content: SCSDKSnapContent
+        if style.isTransparent {
+            let noSnap = SCSDKNoSnapContent()
+            noSnap.sticker = SCSDKSnapSticker(stickerImage: img)
+            content = noSnap
+        } else {
+            content = SCSDKPhotoSnapContent(snapPhoto: SCSDKSnapPhoto(image: img))
+        }
+        content.attachmentUrl = "https://sejdel.com"
+        snapAPI.startSending(content) { error in
+            DispatchQueue.main.async {
+                if error == nil {
+                    toast = style.isTransparent
+                        ? "Opened Snapchat — your sticker is on the camera, transparency intact."
+                        : "Opened Snapchat — your card is the snap."
+                } else {
+                    UIPasteboard.general.setData(data, forPasteboardType: UTType.png.identifier)
+                    toast = "Snapchat isn't installed — sticker copied to the clipboard instead."
+                }
             }
         }
     }

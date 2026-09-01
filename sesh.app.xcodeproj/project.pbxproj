@@ -12,6 +12,7 @@
 		2FB880552FA5FFC900259EDF /* seshLiveActivityExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2FB880422FA5FFC800259EDF /* seshLiveActivityExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		2FCAD2BD301B3CB000009B7D /* MapboxMaps in Frameworks */ = {isa = PBXBuildFile; productRef = 2FAA00022FD00002007D694D /* MapboxMaps */; };
 		2FE6803B2F96B66D007D694D /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 2FE6803A2F96B66D007D694D /* Supabase */; };
+		2FA5C0032FD20003007D694D /* SnapSDK in Frameworks */ = {isa = PBXBuildFile; productRef = 2FA5C0022FD20002007D694D /* SnapSDK */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -100,6 +101,7 @@
 			files = (
 				2FCAD2BD301B3CB000009B7D /* MapboxMaps in Frameworks */,
 				2FE6803B2F96B66D007D694D /* Supabase in Frameworks */,
+				2FA5C0032FD20003007D694D /* SnapSDK in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -181,6 +183,7 @@
 			packageProductDependencies = (
 				2FE6803A2F96B66D007D694D /* Supabase */,
 				2FAA00022FD00002007D694D /* MapboxMaps */,
+				2FA5C0022FD20002007D694D /* SnapSDK */,
 			);
 			productName = sesh.app;
 			productReference = 2FE6802A2F965BC7007D694D /* sesh.app.app */;
@@ -216,6 +219,7 @@
 			packageReferences = (
 				2FE680382F96B268007D694D /* XCRemoteSwiftPackageReference "supabase-swift" */,
 				2FAA00012FD00001007D694D /* XCRemoteSwiftPackageReference "mapbox-maps-ios" */,
+				2FA5C0012FD20001007D694D /* XCRemoteSwiftPackageReference "snap-kit-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2FE6802B2F965BC7007D694D /* Products */;
@@ -467,6 +471,7 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "sejdel uses your camera to scan beverage barcodes, set your profile photo, and snap pics at your stops during a night out.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "sejdel checks which of your contacts are already here so you can add them as friends. Your contacts never leave your phone — only scrambled codes are sent, and we keep nothing about people who aren't on sejdel.";
+				INFOPLIST_FILE = AppInfo.plist;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Sejdel reads your steps, heart rate, and active energy during a sesh to show how much you moved and burned, and your body weight to make your BAC estimate more accurate.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Sejdel saves your night share sticker to your photo library only when you tap Save.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Sejdel saves the calories and number of drinks you log so your night shows up in Apple Health alongside the rest of your day.";
@@ -509,6 +514,7 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "sejdel uses your camera to scan beverage barcodes, set your profile photo, and snap pics at your stops during a night out.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "sejdel checks which of your contacts are already here so you can add them as friends. Your contacts never leave your phone — only scrambled codes are sent, and we keep nothing about people who aren't on sejdel.";
+				INFOPLIST_FILE = AppInfo.plist;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Sejdel reads your steps, heart rate, and active energy during a sesh to show how much you moved and burned, and your body weight to make your BAC estimate more accurate.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Sejdel saves your night share sticker to your photo library only when you tap Save.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Sejdel saves the calories and number of drinks you log so your night shows up in Apple Health alongside the rest of your day.";
@@ -585,6 +591,14 @@
 				minimumVersion = 2.5.1;
 			};
 		};
+		2FA5C0012FD20001007D694D /* XCRemoteSwiftPackageReference "snap-kit-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Snapchat/snap-kit-spm";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -597,6 +611,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 2FE680382F96B268007D694D /* XCRemoteSwiftPackageReference "supabase-swift" */;
 			productName = Supabase;
+		};
+		2FA5C0022FD20002007D694D /* SnapSDK */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2FA5C0012FD20001007D694D /* XCRemoteSwiftPackageReference "snap-kit-spm" */;
+			productName = SnapSDK;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Merged into the generated Info.plist (GENERATE_INFOPLIST_FILE stays
+	     on) — this file only carries keys the build-settings system can't
+	     express: Snap Kit's client id and the URL-scheme query allowlist. -->
+	<key>SCSDKClientId</key>
+	<string>7826fa69-8df0-4c88-acb4-72697708ad1d</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>snapchat</string>
+		<string>instagram-stories</string>
+		<string>instagram</string>
+	</array>
+</dict>
+</plist>
