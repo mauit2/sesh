@@ -2129,6 +2129,8 @@ struct NightRecapView: View {
 
     @State private var stage: Stage = .intro
     @State private var showPostComposer = false
+    /// Strava-style transparent story sticker (route + stats) → share sheet.
+    @State private var shareStoryOpen = false
     @State private var camera: MapCameraPosition = .automatic
     /// Set the first time the user navigates manually — kills the
     /// auto-advance so the story stays where they put it.
@@ -2665,6 +2667,7 @@ struct NightRecapView: View {
             case .replay:
                 VStack(spacing: 10) {
                     postOrPostedButton
+                    shareNightButton
                     Button {
                         onFinish()
                     } label: {
@@ -2699,6 +2702,7 @@ struct NightRecapView: View {
                 // in Past nights (postable later); the quiet option deletes it.
                 VStack(spacing: 10) {
                     postOrPostedButton
+                    shareNightButton
 
                     Button {
                         history.archive(recap)   // keep it in Past nights
@@ -2755,6 +2759,32 @@ struct NightRecapView: View {
                 if mode != .replay { onFinish() }
             })
         }
+        .sheet(isPresented: $shareStoryOpen) {
+            NightShareSheet(recap: recap)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+    }
+
+    /// Outlined whiskey secondary — opens the story-sticker share sheet
+    /// (transparent PNG for Instagram/Snapchat/Facebook stories).
+    private var shareNightButton: some View {
+        Button {
+            shareStoryOpen = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                Text("SHARE YOUR NIGHT")
+                    .font(.system(size: 12, weight: .black, design: .monospaced)).tracking(1.6)
+            }
+            .foregroundStyle(Color.whiskey)
+            .frame(maxWidth: .infinity).padding(.vertical, 13)
+            .background(Capsule().fill(Color.whiskey.opacity(0.10)))
+            .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.45), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
     }
 
     /// POST button (whiskey) — or a "Posted" confirmation if this recap has
