@@ -4561,16 +4561,17 @@ enum SeshMode: String, Hashable, Identifiable {
 /// `SeshMode` (which is sesh/group scope) so feed selection doesn't leak into
 /// drink/group logic.
 enum TopTab: Hashable {
-    case plan, live, timeline, chats, offers
+    case plan, live, timeline, chats, offers, profile
 
     /// Section name shown in the top bar (the switcher now lives at the bottom).
     var title: String {
         switch self {
-        case .plan:     return "Plan"
+        case .plan:     return "Events"
         case .live:     return "Live"
         case .timeline: return "Home"
         case .chats:    return "DMs"
         case .offers:   return "Maps"
+        case .profile:  return "Profile"
         }
     }
 }
@@ -6021,12 +6022,13 @@ private struct SessionView: View {
 
                 TabView(selection: $tab) {
                     // Order matches the bottom bar left→right:
-                    // Home · Live · Plan · DMs · Maps.
+                    // Home · Live · Plan · DMs · Maps · Profile.
                     timelinePage.tag(TopTab.timeline)
                     livePage.tag(TopTab.live)
                     planPage.tag(TopTab.plan)
                     chatsPage.tag(TopTab.chats)
                     offersPage.tag(TopTab.offers)
+                    profilePage.tag(TopTab.profile)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 // A paged TabView is a scroll view underneath, so it competes
@@ -6620,7 +6622,10 @@ private struct SessionView: View {
             liveActive: liveActive,
             inboxCount: invites.pending.count + friends.incoming.count + friends.unseenActivityCount,
             onTapInbox: { invitesSheetOpen = true; friends.markActivitySeen() },
-            onTapProfile: { profileOpen = true },
+            // Profile lives in the far-right tab now — the chip jumps there.
+            onTapProfile: {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = .profile }
+            },
             onTapFriends: { friendsSheetOpen = true },
             liveStarted: liveStartTime,
             liveInGroup: liveGroup.isActive,
@@ -6736,7 +6741,20 @@ private struct SessionView: View {
         }
     }
 
-    /// TIMELINE — the friends feed of posted nights.
+    /// PROFILE — the far-right tab. Hosts the same view as the old profile
+    /// sheet; its internal `dismiss()` calls are harmless no-ops here (save
+    /// keeps you on the page, sign-out/delete tear down SessionView anyway).
+    private var profilePage: some View {
+        ProfileSheet(
+            profile: profile, auth: auth, admin: admin,
+            friends: friends, feed: feed,
+            onReplayTour: { tourOpen = true },
+            onWalkthrough: { walkthroughActive = true }
+        )
+    }
+
+    /// TIMELINE — HOME: the friends feed, topped by a condensed tonight
+    /// strip (live numbers + add-drink) that routes into LIVE.
     private var timelinePage: some View {
         VStack(spacing: 0) {
             TabHintChip(
@@ -6746,8 +6764,94 @@ private struct SessionView: View {
             .padding(.horizontal, 20)
             .padding(.top, 6)
 
+            homeLiveStrip
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+
             timelineFeed
         }
+    }
+
+    /// Tonight-at-a-glance on HOME. One row: status + stats on the left,
+    /// the add-drink action on the right. The whole strip lands on LIVE —
+    /// Home stays condensed, LIVE stays the full experience.
+    private var homeLiveStrip: some View {
+        let running = live.isActive || liveGroup.isActive
+        return Button {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = .live }
+        } label: {
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 7) {
+                        if running { SonarDot(size: 6, color: .whiskey) }
+                        // "YOUR NIGHT" — the stories strip right below is
+                        // already headed "TONIGHT"; doubling it read wrong.
+                        Text(running ? "LIVE NOW" : "YOUR NIGHT")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .tracking(2)
+                            .foregroundStyle(Color.bronze)
+                    }
+                    Text(homeStripLine)
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                Spacer(minLength: 8)
+                HStack(spacing: 6) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .black))
+                    Text("DRINK")
+                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .tracking(1.2)
+                }
+                .foregroundStyle(Color.ink)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(Capsule().fill(Color.whiskey))
+                .shadow(color: Color.whiskey.opacity(0.45), radius: 10, y: 2)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Color.cream.opacity(0.05))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18)
+                            .strokeBorder(Color.cream.opacity(0.10), lineWidth: 1)
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 18))
+        }
+        .buttonStyle(PressScaleStyle())
+        .accessibilityLabel(running ? "Tonight's live summary — open LIVE" : "Add a drink — open LIVE")
+    }
+
+    /// One-line summary for the HOME strip. Live: BAC (group-aware, via the
+    /// same math the story stamp uses) · drinks · group size · elapsed.
+    /// Idle: the invitation to start.
+    private var homeStripLine: String {
+        guard live.isActive || liveGroup.isActive else {
+            return "Log a drink to go live"
+        }
+        var parts: [String] = []
+        if let b = currentStoryBAC() {
+            let unit = BACUnitSetting.current()
+            parts.append("\(unit.formatted(b))\(unit.symbol)")
+        }
+        let count = liveGroup.isActive
+            ? liveGroup.totalDrinkCount(for: profile.id)
+            : live.drinks.count
+        parts.append(count == 1 ? "1 drink" : "\(count) drinks")
+        if liveGroup.isActive, liveGroup.members.count > 1 {
+            parts.append("\(liveGroup.members.count) in group")
+        }
+        if let s = liveStartTime {
+            let mins = max(0, Int(Date().timeIntervalSince(s) / 60))
+            parts.append(mins >= 60 ? "\(mins / 60)h \(mins % 60)m" : "\(mins)m")
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// CHATS — DM threads (story likes/replies land here too).
@@ -6772,7 +6876,8 @@ private struct SessionView: View {
                     username: post.authorUsername, avatar: post.authorAvatar
                 )
             },
-            onOpenPulse: { openPulse = $0 }
+            onOpenPulse: { openPulse = $0 },
+            onAddFriends: { friendsSheetOpen = true }
         )
     }
 
@@ -17201,11 +17306,12 @@ struct BottomTabBar: View {
                  buzzing: newOnNightline && !reduceMotion,
                  badgeCount: unseenCount)
             item(.live,     icon: "dot.radiowaves.left.and.right", label: "LIVE", pulse: liveActive)
-            item(.plan,     icon: "gauge.medium",                  label: "PLAN",
+            item(.plan,     icon: "calendar",                      label: "EVENTS",
                  badgeCount: eventInvites)
             item(.chats,    icon: "bubble.left.and.bubble.right.fill", label: "DMS",
                  badgeCount: dmUnread)
             item(.offers,   icon: "map.fill",                      label: "MAPS")
+            item(.profile,  icon: "person.crop.circle.fill",       label: "PROFILE")
         }
         .padding(.top, 10)
         .padding(.bottom, 4)

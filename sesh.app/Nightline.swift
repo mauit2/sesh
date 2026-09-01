@@ -1481,6 +1481,9 @@ struct TimelineFeedView: View {
     let onOpenPost: (TimelinePost) -> Void
     let onOpenAuthor: (TimelinePost) -> Void
     let onOpenPulse: (FriendPulse) -> Void
+    /// HOME's empty feed offers "add friends" straight away — routes to the
+    /// friends sheet (search by @username, or match from contacts).
+    var onAddFriends: (() -> Void)? = nil
     @StateObject private var moderation = ModerationService()
 
     var body: some View {
@@ -1559,6 +1562,24 @@ struct TimelineFeedView: View {
                 .font(.system(size: 13, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(0.6))
                 .multilineTextAlignment(.center).lineSpacing(2)
+            if let onAddFriends {
+                Button(action: onAddFriends) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "person.badge.plus")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("ADD FRIENDS")
+                            .font(.system(size: 12, weight: .black, design: .monospaced))
+                            .tracking(1.5)
+                    }
+                    .foregroundStyle(Color.ink)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 12)
+                    .background(Capsule().fill(Color.whiskey))
+                    .shadow(color: Color.whiskey.opacity(0.5), radius: 12, y: 3)
+                }
+                .buttonStyle(PressScaleStyle())
+                .padding(.top, 8)
+            }
         }
         .frame(maxWidth: .infinity).padding(.horizontal, 36).padding(.top, 90)
     }
