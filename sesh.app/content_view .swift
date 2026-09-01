@@ -3002,11 +3002,8 @@ struct FriendsPulseStrip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("TONIGHT")
-                .font(.system(size: 10, weight: .black, design: .monospaced))
-                .tracking(2.4)
-                .foregroundStyle(Color.bronze)
-                .padding(.horizontal, 22)
+            // (No "TONIGHT" label — the Home title above and the tonight
+            // strip below already frame the section; the label was noise.)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
                     myBubble
@@ -6843,7 +6840,6 @@ private struct SessionView: View {
                             .font(.system(size: 26, weight: .heavy, design: .rounded))
                             .monospacedDigit()
                             .foregroundStyle(stripStatus.color)
-                            .shadow(color: stripStatus.color.opacity(0.45), radius: 8)
                         Text(unit.symbol)
                             .font(.system(size: 13, weight: .bold, design: .rounded))
                             .foregroundStyle(Color.cream.opacity(0.45))
@@ -6865,11 +6861,18 @@ private struct SessionView: View {
                 .foregroundStyle(Color.ink)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Capsule().fill(Color.whiskey))
-                .shadow(color: Color.whiskey.opacity(0.45), radius: 10, y: 2)
+                // Glow on the capsule SHAPE only — a shadow on the view
+                // would haze the label too.
+                .background(
+                    Capsule().fill(Color.whiskey)
+                        .shadow(color: Color.whiskey.opacity(0.45), radius: 10, y: 2)
+                )
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
+            // Same rule for the card: the whiskey glow belongs to the
+            // background shape, never the content — shadowing the whole
+            // view painted a yellow mist over the BAC number.
             .background(
                 RoundedRectangle(cornerRadius: 18)
                     .fill(Color.whiskey.opacity(0.10))
@@ -6877,8 +6880,8 @@ private struct SessionView: View {
                         RoundedRectangle(cornerRadius: 18)
                             .strokeBorder(Color.whiskey.opacity(0.45), lineWidth: 1.2)
                     )
+                    .shadow(color: Color.whiskey.opacity(0.22), radius: 14, y: 4)
             )
-            .shadow(color: Color.whiskey.opacity(0.22), radius: 14, y: 4)
             .contentShape(RoundedRectangle(cornerRadius: 18))
         }
         .buttonStyle(PressScaleStyle())
