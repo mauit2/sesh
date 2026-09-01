@@ -6807,37 +6807,50 @@ private struct SessionView: View {
         }
     }
 
-    /// Tonight-at-a-glance on HOME, sitting under the stories row. Whole
-    /// card is whiskey; BAC is always shown (0.00 included — with a nudge
-    /// to order the first drink). Tapping anywhere lands on LIVE.
+    /// Tonight-at-a-glance on HOME, sitting under the stories row. Styled
+    /// like the LIVE tab's "RIGHT NOW" card — dark, whiskey-tinted, with a
+    /// glowing border — so it pops without breaking the app's language.
+    /// The BAC is always shown (0.00 included, in the same status color as
+    /// the LIVE gauge) with a nudge to order the first drink. The solid
+    /// whiskey lives only in the + DRINK pill (mirrors MORE DRINKS).
     private var homeLiveStrip: some View {
         let running = live.isActive || liveGroup.isActive
         let unit = BACUnitSetting.current()
         let bacValue = currentStoryBAC() ?? 0
+        let stripStatus: Status = {
+            switch bacValue {
+            case ..<0.02: return .sober
+            case 0.02..<0.05: return .buzzed
+            case 0.05..<0.08: return .impaired
+            case 0.08..<0.15: return .drunk
+            default: return .danger
+            }
+        }()
         return Button {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = .live }
         } label: {
             HStack(spacing: 14) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 7) {
-                        if running { SonarDot(size: 6, color: .ink) }
+                        if running { SonarDot(size: 6, color: .whiskey) }
                         Text(running ? "LIVE NOW" : "YOUR NIGHT")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .tracking(2)
-                            .foregroundStyle(Color.ink.opacity(0.55))
+                            .foregroundStyle(running ? Color.whiskey : Color.bronze)
                     }
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Text(unit.formatted(bacValue))
                             .font(.system(size: 26, weight: .heavy, design: .rounded))
                             .monospacedDigit()
-                            .foregroundStyle(Color.ink)
+                            .foregroundStyle(stripStatus.color)
+                            .shadow(color: stripStatus.color.opacity(0.45), radius: 8)
                         Text(unit.symbol)
                             .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.ink.opacity(0.55))
+                            .foregroundStyle(Color.cream.opacity(0.45))
                     }
                     Text(homeStripLine)
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.ink.opacity(0.75))
+                        .foregroundStyle(Color.cream.opacity(0.6))
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                 }
@@ -6849,16 +6862,23 @@ private struct SessionView: View {
                         .font(.system(size: 11, weight: .black, design: .monospaced))
                         .tracking(1.2)
                 }
-                .foregroundStyle(Color.whiskey)
+                .foregroundStyle(Color.ink)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Capsule().fill(Color.ink))
-                .shadow(color: Color.ink.opacity(0.35), radius: 8, y: 2)
+                .background(Capsule().fill(Color.whiskey))
+                .shadow(color: Color.whiskey.opacity(0.45), radius: 10, y: 2)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(RoundedRectangle(cornerRadius: 18).fill(Color.whiskey))
-            .shadow(color: Color.whiskey.opacity(0.35), radius: 14, y: 4)
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Color.whiskey.opacity(0.10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18)
+                            .strokeBorder(Color.whiskey.opacity(0.45), lineWidth: 1.2)
+                    )
+            )
+            .shadow(color: Color.whiskey.opacity(0.22), radius: 14, y: 4)
             .contentShape(RoundedRectangle(cornerRadius: 18))
         }
         .buttonStyle(PressScaleStyle())
