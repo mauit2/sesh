@@ -30,14 +30,16 @@ enum ShareCardStyle: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// STICKER = transparent PNG (floats over your story photo);
+    /// CARD = opaque, shares anywhere as a normal image.
     var label: String {
         switch self {
-        case .transparent: return "TRANSPARENT"
-        case .photo:       return "PHOTO"
-        case .map:         return "MAP"
-        case .branded:     return "SEJDEL"
-        case .route:       return "ROUTE"
-        case .stats:       return "STATS"
+        case .transparent: return "MAP STICKER"
+        case .photo:       return "PHOTO CARD"
+        case .map:         return "MAP CARD"
+        case .branded:     return "SEJDEL CARD"
+        case .route:       return "ROUTE STICKER"
+        case .stats:       return "STATS STICKER"
         }
     }
 
@@ -51,6 +53,58 @@ enum ShareCardStyle: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - The walked route (Apple Maps walking directions)
+
+/// The crawl as actually walked: Apple Maps walking directions for every
+/// leg, stitched into one coordinate path, with the ROUTED distance. Loaded
+/// once and shared by every variant — map-backed ones convert it into
+/// snapshot space, abstract ones project it themselves. Any leg directions
+/// can't solve degrades to its straight segment (+ straight-line meters).
+struct WalkedRoute {
+    let coords: [CLLocationCoordinate2D]
+    let meters: Double
+
+    static func load(for stops: [RecapStop]) async -> WalkedRoute? {
+        let stopCoords: [CLLocationCoordinate2D] = stops.compactMap { s in
+            guard let la = s.lat, let lo = s.lon else { return nil }
+            return CLLocationCoordinate2D(latitude: la, longitude: lo)
+        }
+        guard stopCoords.count > 1 else { return nil }
+        var coords: [CLLocationCoordinate2D] = []
+        var meters: Double = 0
+        for i in 0..<(stopCoords.count - 1) {
+            let a = stopCoords[i], b = stopCoords[i + 1]
+            let req = MKDirections.Request()
+            req.source = MKMapItem(placemark: MKPlacemark(coordinate: a))
+            req.destination = MKMapItem(placemark: MKPlacemark(coordinate: b))
+            req.transportType = .walking
+            let route: MKRoute? = await withCheckedContinuation { cont in
+                MKDirections(request: req).calculate { resp, _ in
+                    cont.resume(returning: resp?.routes.first)
+                }
+            }
+            if let route {
+                let poly = route.polyline
+                var buf = [CLLocationCoordinate2D](
+                    repeating: kCLLocationCoordinate2DInvalid, count: poly.pointCount
+                )
+                poly.getCoordinates(&buf, range: NSRange(location: 0, length: poly.pointCount))
+                // Pin the leg to the exact bar dots at both ends.
+                coords.append(a)
+                coords.append(contentsOf: buf)
+                coords.append(b)
+                meters += route.distance
+            } else {
+                coords.append(a)
+                coords.append(b)
+                meters += CLLocation(latitude: a.latitude, longitude: a.longitude)
+                    .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+            }
+        }
+        return WalkedRoute(coords: coords, meters: meters)
+    }
+}
+
 // MARK: - Ghost map snapshot
 
 /// A dark map snapshot of the night's area plus each stop's EXACT pixel
@@ -59,10 +113,7 @@ enum ShareCardStyle: String, CaseIterable, Identifiable {
 struct RouteMapSnapshot {
     let image: UIImage
     let points: [CGPoint]
-    /// The actual WALKING route between the stops (Apple Maps directions),
-    /// already projected into snapshot space — so the line follows streets
-    /// instead of cutting straight through buildings. Falls back to the
-    /// straight segment for any leg directions can't solve.
+    /// The walked route converted into snapshot space.
     let path: [CGPoint]
     let size: CGSize
 
@@ -71,7 +122,8 @@ struct RouteMapSnapshot {
     /// Full-card size used by the opaque MAP variant.
     static let cardSize = CGSize(width: 360, height: 560)
 
-    static func load(for stops: [RecapStop], size: CGSize) async -> RouteMapSnapshot? {
+    static func load(for stops: [RecapStop], size: CGSize,
+                     walk: WalkedRoute?) async -> RouteMapSnapshot? {
         let coords: [CLLocationCoordinate2D] = stops.compactMap { s in
             guard let la = s.lat, let lo = s.lon else { return nil }
             return CLLocationCoordinate2D(latitude: la, longitude: lo)
@@ -100,46 +152,10 @@ struct RouteMapSnapshot {
             MKMapSnapshotter(options: options).start { s, _ in cont.resume(returning: s) }
         }
         guard let snap else { return nil }
-
-        // The crawl as actually walked: Apple Maps walking directions for
-        // each leg, stitched together. Any failed leg degrades to its
-        // straight segment.
-        var path: [CGPoint] = []
-        if coords.count > 1 {
-            for i in 0..<(coords.count - 1) {
-                let legCoords = await walkingLeg(from: coords[i], to: coords[i + 1])
-                path.append(contentsOf: legCoords.map { snap.point(for: $0) })
-            }
-        }
-
         return RouteMapSnapshot(image: snap.image,
                                 points: coords.map { snap.point(for: $0) },
-                                path: path,
+                                path: (walk?.coords ?? []).map { snap.point(for: $0) },
                                 size: size)
-    }
-
-    /// One walking leg's coordinates — the routed polyline, or just the
-    /// two endpoints when directions fail (offline, unroutable, …).
-    private static func walkingLeg(
-        from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D
-    ) async -> [CLLocationCoordinate2D] {
-        let req = MKDirections.Request()
-        req.source = MKMapItem(placemark: MKPlacemark(coordinate: a))
-        req.destination = MKMapItem(placemark: MKPlacemark(coordinate: b))
-        req.transportType = .walking
-        let route: MKRoute? = await withCheckedContinuation { cont in
-            MKDirections(request: req).calculate { resp, _ in
-                cont.resume(returning: resp?.routes.first)
-            }
-        }
-        guard let route else { return [a, b] }
-        let poly = route.polyline
-        var buf = [CLLocationCoordinate2D](
-            repeating: kCLLocationCoordinate2DInvalid, count: poly.pointCount
-        )
-        poly.getCoordinates(&buf, range: NSRange(location: 0, length: poly.pointCount))
-        // Pin the leg to the exact bar dots at both ends.
-        return [a] + buf + [b]
     }
 }
 
@@ -147,16 +163,22 @@ struct RouteMapSnapshot {
 
 struct ShareAssets {
     var vitals: HealthService.Vitals? = nil
+    var walk: WalkedRoute? = nil
     var ghostMap: RouteMapSnapshot? = nil
     var cardMap: RouteMapSnapshot? = nil
     var photo: UIImage? = nil
 
     static func load(for recap: NightRecap) async -> ShareAssets {
         async let v = HealthService.shared.vitals(from: recap.startedAt, to: recap.endedAt)
-        async let g = RouteMapSnapshot.load(for: recap.locatedStops, size: RouteMapSnapshot.ghostSize)
-        async let c = RouteMapSnapshot.load(for: recap.locatedStops, size: RouteMapSnapshot.cardSize)
         async let p = loadFirstPhoto(recap)
-        return await ShareAssets(vitals: v, ghostMap: g, cardMap: c, photo: p)
+        // Directions first — both snapshots and the abstract variants
+        // draw the same walked path.
+        let walk = await WalkedRoute.load(for: recap.locatedStops)
+        async let g = RouteMapSnapshot.load(for: recap.locatedStops,
+                                            size: RouteMapSnapshot.ghostSize, walk: walk)
+        async let c = RouteMapSnapshot.load(for: recap.locatedStops,
+                                            size: RouteMapSnapshot.cardSize, walk: walk)
+        return await ShareAssets(vitals: v, walk: walk, ghostMap: g, cardMap: c, photo: p)
     }
 
     /// First photo of the night — a remote URL on posted recaps, a bare
@@ -188,6 +210,9 @@ struct ShareAssets {
 struct ShareNightStats {
     let recap: NightRecap
     let vitals: HealthService.Vitals?
+    /// Distance along the actual walking route (Apple Maps) — preferred
+    /// over the recap's straight-line crawl figure when available.
+    var walkMeters: Double? = nil
 
     var unit: BACUnit { BACUnitSetting.current() }
 
@@ -216,10 +241,11 @@ struct ShareNightStats {
     }
 
     var crawledLabel: String {
-        guard recap.crawlMeters > 0 else { return "—" }
-        return recap.crawlMeters >= 1000
-            ? String(format: "%.1f km", recap.crawlMeters / 1000)
-            : "\(Int(recap.crawlMeters.rounded())) m"
+        let m = walkMeters ?? recap.crawlMeters
+        guard m > 0 else { return "—" }
+        return m >= 1000
+            ? String(format: "%.1f km", m / 1000)
+            : "\(Int(m.rounded())) m"
     }
 
     var stepsLabel: String {
@@ -247,7 +273,9 @@ struct NightShareCard: View {
     var style: ShareCardStyle = .transparent
     var assets: ShareAssets = ShareAssets()
 
-    private var stats: ShareNightStats { ShareNightStats(recap: recap, vitals: assets.vitals) }
+    private var stats: ShareNightStats {
+        ShareNightStats(recap: recap, vitals: assets.vitals, walkMeters: assets.walk?.meters)
+    }
 
     /// Canvas size per variant (the renderer uses exactly this).
     static func size(for style: ShareCardStyle, recap: NightRecap) -> CGSize {
@@ -354,7 +382,7 @@ struct NightShareCard: View {
                             .mask(RoundedRectangle(cornerRadius: 30).padding(12).blur(radius: 14))
                         RouteSketch(stops: recap.locatedStops, fixedPoints: snap.points, fixedPath: snap.path)
                     } else {
-                        RouteSketch(stops: recap.locatedStops)
+                        RouteSketch(stops: recap.locatedStops, walkCoords: assets.walk?.coords)
                     }
                 }
                 .frame(width: RouteMapSnapshot.ghostSize.width,
@@ -408,7 +436,7 @@ struct NightShareCard: View {
                     .frame(width: snap.size.width, height: snap.size.height)
             } else {
                 Color.ink
-                RouteSketch(stops: recap.locatedStops)
+                RouteSketch(stops: recap.locatedStops, walkCoords: assets.walk?.coords)
                     .frame(width: 320, height: 420)
                     .padding(.bottom, 90)
             }
@@ -459,7 +487,7 @@ struct NightShareCard: View {
                     .padding(.top, 6)
 
                 Spacer(minLength: 12)
-                RouteSketch(stops: recap.locatedStops, emphasized: true)
+                RouteSketch(stops: recap.locatedStops, walkCoords: assets.walk?.coords, emphasized: true)
                     .frame(height: 250)
                 Spacer(minLength: 12)
 
@@ -479,7 +507,7 @@ struct NightShareCard: View {
 
     private var routeCard: some View {
         VStack(spacing: 10) {
-            RouteSketch(stops: recap.locatedStops, emphasized: true)
+            RouteSketch(stops: recap.locatedStops, walkCoords: assets.walk?.coords, emphasized: true)
                 .frame(height: 300)
             HStack(spacing: 8) {
                 wordmark(18)
@@ -549,9 +577,12 @@ private struct RouteSketch: View {
     /// When set (map mode), dots land on these exact snapshot points so
     /// they sit on the actual streets.
     var fixedPoints: [CGPoint]? = nil
-    /// The walked street route (projected) — drawn instead of straight
+    /// The walked street route (snapshot space) — drawn instead of straight
     /// stop-to-stop segments when available.
     var fixedPath: [CGPoint]? = nil
+    /// The walked route as raw coordinates — abstract (no-map) variants
+    /// project this themselves so THEY follow the streets too.
+    var walkCoords: [CLLocationCoordinate2D]? = nil
     /// Fatter line + dots for the route-forward variants.
     var emphasized: Bool = false
 
@@ -561,8 +592,11 @@ private struct RouteSketch: View {
             let rect = CGRect(x: inset, y: inset,
                               width: max(geo.size.width - inset * 2, 1),
                               height: max(geo.size.height - inset * 2, 1))
-            let pts = fixedPoints ?? Self.project(stops, into: rect)
-            let line = (fixedPath?.count ?? 0) > 1 ? fixedPath! : pts
+            let placed = Self.layout(stops: stops, walkCoords: walkCoords,
+                                     fixedPoints: fixedPoints, fixedPath: fixedPath,
+                                     rect: rect)
+            let pts = placed.stops
+            let line = placed.line
             let lw: CGFloat = emphasized ? 4.5 : 3
             let dot: CGFloat = emphasized ? 13 : 11
 
@@ -614,16 +648,29 @@ private struct RouteSketch: View {
         }
     }
 
-    static func project(_ stops: [RecapStop], into rect: CGRect) -> [CGPoint] {
-        let coords: [(x: Double, y: Double)] = stops.compactMap { s in
-            guard let la = s.lat, let lo = s.lon else { return nil }
-            return (lo, la)
+    /// Where everything goes. Map mode passes through the snapshot's own
+    /// conversions; abstract mode builds ONE projector over the combined
+    /// bounds of stops + walked path (equirectangular, north up, centered)
+    /// so the street-following line fits and the dots sit exactly on it.
+    static func layout(
+        stops: [RecapStop], walkCoords: [CLLocationCoordinate2D]?,
+        fixedPoints: [CGPoint]?, fixedPath: [CGPoint]?, rect: CGRect
+    ) -> (stops: [CGPoint], line: [CGPoint]) {
+        if let fixedPoints {
+            let line = (fixedPath?.count ?? 0) > 1 ? fixedPath! : fixedPoints
+            return (fixedPoints, line)
         }
-        guard !coords.isEmpty else { return [] }
-        let midLat = (coords.map(\.y).min()! + coords.map(\.y).max()!) / 2
+        let stopCoords: [(Double, Double)] = stops.compactMap { s in
+            guard let la = s.lat, let lo = s.lon else { return nil }
+            return (lo, la)   // (lon, lat)
+        }
+        guard !stopCoords.isEmpty else { return ([], []) }
+        let walk = (walkCoords ?? []).map { ($0.longitude, $0.latitude) }
+        let all = stopCoords + walk
+        let midLat = (all.map(\.1).min()! + all.map(\.1).max()!) / 2
         let lonScale = max(cos(midLat * .pi / 180), 0.01)
-        let xs = coords.map { $0.x * lonScale }
-        let ys = coords.map(\.y)
+        let xs = all.map { $0.0 * lonScale }
+        let ys = all.map(\.1)
         let minX = xs.min()!, maxX = xs.max()!
         let minY = ys.min()!, maxY = ys.max()!
         let dx = max(maxX - minX, 1e-9), dy = max(maxY - minY, 1e-9)
@@ -631,10 +678,13 @@ private struct RouteSketch: View {
         let w = dx * scale, h = dy * scale
         let ox = rect.minX + (rect.width - w) / 2
         let oy = rect.minY + (rect.height - h) / 2
-        return zip(xs, ys).map { x, y in
-            CGPoint(x: ox + CGFloat(x - minX) * scale,
-                    y: oy + CGFloat(maxY - y) * scale)
+        func pt(_ c: (Double, Double)) -> CGPoint {
+            CGPoint(x: ox + CGFloat(c.0 * lonScale - minX) * scale,
+                    y: oy + CGFloat(maxY - c.1) * scale)
         }
+        let stopPts = stopCoords.map(pt)
+        let linePts = walk.count > 1 ? walk.map(pt) : stopPts
+        return (stopPts, linePts)
     }
 }
 
