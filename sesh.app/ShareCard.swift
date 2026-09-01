@@ -14,6 +14,55 @@
 
 import SwiftUI
 import UIKit
+import MapKit
+
+// MARK: - Ghost map snapshot
+
+/// A dark map snapshot of the night's area plus each stop's EXACT pixel
+/// position on it (converted by the snapshotter, so dots sit on the right
+/// streets). Ghosted to half opacity with feathered edges in the card, it
+/// gives the route real geography while the sticker stays transparent.
+struct RouteMapSnapshot {
+    let image: UIImage
+    /// One point per located stop, in the snapshot's coordinate space.
+    let points: [CGPoint]
+
+    /// The card draws the route area at this fixed size (points) — the
+    /// snapshot is requested at exactly this size so points map 1:1.
+    static let size = CGSize(width: 308, height: 240)
+
+    static func load(for stops: [RecapStop]) async -> RouteMapSnapshot? {
+        let coords: [CLLocationCoordinate2D] = stops.compactMap { s in
+            guard let la = s.lat, let lo = s.lon else { return nil }
+            return CLLocationCoordinate2D(latitude: la, longitude: lo)
+        }
+        guard !coords.isEmpty else { return nil }
+
+        let lats = coords.map(\.latitude), lons = coords.map(\.longitude)
+        let midLat = (lats.min()! + lats.max()!) / 2
+        let midLon = (lons.min()! + lons.max()!) / 2
+        // 60% padding around the crawl so no dot hugs an edge; floor keeps
+        // a one-stop night at neighbourhood zoom instead of a blank block.
+        let spanLat = max((lats.max()! - lats.min()!) * 1.6, 0.008)
+        let spanLon = max((lons.max()! - lons.min()!) * 1.6, 0.008)
+
+        let options = MKMapSnapshotter.Options()
+        options.region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: midLat, longitude: midLon),
+            span: MKCoordinateSpan(latitudeDelta: spanLat, longitudeDelta: spanLon)
+        )
+        options.size = size
+        options.traitCollection = UITraitCollection(userInterfaceStyle: .dark)
+        options.pointOfInterestFilter = .excludingAll
+        options.showsBuildings = false
+
+        let snap: MKMapSnapshotter.Snapshot? = await withCheckedContinuation { cont in
+            MKMapSnapshotter(options: options).start { s, _ in cont.resume(returning: s) }
+        }
+        guard let snap else { return nil }
+        return RouteMapSnapshot(image: snap.image, points: coords.map { snap.point(for: $0) })
+    }
+}
 
 // MARK: - The renderable sticker
 
@@ -21,6 +70,9 @@ struct NightShareCard: View {
     let recap: NightRecap
     /// Health numbers for the night window — nil (or zeros) renders "—".
     let vitals: HealthService.Vitals?
+    /// Ghosted street map under the route — nil (offline / no coords)
+    /// falls back to the abstract line on pure transparency.
+    var mapSnap: RouteMapSnapshot? = nil
 
     private var unit: BACUnit { BACUnitSetting.current() }
 
@@ -74,10 +126,32 @@ struct NightShareCard: View {
             }
             .legibleOnAnyStory()
 
-            // The route — dots for stops, whiskey lines between them.
+            // The route — dots for stops, whiskey lines between them,
+            // over a ghosted street map of the area when we have one.
             if recap.hasMap {
-                RouteSketch(stops: recap.locatedStops)
-                    .frame(height: 240)
+                ZStack {
+                    if let mapSnap {
+                        // Half-transparent dark streets, feathered at the
+                        // edges so the sticker melts into the story photo.
+                        Image(uiImage: mapSnap.image)
+                            .resizable()
+                            .frame(width: RouteMapSnapshot.size.width,
+                                   height: RouteMapSnapshot.size.height)
+                            .overlay(Color.ink.opacity(0.18))
+                            .opacity(0.55)
+                            .mask(
+                                RoundedRectangle(cornerRadius: 30)
+                                    .padding(12)
+                                    .blur(radius: 14)
+                            )
+                        RouteSketch(stops: recap.locatedStops,
+                                    fixedPoints: mapSnap.points)
+                    } else {
+                        RouteSketch(stops: recap.locatedStops)
+                    }
+                }
+                .frame(width: RouteMapSnapshot.size.width,
+                       height: RouteMapSnapshot.size.height)
             }
 
             // The numbers.
@@ -137,6 +211,10 @@ private extension View {
 /// joined by a glowing whiskey line — no map tiles, pure transparency.
 private struct RouteSketch: View {
     let stops: [RecapStop]
+    /// When set (ghost-map mode), dots land on these exact snapshot
+    /// points instead of the abstract projection — so they sit on the
+    /// actual streets.
+    var fixedPoints: [CGPoint]? = nil
 
     var body: some View {
         GeometryReader { geo in
@@ -145,7 +223,7 @@ private struct RouteSketch: View {
             let rect = CGRect(x: inset, y: inset,
                               width: max(geo.size.width - inset * 2, 1),
                               height: max(geo.size.height - inset * 2, 1))
-            let pts = Self.project(stops, into: rect)
+            let pts = fixedPoints ?? Self.project(stops, into: rect)
 
             ZStack {
                 if pts.count > 1 {
@@ -224,6 +302,7 @@ struct NightShareSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var vitals: HealthService.Vitals? = nil
+    @State private var mapSnap: RouteMapSnapshot? = nil
     @State private var fileURL: URL? = nil
 
     var body: some View {
@@ -238,7 +317,7 @@ struct NightShareSheet: View {
 
                 // Live preview over a story-ish gradient so the transparency
                 // is obvious ("this floats over your photo").
-                NightShareCard(recap: recap, vitals: vitals)
+                NightShareCard(recap: recap, vitals: vitals, mapSnap: mapSnap)
                     .background(
                         LinearGradient(
                             colors: [Color(red: 0.16, green: 0.13, blue: 0.22),
@@ -294,17 +373,21 @@ struct NightShareSheet: View {
         .preferredColorScheme(.dark)
         .task {
             // Steps + kcal for the night's window (zeros → "—" when Health
-            // isn't connected), then bake the PNG.
-            let v = await HealthService.shared.vitals(from: recap.startedAt, to: recap.endedAt)
-            vitals = v
-            fileURL = Self.renderPNG(recap: recap, vitals: v)
+            // isn't connected) + the ghost street map, then bake the PNG.
+            async let v = HealthService.shared.vitals(from: recap.startedAt, to: recap.endedAt)
+            async let m = RouteMapSnapshot.load(for: recap.locatedStops)
+            let (loadedVitals, loadedMap) = await (v, m)
+            vitals = loadedVitals
+            mapSnap = loadedMap
+            fileURL = Self.renderPNG(recap: recap, vitals: loadedVitals, mapSnap: loadedMap)
         }
     }
 
     /// Bake the sticker into a transparent PNG in tmp; returns its URL.
     @MainActor
-    static func renderPNG(recap: NightRecap, vitals: HealthService.Vitals?) -> URL? {
-        let renderer = ImageRenderer(content: NightShareCard(recap: recap, vitals: vitals))
+    static func renderPNG(recap: NightRecap, vitals: HealthService.Vitals?,
+                          mapSnap: RouteMapSnapshot? = nil) -> URL? {
+        let renderer = ImageRenderer(content: NightShareCard(recap: recap, vitals: vitals, mapSnap: mapSnap))
         renderer.scale = 3
         renderer.isOpaque = false
         guard let ui = renderer.uiImage, let data = ui.pngData() else { return nil }
