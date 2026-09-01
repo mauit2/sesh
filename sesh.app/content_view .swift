@@ -4568,9 +4568,9 @@ enum TopTab: Hashable {
         switch self {
         case .plan:     return "Plan"
         case .live:     return "Live"
-        case .timeline: return "Nightline"
-        case .chats:    return "Chats"
-        case .offers:   return "Deals"
+        case .timeline: return "Home"
+        case .chats:    return "DMs"
+        case .offers:   return "Maps"
         }
     }
 }
@@ -5267,7 +5267,9 @@ private struct SessionView: View {
     /// Which page the user is on. Driven by both the segmented switcher
     /// at the top and the swipe gesture on the underlying TabView.
     /// Defaults to LIVE so the app opens straight into the live experience.
-    @State private var tab: TopTab = .live
+    // Home (the friends timeline) is the launch screen and the leftmost tab —
+    // like Instagram/BeerBuddy, you always open onto the feed, not into LIVE.
+    @State private var tab: TopTab = .timeline
     /// Raised while a finger is on a map. The paged TabView's scroll view was
     /// claiming the horizontal component of a pinch-to-zoom and sliding the
     /// whole screen to the next tab mid-gesture.
@@ -6018,9 +6020,11 @@ private struct SessionView: View {
                     .padding(.bottom, 8)
 
                 TabView(selection: $tab) {
-                    planPage.tag(TopTab.plan)
-                    livePage.tag(TopTab.live)
+                    // Order matches the bottom bar left→right:
+                    // Home · Live · Plan · DMs · Maps.
                     timelinePage.tag(TopTab.timeline)
+                    livePage.tag(TopTab.live)
+                    planPage.tag(TopTab.plan)
                     chatsPage.tag(TopTab.chats)
                     offersPage.tag(TopTab.offers)
                 }
@@ -17191,17 +17195,17 @@ struct BottomTabBar: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            item(.plan,     icon: "gauge.medium",                  label: "PLAN",
-                 badgeCount: eventInvites)
-            item(.live,     icon: "dot.radiowaves.left.and.right", label: "LIVE", pulse: liveActive)
-            item(.timeline, icon: "square.stack.fill",             label: "NIGHTLINE",
+            item(.timeline, icon: "house.fill",                    label: "HOME",
                  pulse: friendsLive,
                  pulseColor: Color(red: 0.51, green: 0.72, blue: 0.48),
                  buzzing: newOnNightline && !reduceMotion,
                  badgeCount: unseenCount)
-            item(.chats,    icon: "bubble.left.and.bubble.right.fill", label: "CHATS",
+            item(.live,     icon: "dot.radiowaves.left.and.right", label: "LIVE", pulse: liveActive)
+            item(.plan,     icon: "gauge.medium",                  label: "PLAN",
+                 badgeCount: eventInvites)
+            item(.chats,    icon: "bubble.left.and.bubble.right.fill", label: "DMS",
                  badgeCount: dmUnread)
-            item(.offers,   icon: "map.fill",                      label: "DEALS")
+            item(.offers,   icon: "map.fill",                      label: "MAPS")
         }
         .padding(.top, 10)
         .padding(.bottom, 4)
