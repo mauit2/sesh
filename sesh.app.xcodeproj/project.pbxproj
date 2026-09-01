@@ -468,6 +468,7 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "sejdel uses your camera to scan beverage barcodes, set your profile photo, and snap pics at your stops during a night out.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "sejdel checks which of your contacts are already here so you can add them as friends. Your contacts never leave your phone — only scrambled codes are sent, and we keep nothing about people who aren't on sejdel.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Sejdel reads your steps, heart rate, and active energy during a sesh to show how much you moved and burned, and your body weight to make your BAC estimate more accurate.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Sejdel saves your night share sticker to your photo library only when you tap Save.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Sejdel saves the calories and number of drinks you log so your night shows up in Apple Health alongside the rest of your day.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "sejdel uses your location only while open to find bars near you and surface their drink specials. We never track you in the background.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
@@ -509,6 +510,7 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "sejdel uses your camera to scan beverage barcodes, set your profile photo, and snap pics at your stops during a night out.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "sejdel checks which of your contacts are already here so you can add them as friends. Your contacts never leave your phone — only scrambled codes are sent, and we keep nothing about people who aren't on sejdel.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Sejdel reads your steps, heart rate, and active energy during a sesh to show how much you moved and burned, and your body weight to make your BAC estimate more accurate.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Sejdel saves your night share sticker to your photo library only when you tap Save.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Sejdel saves the calories and number of drinks you log so your night shows up in Apple Health alongside the rest of your day.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "sejdel uses your location only while open to find bars near you and surface their drink specials. We never track you in the background.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;

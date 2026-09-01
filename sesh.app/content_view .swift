@@ -6488,7 +6488,8 @@ private struct SessionView: View {
                 .presentationBackground(Color.ink)
         }
         .fullScreenCover(item: $openPost) { post in
-            PostDetailView(post: post, feed: feed, history: recapHistory) { openPost = nil }
+            PostDetailView(post: post, feed: feed, history: recapHistory,
+                           canShareStory: post.authorId == profile.id) { openPost = nil }
         }
         .sheet(item: $openProfileUser) { ref in
             ProfileFeedView(user: ref, feed: feed)
@@ -9584,7 +9585,9 @@ private struct ProfileSheet: View {
         .fullScreenCover(item: $selectedPost, onDismiss: {
             Task { myPosts = await feed.userPosts(profile.id) }
         }) { post in
-            PostDetailView(post: post, feed: feed, history: nightHistory) { selectedPost = nil }
+            // The profile grid is always the user's own posts.
+            PostDetailView(post: post, feed: feed, history: nightHistory,
+                           canShareStory: true) { selectedPost = nil }
         }
         .task { myPosts = await feed.userPosts(profile.id) }
     }

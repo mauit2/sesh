@@ -2045,8 +2045,12 @@ struct PostDetailView: View {
     let post: TimelinePost
     var feed: FeedService? = nil
     var history: RecapHistoryStore? = nil
+    /// True when this is the viewer's OWN post — unlocks the story-sticker
+    /// share (you share your night, not someone else's).
+    var canShareStory: Bool = false
     let onClose: () -> Void
 
+    @State private var shareStoryOpen = false
     @State private var gallery: PhotoGallery?
     @State private var liked = false
     @State private var likeCount = 0
@@ -2181,18 +2185,38 @@ struct PostDetailView: View {
                 .padding(20).padding(.top, 56)
             }
 
-            Button { onClose() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.cream.opacity(0.85))
-                    .padding(12).background(Circle().fill(Color.cream.opacity(0.08)))
+            HStack(spacing: 10) {
+                // Story-sticker share — own posts only.
+                if canShareStory {
+                    Button { shareStoryOpen = true } label: {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.whiskey)
+                            .padding(12).background(Circle().fill(Color.whiskey.opacity(0.12)))
+                            .overlay(Circle().strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                    .accessibilityLabel("Share your night")
+                }
+                Button { onClose() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.85))
+                        .padding(12).background(Circle().fill(Color.cream.opacity(0.08)))
+                }
+                .buttonStyle(PressScaleStyle())
             }
             .padding(.top, 16).padding(.trailing, 20)
-            .buttonStyle(PressScaleStyle())
         }
         .preferredColorScheme(.dark)
         .fullScreenCover(item: $gallery) { g in
             GalleryLightbox(urls: g.urls, start: g.start) { gallery = nil }
+        }
+        .sheet(isPresented: $shareStoryOpen) {
+            NightShareSheet(recap: post.recap)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
         }
         .task {
             if !loadedLike { liked = post.likedByMe; likeCount = post.likeCount; loadedLike = true }

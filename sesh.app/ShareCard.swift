@@ -2,36 +2,71 @@
 //  ShareCard.swift
 //  sesh.app
 //
-//  Strava-style story sticker for a night recap: a TRANSPARENT PNG with
-//  the route (stops + connecting lines), and the night's numbers — stops,
-//  units, steps, calories burned, peak BAC, duration. Shared through the
-//  system share sheet, so it lands in Instagram/Snapchat/Facebook stories
-//  (or Photos) and floats over whatever background the user picks there.
+//  Strava-style share for a night recap: SIX swipeable variants —
+//  transparent ghost-map sticker, photo card, full map card, sejdel
+//  branded card, and two extra transparent stickers (route-only and
+//  big-stats). Shared via Instagram (clipboard-paste flow, the only way
+//  Instagram keeps transparency), copy-to-clipboard, save to Photos, or
+//  the system share sheet (Snapchat / WhatsApp / Messages / …).
 //
-//  Every text/dot carries a dark shadow so the sticker stays legible on
-//  light AND dark story backgrounds.
+//  Every transparent element carries a dark halo so it reads on light
+//  AND dark story backgrounds.
 //
 
 import SwiftUI
 import UIKit
 import MapKit
+import UniformTypeIdentifiers
+
+// MARK: - Variants
+
+enum ShareCardStyle: String, CaseIterable, Identifiable {
+    case transparent   // ghost street map + stats (the classic sticker)
+    case photo         // your night photo as the card
+    case map           // full opaque map card
+    case branded       // opaque sejdel-design card
+    case route         // transparent, route only
+    case stats         // transparent, big numbers only
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .transparent: return "TRANSPARENT"
+        case .photo:       return "PHOTO"
+        case .map:         return "MAP"
+        case .branded:     return "SEJDEL"
+        case .route:       return "ROUTE"
+        case .stats:       return "STATS"
+        }
+    }
+
+    /// Opaque cards flatten fine anywhere; transparent ones need the
+    /// clipboard-paste flow to survive Instagram.
+    var isTransparent: Bool {
+        switch self {
+        case .photo, .map, .branded: return false
+        case .transparent, .route, .stats: return true
+        }
+    }
+}
 
 // MARK: - Ghost map snapshot
 
 /// A dark map snapshot of the night's area plus each stop's EXACT pixel
 /// position on it (converted by the snapshotter, so dots sit on the right
-/// streets). Ghosted to half opacity with feathered edges in the card, it
-/// gives the route real geography while the sticker stays transparent.
+/// streets).
 struct RouteMapSnapshot {
     let image: UIImage
-    /// One point per located stop, in the snapshot's coordinate space.
     let points: [CGPoint]
+    let size: CGSize
 
-    /// The card draws the route area at this fixed size (points) — the
-    /// snapshot is requested at exactly this size so points map 1:1.
-    static let size = CGSize(width: 308, height: 240)
+    /// Ghost-strip size used inside the transparent sticker.
+    static let ghostSize = CGSize(width: 308, height: 240)
+    /// Full-card size used by the opaque MAP variant.
+    static let cardSize = CGSize(width: 360, height: 560)
 
-    static func load(for stops: [RecapStop]) async -> RouteMapSnapshot? {
+    static func load(for stops: [RecapStop], size: CGSize) async -> RouteMapSnapshot? {
         let coords: [CLLocationCoordinate2D] = stops.compactMap { s in
             guard let la = s.lat, let lo = s.lon else { return nil }
             return CLLocationCoordinate2D(latitude: la, longitude: lo)
@@ -41,8 +76,8 @@ struct RouteMapSnapshot {
         let lats = coords.map(\.latitude), lons = coords.map(\.longitude)
         let midLat = (lats.min()! + lats.max()!) / 2
         let midLon = (lons.min()! + lons.max()!) / 2
-        // 60% padding around the crawl so no dot hugs an edge; floor keeps
-        // a one-stop night at neighbourhood zoom instead of a blank block.
+        // 60% padding around the crawl; floor keeps one-stop nights at
+        // neighbourhood zoom instead of a blank block.
         let spanLat = max((lats.max()! - lats.min()!) * 1.6, 0.008)
         let spanLon = max((lons.max()! - lons.min()!) * 1.6, 0.008)
 
@@ -60,140 +95,401 @@ struct RouteMapSnapshot {
             MKMapSnapshotter(options: options).start { s, _ in cont.resume(returning: s) }
         }
         guard let snap else { return nil }
-        return RouteMapSnapshot(image: snap.image, points: coords.map { snap.point(for: $0) })
+        return RouteMapSnapshot(image: snap.image,
+                                points: coords.map { snap.point(for: $0) },
+                                size: size)
     }
 }
 
-// MARK: - The renderable sticker
+// MARK: - Assets (loaded once, shared by every variant)
 
-struct NightShareCard: View {
-    let recap: NightRecap
-    /// Health numbers for the night window — nil (or zeros) renders "—".
-    let vitals: HealthService.Vitals?
-    /// Ghosted street map under the route — nil (offline / no coords)
-    /// falls back to the abstract line on pure transparency.
-    var mapSnap: RouteMapSnapshot? = nil
+struct ShareAssets {
+    var vitals: HealthService.Vitals? = nil
+    var ghostMap: RouteMapSnapshot? = nil
+    var cardMap: RouteMapSnapshot? = nil
+    var photo: UIImage? = nil
 
-    private var unit: BACUnit { BACUnitSetting.current() }
-
-    /// Standard drinks (12 g of ethanol each) across the whole night.
-    private var units: Double {
-        recap.stops.flatMap(\.drinks).reduce(0) { $0 + $1.grams } / 12.0
+    static func load(for recap: NightRecap) async -> ShareAssets {
+        async let v = HealthService.shared.vitals(from: recap.startedAt, to: recap.endedAt)
+        async let g = RouteMapSnapshot.load(for: recap.locatedStops, size: RouteMapSnapshot.ghostSize)
+        async let c = RouteMapSnapshot.load(for: recap.locatedStops, size: RouteMapSnapshot.cardSize)
+        async let p = loadFirstPhoto(recap)
+        return await ShareAssets(vitals: v, ghostMap: g, cardMap: c, photo: p)
     }
 
-    private var durationLabel: String {
+    /// First photo of the night — a remote URL on posted recaps, a bare
+    /// filename under Documents/night-recaps on local ones.
+    private static func loadFirstPhoto(_ recap: NightRecap) async -> UIImage? {
+        let names = recap.stops.flatMap(\.photoFilenames)
+        guard let first = names.first else { return nil }
+        if first.hasPrefix("http"), let url = URL(string: first) {
+            if let (data, _) = try? await URLSession.shared.data(from: url) {
+                return UIImage(data: data)
+            }
+            return nil
+        }
+        // Local: filenames live somewhere under Documents/night-recaps.
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let root = docs.appendingPathComponent("night-recaps", isDirectory: true)
+        let target = (first as NSString).lastPathComponent
+        if let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) {
+            for case let url as URL in e where url.lastPathComponent == target {
+                return UIImage(contentsOfFile: url.path)
+            }
+        }
+        return nil
+    }
+}
+
+// MARK: - Formatted numbers, shared by every variant
+
+struct ShareNightStats {
+    let recap: NightRecap
+    let vitals: HealthService.Vitals?
+
+    var unit: BACUnit { BACUnitSetting.current() }
+
+    var stopsLabel: String { "\(recap.locatedStops.count)" }
+
+    var units: Double {
+        recap.stops.flatMap(\.drinks).reduce(0) { $0 + $1.grams } / 12.0
+    }
+    var unitsLabel: String { String(format: "%.1f", units) }
+
+    var bacLabel: String { "\(unit.formatted(recap.peakBAC))\(unit.symbol)" }
+
+    var hours: Double {
+        max(recap.endedAt.timeIntervalSince(recap.startedAt) / 3600, 0)
+    }
+
+    /// Drinks per hour — the night's pace, Strava-style. A ≥10-minute
+    /// floor keeps a two-minute test from reading "30/hr".
+    var paceLabel: String {
+        guard recap.totalDrinks > 0 else { return "—" }
+        return String(format: "%.1f/hr", Double(recap.totalDrinks) / max(hours, 1.0 / 6.0))
+    }
+
+    var durationLabel: String {
         let mins = max(0, Int(recap.endedAt.timeIntervalSince(recap.startedAt) / 60))
         return mins >= 60 ? "\(mins / 60)h \(mins % 60)m" : "\(mins)m"
     }
 
-    private var dateLabel: String {
-        let f = DateFormatter()
-        f.dateFormat = "EEE d MMM"
-        return f.string(from: recap.startedAt).uppercased()
+    var crawledLabel: String {
+        guard recap.crawlMeters > 0 else { return "—" }
+        return recap.crawlMeters >= 1000
+            ? String(format: "%.1f km", recap.crawlMeters / 1000)
+            : "\(Int(recap.crawlMeters.rounded())) m"
     }
 
-    private var stepsLabel: String {
+    var stepsLabel: String {
         guard let s = vitals?.steps, s > 0 else { return "—" }
         let f = NumberFormatter(); f.numberStyle = .decimal
         return f.string(from: NSNumber(value: Int(s))) ?? "\(Int(s))"
     }
 
-    private var kcalLabel: String {
+    var kcalLabel: String {
         guard let k = vitals?.activeKcal, k > 0 else { return "—" }
         return "\(Int(k.rounded()))"
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // Brand + date
-            HStack(alignment: .firstTextBaseline) {
-                HStack(spacing: 7) {
-                    Circle()
-                        .fill(Color.whiskey)
-                        .frame(width: 8, height: 8)
-                        .shadow(color: Color.whiskey.opacity(0.9), radius: 5)
-                    Text("sejdel")
-                        .font(.system(size: 24, weight: .black, design: .rounded))
-                        .italic()
-                        .tracking(-0.8)
-                        .foregroundStyle(Color.cream)
-                }
-                Spacer()
-                Text(dateLabel)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .tracking(1.8)
-                    .foregroundStyle(Color.cream.opacity(0.85))
-            }
-            .legibleOnAnyStory()
+    var dateLabel: String {
+        let f = DateFormatter()
+        f.dateFormat = "EEE d MMM"
+        return f.string(from: recap.startedAt).uppercased()
+    }
+}
 
-            // The route — dots for stops, whiskey lines between them,
-            // over a ghosted street map of the area when we have one.
-            if recap.hasMap {
-                ZStack {
-                    if let mapSnap {
-                        // Half-transparent dark streets, feathered at the
-                        // edges so the sticker melts into the story photo.
-                        Image(uiImage: mapSnap.image)
-                            .resizable()
-                            .frame(width: RouteMapSnapshot.size.width,
-                                   height: RouteMapSnapshot.size.height)
-                            .overlay(Color.ink.opacity(0.18))
-                            .opacity(0.55)
-                            .mask(
-                                RoundedRectangle(cornerRadius: 30)
-                                    .padding(12)
-                                    .blur(radius: 14)
-                            )
-                        RouteSketch(stops: recap.locatedStops,
-                                    fixedPoints: mapSnap.points)
-                    } else {
-                        RouteSketch(stops: recap.locatedStops)
-                    }
-                }
-                .frame(width: RouteMapSnapshot.size.width,
-                       height: RouteMapSnapshot.size.height)
-            }
+// MARK: - The renderable card, all variants
 
-            // The numbers.
-            VStack(spacing: 14) {
-                HStack(spacing: 0) {
-                    shareStat("\(recap.locatedStops.count)",
-                              recap.locatedStops.count == 1 ? "STOP" : "STOPS")
-                    shareStat(String(format: "%.1f", units), "UNITS")
-                    shareStat("\(unit.formatted(recap.peakBAC))\(unit.symbol)", "PEAK BAC",
-                              tint: .whiskey)
-                }
-                HStack(spacing: 0) {
-                    shareStat(stepsLabel, "STEPS")
-                    shareStat(kcalLabel, "KCAL BURNED")
-                    shareStat(durationLabel, "ON THE TOWN")
-                }
-            }
-            .legibleOnAnyStory()
+struct NightShareCard: View {
+    let recap: NightRecap
+    var style: ShareCardStyle = .transparent
+    var assets: ShareAssets = ShareAssets()
+
+    private var stats: ShareNightStats { ShareNightStats(recap: recap, vitals: assets.vitals) }
+
+    /// Canvas size per variant (the renderer uses exactly this).
+    static func size(for style: ShareCardStyle, recap: NightRecap) -> CGSize {
+        switch style {
+        case .transparent: return CGSize(width: 360, height: recap.hasMap ? 470 : 240)
+        case .photo, .map, .branded: return CGSize(width: 360, height: 560)
+        case .route: return CGSize(width: 360, height: 400)
+        case .stats: return CGSize(width: 360, height: 430)
         }
-        .padding(26)
-        .frame(width: 360, height: recap.hasMap ? 470 : 230, alignment: .top)
     }
 
-    private func shareStat(_ value: String, _ label: String, tint: Color = .cream) -> some View {
+    var body: some View {
+        let size = Self.size(for: style, recap: recap)
+        Group {
+            switch style {
+            case .transparent: transparentCard
+            case .photo:       photoCard
+            case .map:         mapCard
+            case .branded:     brandedCard
+            case .route:       routeCard
+            case .stats:       statsCard
+            }
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
+    // ---- shared pieces -------------------------------------------------
+
+    private func wordmark(_ fontSize: CGFloat = 24) -> some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(Color.whiskey)
+                .frame(width: fontSize * 0.33, height: fontSize * 0.33)
+                .shadow(color: Color.whiskey.opacity(0.9), radius: 5)
+            Text("sejdel")
+                .font(.system(size: fontSize, weight: .black, design: .rounded))
+                .italic()
+                .tracking(-0.8)
+                .foregroundStyle(Color.cream)
+        }
+    }
+
+    private func shareStat(_ value: String, _ label: String,
+                           tint: Color = .cream, valueSize: CGFloat = 19) -> some View {
         VStack(spacing: 3) {
             Text(value)
-                .font(.system(size: 22, weight: .heavy, design: .rounded))
+                .font(.system(size: valueSize, weight: .heavy, design: .rounded))
                 .monospacedDigit()
                 .tracking(-0.5)
                 .foregroundStyle(tint)
                 .lineLimit(1)
-                .minimumScaleFactor(0.6)
+                .minimumScaleFactor(0.55)
             Text(label)
-                .font(.system(size: 8, weight: .black, design: .monospaced))
-                .tracking(1.6)
+                .font(.system(size: 7, weight: .black, design: .monospaced))
+                .tracking(1.4)
                 .foregroundStyle(Color.cream.opacity(0.75))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity)
     }
+
+    /// The full 2×4 numbers block: stops · units · pace · peak BAC over
+    /// steps · kcal · crawled · duration.
+    private var statGrid: some View {
+        VStack(spacing: 13) {
+            HStack(spacing: 0) {
+                shareStat(stats.stopsLabel, "STOPS")
+                shareStat(stats.unitsLabel, "UNITS")
+                shareStat(stats.paceLabel, "PACE")
+                shareStat(stats.bacLabel, "PEAK BAC", tint: .whiskey)
+            }
+            HStack(spacing: 0) {
+                shareStat(stats.stepsLabel, "STEPS")
+                shareStat(stats.kcalLabel, "KCAL")
+                shareStat(stats.crawledLabel, "CRAWLED")
+                shareStat(stats.durationLabel, "TIME OUT")
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline) {
+            wordmark()
+            Spacer()
+            Text(stats.dateLabel)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .tracking(1.8)
+                .foregroundStyle(Color.cream.opacity(0.85))
+        }
+    }
+
+    // ---- 1. TRANSPARENT (ghost map) ------------------------------------
+
+    private var transparentCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header.legibleOnAnyStory()
+            if recap.hasMap {
+                ZStack {
+                    if let snap = assets.ghostMap {
+                        Image(uiImage: snap.image)
+                            .resizable()
+                            .frame(width: snap.size.width, height: snap.size.height)
+                            .overlay(Color.ink.opacity(0.18))
+                            .opacity(0.55)
+                            .mask(RoundedRectangle(cornerRadius: 30).padding(12).blur(radius: 14))
+                        RouteSketch(stops: recap.locatedStops, fixedPoints: snap.points)
+                    } else {
+                        RouteSketch(stops: recap.locatedStops)
+                    }
+                }
+                .frame(width: RouteMapSnapshot.ghostSize.width,
+                       height: RouteMapSnapshot.ghostSize.height)
+            }
+            statGrid.legibleOnAnyStory()
+        }
+        .padding(26)
+    }
+
+    // ---- 2. PHOTO ------------------------------------------------------
+
+    private var photoCard: some View {
+        ZStack(alignment: .bottom) {
+            if let photo = assets.photo {
+                Image(uiImage: photo)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 360, height: 560)
+                    .clipped()
+            } else {
+                // No photo on this night — moody fallback so the card
+                // still works.
+                LinearGradient(colors: [Color(red: 0.16, green: 0.11, blue: 0.07), Color.ink],
+                               startPoint: .top, endPoint: .bottom)
+            }
+            LinearGradient(colors: [.clear, Color.ink.opacity(0.55), Color.ink.opacity(0.92)],
+                           startPoint: .center, endPoint: .bottom)
+            VStack(spacing: 16) {
+                statGrid
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 22)
+        }
+        .overlay(alignment: .topLeading) {
+            header.padding(20)
+        }
+        .frame(width: 360, height: 560)
+        .clipShape(RoundedRectangle(cornerRadius: 24))
+    }
+
+    // ---- 3. MAP (opaque full-bleed) ------------------------------------
+
+    private var mapCard: some View {
+        ZStack(alignment: .bottom) {
+            if let snap = assets.cardMap {
+                Image(uiImage: snap.image)
+                    .resizable()
+                    .frame(width: snap.size.width, height: snap.size.height)
+                RouteSketch(stops: recap.locatedStops, fixedPoints: snap.points)
+                    .frame(width: snap.size.width, height: snap.size.height)
+            } else {
+                Color.ink
+                RouteSketch(stops: recap.locatedStops)
+                    .frame(width: 320, height: 420)
+                    .padding(.bottom, 90)
+            }
+            LinearGradient(colors: [.clear, Color.ink.opacity(0.6), Color.ink.opacity(0.95)],
+                           startPoint: .center, endPoint: .bottom)
+                .frame(height: 260)
+            statGrid
+                .padding(.horizontal, 20)
+                .padding(.bottom, 22)
+        }
+        .overlay(alignment: .topLeading) {
+            LinearGradient(colors: [Color.ink.opacity(0.75), .clear],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: 90)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .topLeading) {
+            header.padding(20)
+        }
+        .frame(width: 360, height: 560)
+        .clipShape(RoundedRectangle(cornerRadius: 24))
+    }
+
+    // ---- 4. SEJDEL (opaque branded) ------------------------------------
+
+    private var brandedCard: some View {
+        ZStack {
+            Color.ink
+            // The app's whiskey atmosphere, baked flat.
+            RadialGradient(colors: [Color.whiskey.opacity(0.28), .clear],
+                           center: .init(x: 0.85, y: 0.02), startRadius: 10, endRadius: 380)
+            RadialGradient(colors: [Color.bronze.opacity(0.16), .clear],
+                           center: .init(x: 0.0, y: 0.1), startRadius: 10, endRadius: 320)
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline) {
+                    wordmark(34)
+                    Spacer()
+                    Text(stats.dateLabel)
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(1.8)
+                        .foregroundStyle(Color.bronze)
+                }
+                Text("THE SESH RECAP")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(3)
+                    .foregroundStyle(Color.bronze)
+                    .padding(.top, 6)
+
+                Spacer(minLength: 12)
+                RouteSketch(stops: recap.locatedStops, emphasized: true)
+                    .frame(height: 250)
+                Spacer(minLength: 12)
+
+                statGrid
+            }
+            .padding(24)
+        }
+        .frame(width: 360, height: 560)
+        .clipShape(RoundedRectangle(cornerRadius: 24))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24)
+                .strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    // ---- 5. ROUTE (transparent, route only) ----------------------------
+
+    private var routeCard: some View {
+        VStack(spacing: 10) {
+            RouteSketch(stops: recap.locatedStops, emphasized: true)
+                .frame(height: 300)
+            HStack(spacing: 8) {
+                wordmark(18)
+                Spacer()
+                Text("\(stats.stopsLabel) STOPS · \(stats.unitsLabel) UNITS · \(stats.bacLabel)")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(1.2)
+                    .foregroundStyle(Color.cream.opacity(0.9))
+            }
+            .legibleOnAnyStory()
+        }
+        .padding(26)
+    }
+
+    // ---- 6. STATS (transparent, big numbers) ---------------------------
+
+    private var statsCard: some View {
+        VStack(spacing: 18) {
+            Text(stats.dateLabel)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .tracking(2.4)
+                .foregroundStyle(Color.cream.opacity(0.85))
+            VStack(spacing: 2) {
+                Text(stats.bacLabel)
+                    .font(.system(size: 54, weight: .black, design: .rounded))
+                    .monospacedDigit()
+                    .tracking(-1.5)
+                    .foregroundStyle(Color.whiskey)
+                Text("PEAK BAC")
+                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.cream.opacity(0.75))
+            }
+            HStack(spacing: 0) {
+                shareStat(stats.unitsLabel, "UNITS", valueSize: 24)
+                shareStat(stats.paceLabel, "PACE", valueSize: 24)
+            }
+            HStack(spacing: 0) {
+                shareStat(stats.stopsLabel, "STOPS", valueSize: 24)
+                shareStat(stats.durationLabel, "TIME OUT", valueSize: 24)
+            }
+            wordmark(18)
+        }
+        .padding(26)
+        .legibleOnAnyStory()
+    }
 }
 
-/// Dark halo behind content so the transparent sticker reads on any story.
+/// Dark halo behind content so transparent stickers read on any story.
 private struct LegibleOnAnyStory: ViewModifier {
     func body(content: Content) -> some View {
         content
@@ -208,41 +504,47 @@ private extension View {
 // MARK: - Route sketch
 
 /// The night's stops projected into the frame (north up, aspect-correct),
-/// joined by a glowing whiskey line — no map tiles, pure transparency.
+/// joined by a glowing whiskey line.
 private struct RouteSketch: View {
     let stops: [RecapStop]
-    /// When set (ghost-map mode), dots land on these exact snapshot
-    /// points instead of the abstract projection — so they sit on the
-    /// actual streets.
+    /// When set (map mode), dots land on these exact snapshot points so
+    /// they sit on the actual streets.
     var fixedPoints: [CGPoint]? = nil
+    /// Fatter line + dots for the route-forward variants.
+    var emphasized: Bool = false
 
     var body: some View {
         GeometryReader { geo in
-            // Inset so dots and name labels never clip at the edges.
             let inset: CGFloat = 34
             let rect = CGRect(x: inset, y: inset,
                               width: max(geo.size.width - inset * 2, 1),
                               height: max(geo.size.height - inset * 2, 1))
             let pts = fixedPoints ?? Self.project(stops, into: rect)
+            let lw: CGFloat = emphasized ? 4.5 : 3
+            let dot: CGFloat = emphasized ? 13 : 11
 
             ZStack {
                 if pts.count > 1 {
-                    // The crawl line — glow pass then crisp pass.
                     routePath(pts)
                         .stroke(Color.whiskey.opacity(0.55),
-                                style: StrokeStyle(lineWidth: 7, lineCap: .round, lineJoin: .round))
+                                style: StrokeStyle(lineWidth: lw + 4, lineCap: .round, lineJoin: .round))
                         .blur(radius: 4)
                     routePath(pts)
                         .stroke(Color.whiskey,
-                                style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                                style: StrokeStyle(lineWidth: lw, lineCap: .round, lineJoin: .round))
                         .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
                 }
-
                 ForEach(Array(zip(stops.indices, pts)), id: \.0) { i, p in
                     let stop = stops[i]
+                    // Neighbouring stops (afters at the same bar, etc.)
+                    // would stack their labels — flip every second close
+                    // one below its dot instead.
+                    let crowded = pts.prefix(i).contains {
+                        hypot($0.x - p.x, $0.y - p.y) < 70
+                    }
                     Circle()
                         .fill(stop.isPeak ? Color.whiskey : Color.cream)
-                        .frame(width: 11, height: 11)
+                        .frame(width: dot, height: dot)
                         .overlay(Circle().strokeBorder(Color.ink.opacity(0.85), lineWidth: 2))
                         .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
                         .position(p)
@@ -252,7 +554,10 @@ private struct RouteSketch: View {
                         .foregroundStyle(Color.cream)
                         .shadow(color: .black.opacity(0.75), radius: 2, y: 1)
                         .frame(maxWidth: 110)
-                        .position(x: p.x, y: max(10, p.y - 16))
+                        .position(x: p.x,
+                                  y: crowded
+                                    ? min(geo.size.height - 8, p.y + 18)
+                                    : max(10, p.y - 16))
                 }
             }
         }
@@ -266,8 +571,6 @@ private struct RouteSketch: View {
         }
     }
 
-    /// Equirectangular projection (lat/lon → points), aspect-preserving and
-    /// centered. A single stop lands in the middle.
     static func project(_ stops: [RecapStop], into rect: CGRect) -> [CGPoint] {
         let coords: [(x: Double, y: Double)] = stops.compactMap { s in
             guard let la = s.lat, let lo = s.lon else { return nil }
@@ -287,77 +590,88 @@ private struct RouteSketch: View {
         let oy = rect.minY + (rect.height - h) / 2
         return zip(xs, ys).map { x, y in
             CGPoint(x: ox + CGFloat(x - minX) * scale,
-                    y: oy + CGFloat(maxY - y) * scale)   // flip: north up
+                    y: oy + CGFloat(maxY - y) * scale)
         }
     }
 }
 
-// MARK: - Share sheet
+// MARK: - Share sheet (carousel + Strava-style actions)
 
-/// Preview + share. Renders the sticker to a transparent PNG on disk and
-/// hands the file to the system share sheet — Instagram, Snapchat and
-/// Facebook all pick it up as a story-able image.
 struct NightShareSheet: View {
     let recap: NightRecap
     @Environment(\.dismiss) private var dismiss
 
-    @State private var vitals: HealthService.Vitals? = nil
-    @State private var mapSnap: RouteMapSnapshot? = nil
-    @State private var fileURL: URL? = nil
+    @State private var style: ShareCardStyle = .transparent
+    @State private var assets = ShareAssets()
+    @State private var assetsLoaded = false
+    @State private var rendered: [ShareCardStyle: URL] = [:]
+    @State private var toast: String? = nil
 
     var body: some View {
         ZStack {
             AtmosphereBackground(accent: .whiskey)
-            VStack(spacing: 18) {
+            VStack(spacing: 12) {
                 Text("SHARE YOUR NIGHT")
                     .font(.system(size: 12, weight: .black, design: .monospaced))
                     .tracking(2.4)
                     .foregroundStyle(Color.bronze)
-                    .padding(.top, 22)
+                    .padding(.top, 20)
 
-                // Live preview over a story-ish gradient so the transparency
-                // is obvious ("this floats over your photo").
-                NightShareCard(recap: recap, vitals: vitals, mapSnap: mapSnap)
-                    .background(
-                        LinearGradient(
-                            colors: [Color(red: 0.16, green: 0.13, blue: 0.22),
-                                     Color(red: 0.35, green: 0.18, blue: 0.14)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 22))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 22)
-                            .strokeBorder(Color.cream.opacity(0.12), lineWidth: 1)
-                    )
-                    .scaleEffect(0.92)
-
-                Text("A transparent sticker — drop it over any photo in your story.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.cream.opacity(0.55))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
-
-                if let fileURL {
-                    ShareLink(item: fileURL) {
-                        HStack(spacing: 7) {
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.system(size: 13, weight: .bold))
-                            Text("SHARE STICKER")
-                                .font(.system(size: 13, weight: .black, design: .monospaced))
-                                .tracking(1.8)
-                        }
-                        .foregroundStyle(Color.ink)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(Capsule().fill(Color.whiskey))
-                        .shadow(color: Color.whiskey.opacity(0.45), radius: 14, y: 5)
+                // Variant carousel — swipe between the six looks.
+                TabView(selection: $style) {
+                    ForEach(ShareCardStyle.allCases) { s in
+                        cardPreview(s)
+                            .tag(s)
                     }
-                    .buttonStyle(PressScaleStyle())
-                    .padding(.horizontal, 26)
-                } else {
-                    ProgressView().tint(Color.whiskey).padding(.vertical, 14)
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .frame(height: 452)
+
+                // Style name + page dots.
+                Text(style.label)
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(2.4)
+                    .foregroundStyle(Color.whiskey)
+                HStack(spacing: 6) {
+                    ForEach(ShareCardStyle.allCases) { s in
+                        Circle()
+                            .fill(s == style ? Color.whiskey : Color.cream.opacity(0.25))
+                            .frame(width: 6, height: 6)
+                    }
+                }
+
+                if let toast {
+                    Text(toast)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.75))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 36)
+                        .transition(.opacity)
+                } else {
+                    Text(style.isTransparent
+                         ? "Transparent sticker — use INSTAGRAM or COPY, then paste it onto your story."
+                         : "A full card — share it anywhere as a photo.")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 36)
+                }
+
+                // Actions — Strava's row, honestly implemented.
+                HStack(spacing: 22) {
+                    actionButton("camera.fill", "INSTAGRAM") { shareToInstagram() }
+                    actionButton("doc.on.doc.fill", "COPY") { copySticker() }
+                    actionButton("arrow.down.to.line", "SAVE") { saveToPhotos() }
+                    if let url = currentURL() {
+                        ShareLink(item: url) {
+                            actionLabel("square.and.arrow.up", "MORE")
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    } else {
+                        actionLabel("square.and.arrow.up", "MORE").opacity(0.4)
+                    }
+                }
+                .padding(.top, 2)
 
                 Button { dismiss() } label: {
                     Text("DONE")
@@ -367,32 +681,128 @@ struct NightShareSheet: View {
                         .padding(.vertical, 8)
                 }
                 .buttonStyle(PressScaleStyle())
-                Spacer(minLength: 8)
+                Spacer(minLength: 4)
             }
         }
         .preferredColorScheme(.dark)
+        .animation(.easeInOut(duration: 0.2), value: toast)
         .task {
-            // Steps + kcal for the night's window (zeros → "—" when Health
-            // isn't connected) + the ghost street map, then bake the PNG.
-            async let v = HealthService.shared.vitals(from: recap.startedAt, to: recap.endedAt)
-            async let m = RouteMapSnapshot.load(for: recap.locatedStops)
-            let (loadedVitals, loadedMap) = await (v, m)
-            vitals = loadedVitals
-            mapSnap = loadedMap
-            fileURL = Self.renderPNG(recap: recap, vitals: loadedVitals, mapSnap: loadedMap)
+            assets = await ShareAssets.load(for: recap)
+            assetsLoaded = true
+            _ = ensureRendered(style)
+        }
+        .onChange(of: style) { _, s in
+            toast = nil
+            _ = ensureRendered(s)
         }
     }
 
-    /// Bake the sticker into a transparent PNG in tmp; returns its URL.
+    // ---- carousel page -------------------------------------------------
+
+    @ViewBuilder
+    private func cardPreview(_ s: ShareCardStyle) -> some View {
+        let size = NightShareCard.size(for: s, recap: recap)
+        let scale = min(1, 440 / size.height, 330 / size.width)
+        ZStack {
+            NightShareCard(recap: recap, style: s, assets: assets)
+                .background(
+                    // Transparent variants preview over a story-ish photo
+                    // gradient so the transparency is obvious.
+                    s.isTransparent
+                    ? AnyView(LinearGradient(
+                        colors: [Color(red: 0.16, green: 0.13, blue: 0.22),
+                                 Color(red: 0.35, green: 0.18, blue: 0.14)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing))
+                    : AnyView(Color.clear)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 22))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22)
+                        .strokeBorder(Color.cream.opacity(0.12), lineWidth: 1)
+                )
+                .scaleEffect(scale)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // ---- actions -------------------------------------------------------
+
+    private func actionButton(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { actionLabel(icon, label) }
+            .buttonStyle(PressScaleStyle())
+    }
+
+    private func actionLabel(_ icon: String, _ label: String) -> some View {
+        VStack(spacing: 6) {
+            ZStack {
+                Circle().fill(Color.cream.opacity(0.07)).frame(width: 52, height: 52)
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(Color.whiskey)
+            }
+            .overlay(Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+            Text(label)
+                .font(.system(size: 8, weight: .black, design: .monospaced))
+                .tracking(1.2)
+                .foregroundStyle(Color.cream.opacity(0.7))
+        }
+    }
+
+    private func currentURL() -> URL? { rendered[style] }
+
+    private func pngData() -> Data? {
+        guard let url = ensureRendered(style) else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
+    /// Instagram keeps transparency ONLY via paste — so: sticker onto the
+    /// clipboard, then straight into the story camera.
+    private func shareToInstagram() {
+        guard let data = pngData() else { return }
+        UIPasteboard.general.setData(data, forPasteboardType: UTType.png.identifier)
+        let ig = URL(string: "instagram://story-camera")!
+        UIApplication.shared.open(ig) { ok in
+            toast = ok
+                ? "Sticker copied — tap the sticker tool (or long-press) and PASTE."
+                : "Sticker copied — open Instagram and paste it onto your story."
+        }
+    }
+
+    private func copySticker() {
+        guard let data = pngData() else { return }
+        UIPasteboard.general.setData(data, forPasteboardType: UTType.png.identifier)
+        toast = "Copied — paste it in any story or chat."
+    }
+
+    private func saveToPhotos() {
+        guard let data = pngData(), let img = UIImage(data: data) else { return }
+        UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
+        toast = "Saved to Photos."
+    }
+
+    // ---- rendering -----------------------------------------------------
+
+    @discardableResult
+    private func ensureRendered(_ s: ShareCardStyle) -> URL? {
+        if let u = rendered[s] { return u }
+        guard assetsLoaded else { return nil }
+        let u = Self.renderPNG(recap: recap, style: s, assets: assets)
+        rendered[s] = u
+        return u
+    }
+
+    /// Bake one variant into a PNG in tmp (transparent canvas — opaque
+    /// variants simply fill theirs edge to edge).
     @MainActor
-    static func renderPNG(recap: NightRecap, vitals: HealthService.Vitals?,
-                          mapSnap: RouteMapSnapshot? = nil) -> URL? {
-        let renderer = ImageRenderer(content: NightShareCard(recap: recap, vitals: vitals, mapSnap: mapSnap))
+    static func renderPNG(recap: NightRecap, style: ShareCardStyle, assets: ShareAssets) -> URL? {
+        let renderer = ImageRenderer(
+            content: NightShareCard(recap: recap, style: style, assets: assets)
+        )
         renderer.scale = 3
         renderer.isOpaque = false
         guard let ui = renderer.uiImage, let data = ui.pngData() else { return nil }
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sejdel-night-\(recap.id.uuidString.prefix(8)).png")
+            .appendingPathComponent("sejdel-night-\(style.rawValue)-\(recap.id.uuidString.prefix(8)).png")
         do { try data.write(to: url) } catch { return nil }
         return url
     }
