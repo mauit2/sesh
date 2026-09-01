@@ -696,9 +696,34 @@ private struct RouteSketch: View {
 
 // MARK: - Share sheet (carousel + Strava-style actions)
 
+/// Snapchat's ghost, hand-traced as a bezier: dome head, flared arms,
+/// three-scallop skirt. Coordinates live in a 0–100 square.
+struct SnapGhost: Shape {
+    func path(in rect: CGRect) -> Path {
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + x / 100 * rect.width,
+                    y: rect.minY + y / 100 * rect.height)
+        }
+        var path = Path()
+        path.move(to: p(50, 6))
+        path.addCurve(to: p(26, 32), control1: p(36, 6), control2: p(26, 17))
+        path.addLine(to: p(26, 52))
+        path.addCurve(to: p(10, 70), control1: p(26, 61), control2: p(17, 66))
+        path.addCurve(to: p(21, 78), control1: p(12, 75), control2: p(16, 78))
+        path.addCurve(to: p(38, 82), control1: p(27, 78), control2: p(32, 85))
+        path.addCurve(to: p(62, 82), control1: p(43, 79), control2: p(57, 79))
+        path.addCurve(to: p(79, 78), control1: p(68, 85), control2: p(73, 78))
+        path.addCurve(to: p(90, 70), control1: p(84, 78), control2: p(88, 75))
+        path.addCurve(to: p(74, 52), control1: p(83, 66), control2: p(74, 61))
+        path.addLine(to: p(74, 32))
+        path.addCurve(to: p(50, 6), control1: p(74, 17), control2: p(64, 6))
+        path.closeSubpath()
+        return path
+    }
+}
+
 struct NightShareSheet: View {
     let recap: NightRecap
-    @Environment(\.dismiss) private var dismiss
 
     /// Meta app id — unlocks Instagram's native story-share sheet, where
     /// stickers arrive pre-pinned WITH their transparency. Not a secret
@@ -765,10 +790,17 @@ struct NightShareSheet: View {
                         .padding(.horizontal, 36)
                 }
 
-                // Actions — Strava's row, honestly implemented.
+                // Actions — Strava's row, honestly implemented. Instagram
+                // and Snapchat wear their own colors; utilities stay house.
                 HStack(spacing: 14) {
-                    actionButton("camera.fill", "INSTAGRAM") { shareToInstagram() }
-                    actionButton("bolt.horizontal.fill", "SNAPCHAT") { shareToSnapchat() }
+                    Button { shareToInstagram() } label: {
+                        brandLabel("INSTAGRAM") { instagramBadge }
+                    }
+                    .buttonStyle(PressScaleStyle())
+                    Button { shareToSnapchat() } label: {
+                        brandLabel("SNAPCHAT") { snapchatBadge }
+                    }
+                    .buttonStyle(PressScaleStyle())
                     actionButton("doc.on.doc.fill", "COPY") { copySticker() }
                     actionButton("arrow.down.to.line", "SAVE") { saveToPhotos() }
                     if let url = currentURL() {
@@ -781,16 +813,7 @@ struct NightShareSheet: View {
                     }
                 }
                 .padding(.top, 2)
-
-                Button { dismiss() } label: {
-                    Text("DONE")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .tracking(1.8)
-                        .foregroundStyle(Color.cream.opacity(0.65))
-                        .padding(.vertical, 8)
-                }
-                .buttonStyle(PressScaleStyle())
-                Spacer(minLength: 4)
+                Spacer(minLength: 12)
             }
         }
         .preferredColorScheme(.dark)
@@ -844,6 +867,54 @@ struct NightShareSheet: View {
     private func actionButton(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { actionLabel(icon, label) }
             .buttonStyle(PressScaleStyle())
+    }
+
+    private func brandLabel(_ label: String, @ViewBuilder badge: () -> some View) -> some View {
+        VStack(spacing: 6) {
+            badge()
+                .frame(width: 52, height: 52)
+                .clipShape(Circle())
+                .overlay(Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+            Text(label)
+                .font(.system(size: 8, weight: .black, design: .monospaced))
+                .tracking(1.2)
+                .foregroundStyle(Color.cream.opacity(0.7))
+        }
+    }
+
+    /// Instagram's gradient badge with the camera glyph, drawn in code —
+    /// no trademarked asset files ride in the bundle.
+    private var instagramBadge: some View {
+        ZStack {
+            LinearGradient(colors: [
+                Color(red: 0.99, green: 0.85, blue: 0.46),   // #FEDA75
+                Color(red: 0.98, green: 0.49, blue: 0.12),   // #FA7E1E
+                Color(red: 0.84, green: 0.16, blue: 0.46),   // #D62976
+                Color(red: 0.59, green: 0.18, blue: 0.75),   // #962FBF
+                Color(red: 0.31, green: 0.36, blue: 0.84),   // #4F5BD5
+            ], startPoint: .bottomLeading, endPoint: .topTrailing)
+            RoundedRectangle(cornerRadius: 6.5)
+                .strokeBorder(Color.white, lineWidth: 1.8)
+                .frame(width: 22, height: 22)
+            Circle()
+                .strokeBorder(Color.white, lineWidth: 1.8)
+                .frame(width: 10, height: 10)
+            Circle()
+                .fill(Color.white)
+                .frame(width: 2.6, height: 2.6)
+                .offset(x: 6.4, y: -6.4)
+        }
+    }
+
+    /// Snapchat's white ghost on its yellow — same idea, pure vectors.
+    private var snapchatBadge: some View {
+        ZStack {
+            Color(red: 1.0, green: 0.988, blue: 0.0)         // #FFFC00
+            SnapGhost()
+                .fill(Color.white)
+                .overlay(SnapGhost().stroke(Color.black.opacity(0.85), lineWidth: 1.1))
+                .frame(width: 27, height: 27)
+        }
     }
 
     private func actionLabel(_ icon: String, _ label: String) -> some View {
