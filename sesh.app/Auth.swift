@@ -433,6 +433,10 @@ final class AuthService: ObservableObject {
 // MARK: - Loading screen
 
 struct LoadingView: View {
+    /// No spinner — the whiskey dot breathes instead, so the splash reads
+    /// alive without a system progress wheel over the wordmark.
+    @State private var pulse = false
+
     var body: some View {
         ZStack {
             AtmosphereBackground(accent: .whiskey)
@@ -443,18 +447,18 @@ struct LoadingView: View {
                 Circle()
                     .fill(Color.whiskey)
                     .frame(width: 10, height: 10)
-                    .shadow(color: Color.whiskey.opacity(0.9), radius: 12)
+                    .scaleEffect(pulse ? 1.2 : 0.85)
+                    .shadow(color: Color.whiskey.opacity(0.9), radius: pulse ? 16 : 8)
+                    .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: pulse)
                 Text("sejdel")
                     .font(.system(size: 40, weight: .black, design: .rounded))
                     .italic()
                     .tracking(-1.5)
                     .foregroundStyle(Color.cream)
-                ProgressView()
-                    .tint(Color.whiskey)
-                    .padding(.top, 6)
             }
         }
         .preferredColorScheme(.dark)
+        .onAppear { pulse = true }
     }
 }
 
