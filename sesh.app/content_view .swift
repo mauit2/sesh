@@ -364,6 +364,10 @@ struct PostComment: Identifiable, Decodable {
 final class FeedService: ObservableObject {
     @Published private(set) var posts: [TimelinePost] = []
     @Published var loading = false
+    /// True once the FIRST refresh has completed — before that the feed
+    /// shows skeleton posts, never the "no posts yet" empty state (which
+    /// would otherwise flash for a frame at cold start).
+    @Published private(set) var loadedOnce = false
     private var started = false
 
     private let dec: JSONDecoder = {
@@ -476,7 +480,7 @@ final class FeedService: ObservableObject {
     func refresh() async {
         guard supabase.auth.currentUser != nil else { posts = []; return }
         loading = true
-        defer { loading = false }
+        defer { loading = false; loadedOnce = true }
         struct P: Encodable { let p_limit: Int }
         do {
             let rows: [FeedRow] = try await supabase
@@ -6026,7 +6030,9 @@ private struct SessionView: View {
                 // (NavigationStack paints over the shared one), so the
                 // sliver above it must match or the top reads green while
                 // the page reads amber.
-                accent: (tab == .live || tab == .chats) ? Color.whiskey : status.color,
+                // PROFILE joins the whiskey list — its page paints a whiskey
+                // atmosphere, so a green sliver above it read as a seam.
+                accent: (tab == .live || tab == .chats || tab == .profile) ? Color.whiskey : status.color,
                 // Carbonation while the night is actually on.
                 bubbles: tab == .live && liveStartTime != nil
             )
@@ -8916,13 +8922,12 @@ private struct ProfileSheet: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        SectionLabel("Profile")
-                        Text(profile.name)
-                            .font(.system(size: 36, weight: .heavy, design: .rounded))
-                            .tracking(-1.2)
-                            .foregroundStyle(Color.cream)
-                    }
+                    // (No "PROFILE" eyebrow — the top bar already titles the
+                    // page; the name alone opens it.)
+                    Text(profile.name)
+                        .font(.system(size: 36, weight: .heavy, design: .rounded))
+                        .tracking(-1.2)
+                        .foregroundStyle(Color.cream)
 
                     mySeshsSection
 

@@ -1511,7 +1511,15 @@ struct TimelineFeedView: View {
                 }
 
                 if feed.posts.isEmpty {
-                    emptyState
+                    // Until the first load completes, sketch the layout with
+                    // ghost posts (Instagram-style) instead of a spinner —
+                    // the user sees what's coming before it does. The empty
+                    // state only ever shows once we KNOW the feed is empty.
+                    if feed.loadedOnce && !feed.loading {
+                        emptyState
+                    } else {
+                        ghostPosts
+                    }
                 } else {
                     ForEach(feed.posts) { post in
                         PostCard(post: post,
@@ -1576,6 +1584,52 @@ struct TimelineFeedView: View {
         // nights show up. Stable post/photo ids keep this from resetting the
         // carousels, and downsampled images keep it cheap.
         .onAppear { feed.start(); Task { await feed.refresh() } }
+    }
+
+    /// Skeleton feed shown during the first load — two ghost post cards
+    /// (avatar, name bars, photo canvas, action row) pulsing gently.
+    @State private var ghostPulse = false
+    private var ghostPosts: some View {
+        VStack(spacing: 16) {
+            ForEach(0..<2, id: \.self) { _ in
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 10) {
+                        Circle()
+                            .fill(Color.cream.opacity(0.10))
+                            .frame(width: 40, height: 40)
+                        VStack(alignment: .leading, spacing: 6) {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.cream.opacity(0.10))
+                                .frame(width: 130, height: 11)
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.cream.opacity(0.06))
+                                .frame(width: 90, height: 9)
+                        }
+                        Spacer()
+                    }
+                    .padding(14)
+                    Rectangle()
+                        .fill(Color.cream.opacity(0.06))
+                        .frame(height: 300)
+                    HStack(spacing: 16) {
+                        Circle().fill(Color.cream.opacity(0.10)).frame(width: 22, height: 22)
+                        Circle().fill(Color.cream.opacity(0.07)).frame(width: 22, height: 22)
+                        Spacer()
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.cream.opacity(0.06))
+                            .frame(width: 70, height: 9)
+                    }
+                    .padding(14)
+                }
+                .background(RoundedRectangle(cornerRadius: 18).fill(Color.cream.opacity(0.035)))
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .padding(.horizontal, 16)
+            }
+        }
+        .opacity(ghostPulse ? 0.55 : 1)
+        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: ghostPulse)
+        .onAppear { ghostPulse = true }
+        .accessibilityLabel("Loading feed")
     }
 
     private var emptyState: some View {
