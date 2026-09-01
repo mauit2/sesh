@@ -699,6 +699,11 @@ struct NightShareSheet: View {
     let recap: NightRecap
     @Environment(\.dismiss) private var dismiss
 
+    /// Meta app id — unlocks Instagram's native story-share sheet, where
+    /// stickers arrive pre-pinned WITH their transparency. Not a secret
+    /// (it rides in the URL of every share).
+    private static let metaAppID = "1830062801691865"
+
     @State private var style: ShareCardStyle = .transparent
     @State private var assets = ShareAssets()
     @State private var assetsLoaded = false
@@ -747,8 +752,8 @@ struct NightShareSheet: View {
                         .transition(.opacity)
                 } else {
                     Text(style.isTransparent
-                         ? "Transparent sticker — use INSTAGRAM or COPY, then paste it onto your story."
-                         : "A full card — share it anywhere as a photo.")
+                         ? "Transparent sticker — INSTAGRAM pins it straight onto your story; COPY to paste it anywhere else."
+                         : "A full card — INSTAGRAM makes it your story background, or share it anywhere.")
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.5))
                         .multilineTextAlignment(.center)
@@ -858,16 +863,37 @@ struct NightShareSheet: View {
         return try? Data(contentsOf: url)
     }
 
-    /// Instagram keeps transparency ONLY via paste — so: sticker onto the
-    /// clipboard, then straight into the story camera.
+    /// Instagram's NATIVE story share (Meta app id): transparent variants
+    /// arrive as a pre-pinned sticker over an ink gradient; opaque cards
+    /// become the story background. Falls back to copy-and-paste when
+    /// Instagram isn't installed.
     private func shareToInstagram() {
         guard let data = pngData() else { return }
-        UIPasteboard.general.setData(data, forPasteboardType: UTType.png.identifier)
-        let ig = URL(string: "instagram://story-camera")!
+        var item: [String: Any]
+        if style.isTransparent {
+            item = [
+                "com.instagram.sharedSticker.stickerImage": data,
+                "com.instagram.sharedSticker.backgroundTopColor": "#0B0A08",
+                "com.instagram.sharedSticker.backgroundBottomColor": "#1D1610",
+            ]
+        } else {
+            item = ["com.instagram.sharedSticker.backgroundImage": data]
+        }
+        UIPasteboard.general.setItems([item], options: [
+            .expirationDate: Date().addingTimeInterval(60 * 5)
+        ])
+        let ig = URL(string: "instagram-stories://share?source_application=\(Self.metaAppID)")!
         UIApplication.shared.open(ig) { ok in
-            toast = ok
-                ? "Sticker copied — tap the sticker tool (or long-press) and PASTE."
-                : "Sticker copied — open Instagram and paste it onto your story."
+            if ok {
+                toast = style.isTransparent
+                    ? "Opened Instagram — your sticker is on the story, transparency intact."
+                    : "Opened Instagram — your card is the story background."
+            } else {
+                // No Instagram on this device — leave the sticker on the
+                // clipboard for a manual paste anywhere.
+                UIPasteboard.general.setData(data, forPasteboardType: UTType.png.identifier)
+                toast = "Instagram isn't installed — sticker copied to the clipboard instead."
+            }
         }
     }
 
