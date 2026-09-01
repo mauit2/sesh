@@ -1484,6 +1484,9 @@ struct TimelineFeedView: View {
     /// HOME's empty feed offers "add friends" straight away — routes to the
     /// friends sheet (search by @username, or match from contacts).
     var onAddFriends: (() -> Void)? = nil
+    /// Injected card rendered between the stories row and the posts —
+    /// HOME uses it for the tonight strip so it scrolls with the feed.
+    var header: AnyView? = nil
     @StateObject private var moderation = ModerationService()
 
     var body: some View {
@@ -1502,6 +1505,10 @@ struct TimelineFeedView: View {
                     storyProof: storyProof,
                     onOpen: onOpenPulse
                 )
+
+                if let header {
+                    header.padding(.horizontal, 16)
+                }
 
                 if feed.posts.isEmpty {
                     emptyState
@@ -1534,6 +1541,27 @@ struct TimelineFeedView: View {
                                     }
                                 } label: { Label("Block \(post.authorName)", systemImage: "hand.raised") }
                             }
+                    }
+                    // The feed ends with an invitation to grow it — more
+                    // friends means more nights landing here.
+                    if let onAddFriends {
+                        Button(action: onAddFriends) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "person.badge.plus")
+                                    .font(.system(size: 13, weight: .bold))
+                                Text("ADD MORE FRIENDS")
+                                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                                    .tracking(1.5)
+                            }
+                            .foregroundStyle(Color.whiskey)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 11)
+                            .background(Capsule().fill(Color.whiskey.opacity(0.10)))
+                            .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.45), lineWidth: 1))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 10)
                     }
                 }
             }

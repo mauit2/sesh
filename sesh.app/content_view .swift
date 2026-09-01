@@ -4588,7 +4588,9 @@ private struct ModeTopBar: View {
     /// banner is always one tap away here.
     let inboxCount: Int
     let onTapInbox: () -> Void
-    let onTapProfile: () -> Void
+    /// DMs live top-right, Instagram-style (profile moved to the bottom bar).
+    let dmUnread: Int
+    let onTapDMs: () -> Void
     let onTapFriends: () -> Void
     /// LIVE-tab status, surfaced in the top bar so the in-page header can go
     /// away and the content moves up. `liveStarted == nil` ⇒ not started yet.
@@ -4678,18 +4680,33 @@ private struct ModeTopBar: View {
             }
             .buttonStyle(PressScaleStyle())
             .accessibilityLabel(inboxCount > 0 ? "Notifications, \(inboxCount) pending" : "Notifications")
-            Button(action: onTapProfile) {
-                AvatarView(
-                    urlString: profile.avatarURL,
-                    initial: String(profile.name.prefix(1)).uppercased(),
-                    size: 32
-                )
-                .overlay(
-                    Circle()
-                        .strokeBorder(Color.cream.opacity(0.18), lineWidth: 1)
-                )
+            // DMs — top-right, where the avatar used to live. The avatar
+            // now marks the PROFILE tab in the bottom bar instead.
+            Button(action: onTapDMs) {
+                ZStack(alignment: .topTrailing) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.cream.opacity(0.05))
+                            .frame(width: 32, height: 32)
+                        Image(systemName: "bubble.left.and.bubble.right.fill")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(dmUnread > 0 ? Color.whiskey : Color.cream.opacity(0.8))
+                    }
+                    .overlay(Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+                    if dmUnread > 0 {
+                        Text(dmUnread > 9 ? "9+" : "\(dmUnread)")
+                            .font(.system(size: 9, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.ink)
+                            .padding(.horizontal, 4)
+                            .frame(minWidth: 15, minHeight: 15)
+                            .background(Capsule().fill(Color.whiskey))
+                            .overlay(Capsule().strokeBorder(Color.ink, lineWidth: 1.5))
+                            .offset(x: 5, y: -5)
+                    }
+                }
             }
             .buttonStyle(PressScaleStyle())
+            .accessibilityLabel(dmUnread > 0 ? "Messages, \(dmUnread) unread" : "Messages")
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: inboxCount > 0)
     }
@@ -5271,6 +5288,10 @@ private struct SessionView: View {
     // Home (the friends timeline) is the launch screen and the leftmost tab —
     // like Instagram/BeerBuddy, you always open onto the feed, not into LIVE.
     @State private var tab: TopTab = .timeline
+    /// DMs is an overlay (top-right button), not a swipe page — the paged
+    /// TabView keeps showing the last real page underneath while it's up,
+    /// so leaving DMs returns exactly where you were.
+    @State private var lastNonChatsTab: TopTab = .timeline
     /// Raised while a finger is on a map. The paged TabView's scroll view was
     /// claiming the horizontal component of a pinch-to-zoom and sliding the
     /// whole screen to the next tab mid-gesture.
@@ -6020,24 +6041,39 @@ private struct SessionView: View {
                     .padding(.top, 4)
                     .padding(.bottom, 8)
 
-                TabView(selection: $tab) {
-                    // Order matches the bottom bar left→right:
-                    // Home · Live · Plan · DMs · Maps · Profile.
-                    timelinePage.tag(TopTab.timeline)
-                    livePage.tag(TopTab.live)
-                    planPage.tag(TopTab.plan)
-                    chatsPage.tag(TopTab.chats)
-                    offersPage.tag(TopTab.offers)
-                    profilePage.tag(TopTab.profile)
+                ZStack {
+                    TabView(selection: Binding(
+                        get: { tab == .chats ? lastNonChatsTab : tab },
+                        set: { tab = $0 }
+                    )) {
+                        // Order matches the bottom bar left→right:
+                        // Home · Live · Events · Maps · Profile.
+                        // DMs is NOT a swipe page — it overlays from the
+                        // top-right button, Instagram-style.
+                        timelinePage.tag(TopTab.timeline)
+                        livePage.tag(TopTab.live)
+                        planPage.tag(TopTab.plan)
+                        offersPage.tag(TopTab.offers)
+                        profilePage.tag(TopTab.profile)
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    // A paged TabView is a scroll view underneath, so it competes
+                    // with a map's own pan/pinch recognisers. Stand down while the
+                    // map says a gesture is in flight.
+                    .scrollDisabled(mapPagingLocked)
+                    // Smooth horizontal swipe between modes; matches the
+                    // bottom bar's spring so tapping a tab and dragging the
+                    // page feel like the same animation.
+                    .animation(.spring(response: 0.4, dampingFraction: 0.82), value: tab)
+
+                    // DMs overlay — slides in over whatever page is showing.
+                    // ChatsView paints its own atmosphere, so it fully covers.
+                    if tab == .chats {
+                        chatsPage
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                            .zIndex(1)
+                    }
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                // A paged TabView is a scroll view underneath, so it competes
-                // with a map's own pan/pinch recognisers. Stand down while the
-                // map says a gesture is in flight.
-                .scrollDisabled(mapPagingLocked)
-                // Smooth horizontal swipe between modes; matches the
-                // bottom bar's spring so tapping a tab and dragging the
-                // page feel like the same animation.
                 .animation(.spring(response: 0.4, dampingFraction: 0.82), value: tab)
 
             }
@@ -6547,13 +6583,16 @@ private struct SessionView: View {
                      newOnNightline: liveStories.hasUnseenNightline,
                      unseenCount: liveStories.unseenNightlineCount,
                      eventInvites: eventsService.pendingCount(for: profile.id),
-                     dmUnread: dm.totalUnread)
+                     avatarURL: profile.avatarURL,
+                     avatarInitial: String(profile.name.prefix(1)).uppercased())
             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) {
                 tabBarHeight = $0
             }
     }
 
     private func handleTabChange(_ newTab: TopTab) {
+        // Remember the page under the DMs overlay so closing it returns there.
+        if newTab != .chats { lastNonChatsTab = newTab }
         // Switching sections drops the keyboard (leaving a chat mid-typing).
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
@@ -6622,9 +6661,9 @@ private struct SessionView: View {
             liveActive: liveActive,
             inboxCount: invites.pending.count + friends.incoming.count + friends.unseenActivityCount,
             onTapInbox: { invitesSheetOpen = true; friends.markActivitySeen() },
-            // Profile lives in the far-right tab now — the chip jumps there.
-            onTapProfile: {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = .profile }
+            dmUnread: dm.totalUnread,
+            onTapDMs: {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = .chats }
             },
             onTapFriends: { friendsSheetOpen = true },
             liveStarted: liveStartTime,
@@ -6753,8 +6792,8 @@ private struct SessionView: View {
         )
     }
 
-    /// TIMELINE — HOME: the friends feed, topped by a condensed tonight
-    /// strip (live numbers + add-drink) that routes into LIVE.
+    /// TIMELINE — HOME: the friends feed. The tonight strip rides inside
+    /// the feed (under the stories row) as an injected header.
     private var timelinePage: some View {
         VStack(spacing: 0) {
             TabHintChip(
@@ -6764,37 +6803,41 @@ private struct SessionView: View {
             .padding(.horizontal, 20)
             .padding(.top, 6)
 
-            homeLiveStrip
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
-
             timelineFeed
         }
     }
 
-    /// Tonight-at-a-glance on HOME. One row: status + stats on the left,
-    /// the add-drink action on the right. The whole strip lands on LIVE —
-    /// Home stays condensed, LIVE stays the full experience.
+    /// Tonight-at-a-glance on HOME, sitting under the stories row. Whole
+    /// card is whiskey; BAC is always shown (0.00 included — with a nudge
+    /// to order the first drink). Tapping anywhere lands on LIVE.
     private var homeLiveStrip: some View {
         let running = live.isActive || liveGroup.isActive
+        let unit = BACUnitSetting.current()
+        let bacValue = currentStoryBAC() ?? 0
         return Button {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = .live }
         } label: {
             HStack(spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 7) {
-                        if running { SonarDot(size: 6, color: .whiskey) }
-                        // "YOUR NIGHT" — the stories strip right below is
-                        // already headed "TONIGHT"; doubling it read wrong.
+                        if running { SonarDot(size: 6, color: .ink) }
                         Text(running ? "LIVE NOW" : "YOUR NIGHT")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .tracking(2)
-                            .foregroundStyle(Color.bronze)
+                            .foregroundStyle(Color.ink.opacity(0.55))
+                    }
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text(unit.formatted(bacValue))
+                            .font(.system(size: 26, weight: .heavy, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(Color.ink)
+                        Text(unit.symbol)
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.ink.opacity(0.55))
                     }
                     Text(homeStripLine)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.cream)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.ink.opacity(0.75))
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                 }
@@ -6806,40 +6849,29 @@ private struct SessionView: View {
                         .font(.system(size: 11, weight: .black, design: .monospaced))
                         .tracking(1.2)
                 }
-                .foregroundStyle(Color.ink)
+                .foregroundStyle(Color.whiskey)
                 .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(Capsule().fill(Color.whiskey))
-                .shadow(color: Color.whiskey.opacity(0.45), radius: 10, y: 2)
+                .padding(.vertical, 10)
+                .background(Capsule().fill(Color.ink))
+                .shadow(color: Color.ink.opacity(0.35), radius: 8, y: 2)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(Color.cream.opacity(0.05))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18)
-                            .strokeBorder(Color.cream.opacity(0.10), lineWidth: 1)
-                    )
-            )
+            .background(RoundedRectangle(cornerRadius: 18).fill(Color.whiskey))
+            .shadow(color: Color.whiskey.opacity(0.35), radius: 14, y: 4)
             .contentShape(RoundedRectangle(cornerRadius: 18))
         }
         .buttonStyle(PressScaleStyle())
         .accessibilityLabel(running ? "Tonight's live summary — open LIVE" : "Add a drink — open LIVE")
     }
 
-    /// One-line summary for the HOME strip. Live: BAC (group-aware, via the
-    /// same math the story stamp uses) · drinks · group size · elapsed.
-    /// Idle: the invitation to start.
+    /// One-line summary under the strip's BAC figure. Live: drinks · group
+    /// size · elapsed. Idle: the nudge to get the night moving.
     private var homeStripLine: String {
         guard live.isActive || liveGroup.isActive else {
-            return "Log a drink to go live"
+            return "It's empty in here — order your first drink"
         }
         var parts: [String] = []
-        if let b = currentStoryBAC() {
-            let unit = BACUnitSetting.current()
-            parts.append("\(unit.formatted(b))\(unit.symbol)")
-        }
         let count = liveGroup.isActive
             ? liveGroup.totalDrinkCount(for: profile.id)
             : live.drinks.count
@@ -6877,7 +6909,8 @@ private struct SessionView: View {
                 )
             },
             onOpenPulse: { openPulse = $0 },
-            onAddFriends: { friendsSheetOpen = true }
+            onAddFriends: { friendsSheetOpen = true },
+            header: AnyView(homeLiveStrip)
         )
     }
 
@@ -17294,8 +17327,10 @@ struct BottomTabBar: View {
     var unseenCount: Int = 0
     /// Event invites awaiting the user's RSVP — numbered ring on PLAN.
     var eventInvites: Int = 0
-    /// Unread DMs — numbered ring on CHATS.
-    var dmUnread: Int = 0
+    /// The user's avatar marks the PROFILE tab (their photo, or their
+    /// initial when no photo is set).
+    var avatarURL: String? = nil
+    var avatarInitial: String = "?"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -17308,10 +17343,8 @@ struct BottomTabBar: View {
             item(.live,     icon: "dot.radiowaves.left.and.right", label: "LIVE", pulse: liveActive)
             item(.plan,     icon: "calendar",                      label: "EVENTS",
                  badgeCount: eventInvites)
-            item(.chats,    icon: "bubble.left.and.bubble.right.fill", label: "DMS",
-                 badgeCount: dmUnread)
             item(.offers,   icon: "map.fill",                      label: "MAPS")
-            item(.profile,  icon: "person.crop.circle.fill",       label: "PROFILE")
+            profileItem
         }
         .padding(.top, 10)
         .padding(.bottom, 4)
@@ -17319,6 +17352,34 @@ struct BottomTabBar: View {
         .overlay(alignment: .top) {
             Rectangle().fill(Color.cream.opacity(0.08)).frame(height: 1)
         }
+    }
+
+    /// PROFILE — the one item whose icon is the user themself: their
+    /// avatar photo (or initial), ringed whiskey when selected.
+    private var profileItem: some View {
+        let on = tab == .profile
+        return Button {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = .profile }
+        } label: {
+            VStack(spacing: 4) {
+                AvatarView(urlString: avatarURL, initial: avatarInitial, size: 23)
+                    .overlay(
+                        Circle().strokeBorder(
+                            on ? Color.whiskey : Color.cream.opacity(0.3),
+                            lineWidth: on ? 2 : 1
+                        )
+                    )
+                Text("PROFILE")
+                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                    .tracking(0.8)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .foregroundStyle(on ? Color.whiskey : Color.cream.opacity(0.5))
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
