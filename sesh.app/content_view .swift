@@ -2131,6 +2131,11 @@ struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.35), value: auth.state)
+        // A restored session can already be .signedIn on first render, in
+        // which case onChange below never fires — so also refresh on appear.
+        .task(id: auth.state) {
+            if case .signedIn = auth.state { await admin.refresh() }
+        }
         .onChange(of: auth.state) { _, new in
             switch new {
             case .signedIn:

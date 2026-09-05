@@ -22,6 +22,7 @@ enum GameContent {
         case (.pandora, true):     return pandoraSpicy
         case (.mostLikely, false): return mostLikelyFree
         case (.mostLikely, true):  return mostLikelySpicy
+        case (.speakeasy, _):      return []   // hidden-role game, no prompt pool
         }
     }
 

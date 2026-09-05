@@ -160,7 +160,7 @@ final class AfterDarkStore: ObservableObject {
 // MARK: - Game kinds + configs
 
 enum GameKind: String, CaseIterable, Identifiable, Hashable {
-    case imposter, never, pandora, mostLikely
+    case imposter, never, pandora, mostLikely, speakeasy
     var id: String { rawValue }
 
     var title: String {
@@ -169,6 +169,7 @@ enum GameKind: String, CaseIterable, Identifiable, Hashable {
         case .never:      return "NEVER HAVE I EVER"
         case .pandora:    return "PANDORA'S BOX"
         case .mostLikely: return "MOST LIKELY TO"
+        case .speakeasy:  return "SPEAKEASY"
         }
     }
     var icon: String {
@@ -177,6 +178,7 @@ enum GameKind: String, CaseIterable, Identifiable, Hashable {
         case .never:      return "hand.raised.fill"
         case .pandora:    return "shippingbox.fill"
         case .mostLikely: return "person.2.wave.2.fill"
+        case .speakeasy:  return "door.left.hand.closed"
         }
     }
     var accent: Color {
@@ -185,6 +187,7 @@ enum GameKind: String, CaseIterable, Identifiable, Hashable {
         case .never:      return Color.whiskey
         case .pandora:    return Color(red: 0.62, green: 0.42, blue: 0.95)
         case .mostLikely: return Color(red: 0.24, green: 0.76, blue: 0.62)
+        case .speakeasy:  return Color(red: 0.72, green: 0.24, blue: 0.40)
         }
     }
     var accentDeep: Color {
@@ -193,6 +196,7 @@ enum GameKind: String, CaseIterable, Identifiable, Hashable {
         case .never:      return Color(red: 0.62, green: 0.32, blue: 0.06)
         case .pandora:    return Color(red: 0.28, green: 0.14, blue: 0.62)
         case .mostLikely: return Color(red: 0.06, green: 0.38, blue: 0.36)
+        case .speakeasy:  return Color(red: 0.36, green: 0.08, blue: 0.20)
         }
     }
     var gradient: LinearGradient {
@@ -212,9 +216,18 @@ enum GameKind: String, CaseIterable, Identifiable, Hashable {
         case .mostLikely: return ["Read the card. Count to three.",
                                   "Everyone points at someone.",
                                   "Most fingers drinks."]
+        case .speakeasy:  return ["Hidden roles: Patrons vs Bootleggers — and The Boss.",
+                                  "Host picks a Barkeep. Everyone votes. Cards get played.",
+                                  "Patrons: 5 Happy Hours or cut off The Boss. Bootleggers: 6 Rackets or make The Boss Barkeep."]
         }
     }
-    var startLabel: String { self == .imposter ? "DEAL THE WORDS" : "START" }
+    var startLabel: String {
+        switch self {
+        case .imposter:  return "DEAL THE WORDS"
+        case .speakeasy: return "DEAL THE ROLES"
+        default:         return "START"
+        }
+    }
 }
 
 struct CardGameConfig: Hashable {
@@ -558,6 +571,9 @@ struct GamesHubView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = AfterDarkStore()
     @State private var paywallOpen = false
+    /// A Speakeasy round running in the live sesh — lets non-subscribers
+    /// join a table a subscriber opened.
+    @State private var speakeasyLive: SEState? = nil
 
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
@@ -588,11 +604,14 @@ struct GamesHubView: View {
                         .padding(.top, 4)
 
                         LazyVGrid(columns: columns, spacing: 12) {
-                            ForEach(GameKind.allCases) { kind in
+                            ForEach(GameKind.allCases.filter { $0 != .speakeasy }) { kind in
                                 NavigationLink(value: kind) { tile(kind) }
                                     .buttonStyle(PressScaleStyle())
                             }
                         }
+
+                        NavigationLink(value: GameKind.speakeasy) { speakeasyTile }
+                            .buttonStyle(PressScaleStyle())
 
                         spicyBanner
                     }
@@ -601,7 +620,14 @@ struct GamesHubView: View {
                 }
             }
             .navigationDestination(for: GameKind.self) { kind in
-                GameIntroView(kind: kind, group: group, paywallOpen: $paywallOpen)
+                if kind == .speakeasy {
+                    SpeakeasyIntroView(group: group, paywallOpen: $paywallOpen)
+                } else {
+                    GameIntroView(kind: kind, group: group, paywallOpen: $paywallOpen)
+                }
+            }
+            .navigationDestination(for: SpeakeasyTicket.self) { ticket in
+                SpeakeasyGameView(session: ticket.session, group: group)
             }
             .navigationDestination(for: CardGameConfig.self) { config in
                 PromptGameView(config: config, paywallOpen: $paywallOpen)
@@ -615,6 +641,16 @@ struct GamesHubView: View {
         .environmentObject(store)
         .onAppear { store.adminOverride = isAdmin }
         .onChange(of: isAdmin) { _, v in store.adminOverride = v }
+        .task {
+            while !Task.isCancelled {
+                if let sid = group.session?.id, group.isActive {
+                    speakeasyLive = await SpeakeasyAPI.current(sid)
+                } else {
+                    speakeasyLive = nil
+                }
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+        }
         .sheet(isPresented: $paywallOpen) {
             AfterDarkPaywall()
                 .environmentObject(store)
@@ -645,6 +681,46 @@ struct GamesHubView: View {
         .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
             .strokeBorder(Color.cream.opacity(0.18), lineWidth: 1))
         .shadow(color: kind.accent.opacity(0.35), radius: 22, y: 12)
+    }
+
+    /// Full-width tile: locked for free users unless a subscriber in their
+    /// live sesh has a round running, in which case it says so.
+    private var speakeasyTile: some View {
+        let kind = GameKind.speakeasy
+        let live = speakeasyLive.map { !$0.isOver } ?? false
+        let locked = !store.hasSpicy && !live
+        return ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 24, style: .continuous).fill(kind.gradient)
+            RadialGradient(colors: [Color.cream.opacity(0.25), .clear],
+                           center: .init(x: 0.9, y: 0.1), startRadius: 4, endRadius: 220)
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            HStack(spacing: 16) {
+                Image(systemName: kind.icon)
+                    .font(.system(size: 54, weight: .bold))
+                    .foregroundStyle(Color.cream.opacity(0.92))
+                    .frame(width: 70)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(kind.title)
+                        .font(.system(size: 16, weight: .black, design: .monospaced)).tracking(1.8)
+                        .foregroundStyle(Color.cream)
+                    Text(live ? "ROUND IN PROGRESS — JOIN" : (locked ? "AFTER DARK · 5–10 PLAYERS" : "5–10 PLAYERS · GROUP SESH"))
+                        .font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1.4)
+                        .foregroundStyle(Color.cream.opacity(0.75))
+                }
+                Spacer()
+                Image(systemName: live ? "dot.radiowaves.left.and.right" : (locked ? "lock.fill" : "chevron.right"))
+                    .font(.system(size: 18, weight: .black))
+                    .foregroundStyle(Color.cream)
+            }
+            .padding(18)
+        }
+        .frame(height: 112)
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
+            .strokeBorder(Color.cream.opacity(0.18), lineWidth: 1))
+        // Locked: greyed out until After Dark (or a live table) unlocks it.
+        .grayscale(locked ? 1 : 0)
+        .opacity(locked ? 0.7 : 1)
+        .shadow(color: locked ? .clear : kind.accent.opacity(0.35), radius: 22, y: 12)
     }
 
     private var spicyBanner: some View {
@@ -1490,6 +1566,28 @@ struct AfterDarkPaywall: View {
                             .foregroundStyle(Color.cream.opacity(0.75))
                     }
                     .padding(.top, 6)
+
+                    HStack(spacing: 14) {
+                        Image(systemName: GameKind.speakeasy.icon)
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundStyle(Color.cream)
+                            .frame(width: 44)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("SPEAKEASY · AFTER DARK ONLY")
+                                .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(1.4)
+                                .foregroundStyle(Color.cream.opacity(0.85))
+                            Text("Hidden roles for the whole table. You host, your sesh plays free.")
+                                .font(.system(size: 15, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(GameKind.speakeasy.gradient))
+                    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.cream.opacity(0.2), lineWidth: 1))
+                    .shadow(color: GameKind.speakeasy.accent.opacity(0.3), radius: 18, y: 10)
 
                     LazyVGrid(columns: columns, spacing: 10) {
                         perk(.imposter, "Words you can't say out loud.")
