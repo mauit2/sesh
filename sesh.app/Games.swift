@@ -40,7 +40,45 @@ final class AfterDarkStore: ObservableObject {
     @Published var adminOverride = false
 
     /// The one gate every deck picker reads.
-    var hasSpicy: Bool { isSubscribed || adminOverride }
+    var hasSpicy: Bool { isSubscribed || (adminOverride && !Self.previewMode) }
+
+    /// DEBUG-only: launched with `-afterdark-preview`, the paywall renders
+    /// the App Store Connect prices without a store and ignores the admin
+    /// override — used to capture review screenshots on the simulator.
+    static var previewMode: Bool {
+        #if DEBUG
+        return CommandLine.arguments.contains("-afterdark-preview")
+        #else
+        return false
+        #endif
+    }
+
+    struct Offer: Identifiable {
+        let id: String
+        let displayPrice: String
+        /// Yearly only: the price divided by 52, in the buyer's own currency.
+        /// Shown instead of a "save x%" claim, which varies wildly between
+        /// storefronts once Apple equalizes prices.
+        let weeklyEquivalent: String?
+        let product: Product?
+        var isYearly: Bool { id.hasSuffix("yearly") }
+    }
+
+    /// What the paywall lists: live products, or the preview stand-ins.
+    var offers: [Offer] {
+        if !products.isEmpty {
+            return products.map { p in
+                Offer(id: p.id, displayPrice: p.displayPrice,
+                      weeklyEquivalent: p.id.hasSuffix("yearly") ? (p.price / 52).formatted(p.priceFormatStyle) : nil,
+                      product: p)
+            }
+        }
+        if Self.previewMode {
+            return [Offer(id: "sejdel.afterdark.weekly", displayPrice: "9,00 kr", weeklyEquivalent: nil, product: nil),
+                    Offer(id: "sejdel.afterdark.yearly", displayPrice: "399,00 kr", weeklyEquivalent: "7,67 kr", product: nil)]
+        }
+        return []
+    }
 
     private var updatesTask: Task<Void, Never>? = nil
 
@@ -1258,15 +1296,6 @@ struct AfterDarkPaywall: View {
 
     private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
 
-    private var yearlySaving: Int? {
-        guard let w = store.products.first(where: { $0.id.hasSuffix("weekly") }),
-              let y = store.products.first(where: { $0.id.hasSuffix("yearly") }) else { return nil }
-        let full = w.price * 52
-        guard full > 0 else { return nil }
-        let pct = (1 - (y.price / full)) * 100
-        return Int(NSDecimalNumber(decimal: pct).doubleValue.rounded())
-    }
-
     var body: some View {
         ZStack {
             Color.ink.ignoresSafeArea()
@@ -1315,7 +1344,7 @@ struct AfterDarkPaywall: View {
                             .font(.system(size: 18, weight: .black, design: .rounded))
                             .foregroundStyle(Color.whiskey)
                             .padding(.top, 6)
-                    } else if store.products.isEmpty, let err = store.loadError {
+                    } else if store.offers.isEmpty, let err = store.loadError {
                         Text(err)
                             .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .foregroundStyle(Color.cream.opacity(0.6))
@@ -1323,7 +1352,7 @@ struct AfterDarkPaywall: View {
                             .padding(.horizontal, 16)
                     } else {
                         VStack(spacing: 10) {
-                            ForEach(store.products, id: \.id) { product in priceButton(product) }
+                            ForEach(store.offers) { offer in priceButton(offer) }
                         }
                     }
 
@@ -1384,15 +1413,17 @@ struct AfterDarkPaywall: View {
             .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1))
     }
 
-    private func priceButton(_ product: Product) -> some View {
-        let yearly = product.id.hasSuffix("yearly")
-        return Button { Task { await store.purchase(product) } } label: {
+    private func priceButton(_ offer: AfterDarkStore.Offer) -> some View {
+        let yearly = offer.isYearly
+        return Button {
+            if let product = offer.product { Task { await store.purchase(product) } }
+        } label: {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(yearly ? "YEARLY" : "WEEKLY")
                         .font(.system(size: 13, weight: .black, design: .monospaced)).tracking(2.2)
-                    if yearly, let s = yearlySaving, s > 0 {
-                        Text("BEST VALUE · SAVE \(s)%")
+                    if yearly, let perWeek = offer.weeklyEquivalent {
+                        Text("BEST VALUE · \(perWeek.uppercased()) PER WEEK")
                             .font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1.2)
                             .opacity(0.75)
                     } else if !yearly {
@@ -1402,7 +1433,7 @@ struct AfterDarkPaywall: View {
                     }
                 }
                 Spacer()
-                Text(product.displayPrice)
+                Text(offer.displayPrice)
                     .font(.system(size: 20, weight: .black, design: .rounded))
             }
             .foregroundStyle(Color.ink)
