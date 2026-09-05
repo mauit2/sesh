@@ -1,23 +1,29 @@
-// Games — pass-the-phone drinking games, opened from the controller icon in
-// the top bar. Four games ship in v1 (Imposter, Never Have I Ever, Pandora's
-// Box, Most Likely To), each with a free deck and an AFTER DARK deck behind
-// the subscription paywall.
+// Games — "Game Night": drinking games opened from the controller icon in
+// the top bar. Four games (Imposter, Never Have I Ever, Pandora's Box, Most
+// Likely To), each with a FREE pool and a SPICY pool (After Dark
+// subscription). Prompts live in GameContent.swift; a round deals 40 random
+// cards from the chosen pool.
 //
-// Everything is offline + on-device: decks are compiled in, no network, no
-// state saved between rounds. The only networked piece is StoreKit.
+// Navigation is value-based: the intro screen builds an immutable config
+// (CardGameConfig / ImposterConfig) and pushes it; the game view owns its
+// own state from there. Nothing is shared by binding across the push.
+//
+// Imposter has two modes: pass-the-phone on one device, or GROUP — the host
+// deals a round into `game_rounds` for the live sesh and every member reads
+// their own role on their own phone through the `game_round_for_session`
+// RPC (an imposter's device never receives the word before the reveal).
 //
 // Monetization: one auto-renewable subscription group ("After Dark") with a
-// monthly and a yearly product. `AfterDarkStore` owns the StoreKit 2 side —
-// products, purchase, restore, and the entitlement flag the deck pickers
-// read. Product ids must exist in App Store Connect with these exact ids:
+// monthly and a yearly product. Ids must match App Store Connect exactly:
 //   sejdel.afterdark.monthly
 //   sejdel.afterdark.yearly
-// (Local testing without ASC: the AfterDark.storekit config at the repo root,
-// selected in the scheme's Run options.)
+// Local testing: AfterDark.storekit at the repo root, selected in the
+// scheme's Run options.
 
 import SwiftUI
 import StoreKit
 import Combine
+import Supabase
 
 // MARK: - After Dark subscription store
 
@@ -28,20 +34,14 @@ final class AfterDarkStore: ObservableObject {
     @Published var products: [Product] = []
     @Published var isSubscribed = false
     @Published var purchasing = false
-    /// Human-readable store problem ("couldn't reach the App Store"), shown
-    /// on the paywall instead of dead buttons.
     @Published var loadError: String? = nil
 
     private var updatesTask: Task<Void, Never>? = nil
 
     init() {
-        // Keep the entitlement live: App Store pushes renewals, refunds and
-        // family-sharing changes through this stream.
         updatesTask = Task { [weak self] in
             for await update in Transaction.updates {
-                if case .verified(let txn) = update {
-                    await txn.finish()
-                }
+                if case .verified(let txn) = update { await txn.finish() }
                 await self?.refreshEntitlement()
             }
         }
@@ -56,10 +56,9 @@ final class AfterDarkStore: ObservableObject {
     func load() async {
         do {
             let loaded = try await Product.products(for: Self.productIDs)
-            // Monthly first, then yearly — stable order for the paywall.
             products = loaded.sorted { $0.price < $1.price }
             loadError = loaded.isEmpty
-                ? "Subscriptions aren't available right now — try again later."
+                ? "Subscriptions aren't available right now — try again in a bit."
                 : nil
         } catch {
             loadError = "Couldn't reach the App Store. Check your connection and try again."
@@ -89,7 +88,7 @@ final class AfterDarkStore: ObservableObject {
             }
             await refreshEntitlement()
         } catch {
-            // User cancelled or the store hiccupped — the paywall just stays.
+            // Cancelled or store hiccup — the paywall simply stays.
         }
     }
 
@@ -101,9 +100,9 @@ final class AfterDarkStore: ObservableObject {
     }
 }
 
-// MARK: - Games + decks
+// MARK: - Game kinds + configs
 
-enum GameKind: String, CaseIterable, Identifiable {
+enum GameKind: String, CaseIterable, Identifiable, Hashable {
     case imposter, never, pandora, mostLikely
     var id: String { rawValue }
 
@@ -115,298 +114,286 @@ enum GameKind: String, CaseIterable, Identifiable {
         case .mostLikely: return "MOST LIKELY TO"
         }
     }
-    var tagline: String {
-        switch self {
-        case .imposter:   return "One of you is faking it"
-        case .never:      return "Drink if you have"
-        case .pandora:    return "Draw a card. Obey the card."
-        case .mostLikely: return "Point on three"
-        }
-    }
     var icon: String {
         switch self {
         case .imposter:   return "theatermasks.fill"
         case .never:      return "hand.raised.fill"
         case .pandora:    return "shippingbox.fill"
-        case .mostLikely: return "person.line.dotted.person.fill"
+        case .mostLikely: return "person.2.wave.2.fill"
         }
     }
     var accent: Color {
         switch self {
-        case .imposter:   return Color(red: 0.85, green: 0.35, blue: 0.32)
+        case .imposter:   return Color(red: 0.93, green: 0.36, blue: 0.30)
         case .never:      return Color.whiskey
-        case .pandora:    return Color(red: 0.60, green: 0.44, blue: 0.86)
-        case .mostLikely: return Color(red: 0.42, green: 0.68, blue: 0.55)
+        case .pandora:    return Color(red: 0.62, green: 0.42, blue: 0.95)
+        case .mostLikely: return Color(red: 0.24, green: 0.76, blue: 0.62)
         }
     }
-    /// How the drink rule reads on the card screen.
-    var rule: String {
+    var accentDeep: Color {
         switch self {
-        case .imposter:   return "Caught imposter drinks 3 — fooled you all? Everyone else drinks 2."
-        case .never:      return "Done it? Drink."
-        case .pandora:    return "Refuse the card? Drink 3."
-        case .mostLikely: return "Point on three — most fingers drinks."
+        case .imposter:   return Color(red: 0.55, green: 0.12, blue: 0.22)
+        case .never:      return Color(red: 0.62, green: 0.32, blue: 0.06)
+        case .pandora:    return Color(red: 0.28, green: 0.14, blue: 0.62)
+        case .mostLikely: return Color(red: 0.06, green: 0.38, blue: 0.36)
         }
     }
+    var gradient: LinearGradient {
+        LinearGradient(colors: [accent, accentDeep], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+    var rules: [String] {
+        switch self {
+        case .imposter:   return ["Everyone gets the word — except the imposters.",
+                                  "Describe it without saying it.",
+                                  "Vote. Caught imposter drinks 3. Wrong? The rest drink 2."]
+        case .never:      return ["Read the card out loud.",
+                                  "Done it? Drink.",
+                                  "Haven't? Stay dry and judge."]
+        case .pandora:    return ["Draw a card. Do what it says.",
+                                  "Rules stick until your next turn.",
+                                  "Refuse a card? Drink 3."]
+        case .mostLikely: return ["Read the card. Count to three.",
+                                  "Everyone points at someone.",
+                                  "Most fingers drinks."]
+        }
+    }
+    var startLabel: String { self == .imposter ? "DEAL THE WORDS" : "START" }
 }
 
-struct GameDeck {
+struct CardGameConfig: Hashable {
+    let kind: GameKind
     let spicy: Bool
-    let prompts: [String]
 }
 
-/// All compiled-in content. FREE decks keep it rowdy but harmless; AFTER
-/// DARK turns the dial up.
-enum GameContent {
-    static func decks(for kind: GameKind) -> (free: GameDeck, afterDark: GameDeck) {
-        switch kind {
-        case .imposter:   return (GameDeck(spicy: false, prompts: imposterFree),
-                                  GameDeck(spicy: true, prompts: imposterSpicy))
-        case .never:      return (GameDeck(spicy: false, prompts: neverFree),
-                                  GameDeck(spicy: true, prompts: neverSpicy))
-        case .pandora:    return (GameDeck(spicy: false, prompts: pandoraFree),
-                                  GameDeck(spicy: true, prompts: pandoraSpicy))
-        case .mostLikely: return (GameDeck(spicy: false, prompts: mostLikelyFree),
-                                  GameDeck(spicy: true, prompts: mostLikelySpicy))
+struct ImposterConfig: Hashable {
+    let groupMode: Bool
+    let playerCount: Int
+    let imposterCount: Int
+    let spicy: Bool
+
+    /// Sensible ceiling: never half the table or more.
+    static func maxImposters(for players: Int) -> Int { max(1, (players - 1) / 2) }
+}
+
+// MARK: - Group Imposter round (Supabase)
+
+struct GameRoundState: Decodable {
+    let id: UUID
+    let hostId: UUID
+    let spicy: Bool
+    let revealed: Bool
+    let playerCount: Int
+    let imposterCount: Int
+    let isPlayer: Bool
+    let isImposter: Bool
+    let starterId: UUID
+    let word: String?
+    let imposterIds: [UUID]?
+
+    enum CodingKeys: String, CodingKey {
+        case id, spicy, revealed, word
+        case hostId = "host_id"
+        case playerCount = "player_count"
+        case imposterCount = "imposter_count"
+        case isPlayer = "is_player"
+        case isImposter = "is_imposter"
+        case starterId = "starter_id"
+        case imposterIds = "imposter_ids"
+    }
+}
+
+private struct GameRoundInsert: Encodable {
+    let session_id: UUID
+    let host_id: UUID
+    let kind: String
+    let word: String
+    let imposter_id: UUID
+    let imposter_ids: [UUID]
+    let starter_id: UUID
+    let player_ids: [UUID]
+    let spicy: Bool
+}
+
+private struct RevealPatch: Encodable { let revealed: Bool }
+
+// MARK: - Shared bits
+
+private struct PrimaryLabel: View {
+    let title: String
+    var icon: String = "arrow.right"
+    let colors: [Color]
+    var enabled: Bool = true
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 14, weight: .black, design: .monospaced)).tracking(2.6)
+            Spacer()
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+        }
+        .foregroundStyle(enabled ? Color.ink : Color.cream.opacity(0.4))
+        .padding(.vertical, 18).padding(.horizontal, 22)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(enabled
+                      ? AnyShapeStyle(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
+                      : AnyShapeStyle(Color.cream.opacity(0.08)))
+        )
+        .shadow(color: (colors.first ?? .clear).opacity(enabled ? 0.45 : 0), radius: 20, y: 10)
+    }
+}
+
+private struct PrimaryButton: View {
+    let title: String
+    var icon: String = "arrow.right"
+    let colors: [Color]
+    var enabled: Bool = true
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            PrimaryLabel(title: title, icon: icon, colors: colors, enabled: enabled)
+        }
+        .disabled(!enabled)
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
+private struct GhostButton: View {
+    let title: String
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .black, design: .monospaced)).tracking(2.2)
+                .foregroundStyle(Color.cream.opacity(0.75))
+                .padding(.vertical, 15)
+                .frame(maxWidth: .infinity)
+                .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.cream.opacity(0.07)))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.cream.opacity(0.14), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
+/// FREE / SPICY toggle. Picking SPICY without the subscription opens the
+/// paywall instead of switching.
+private struct DeckPicker: View {
+    @Binding var spicy: Bool
+    let accent: Color
+    let subscribed: Bool
+    let openPaywall: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            segment("FREE", icon: nil, active: !spicy) { spicy = false }
+            segment("SPICY", icon: subscribed ? "flame.fill" : "lock.fill", active: spicy) {
+                if subscribed { spicy = true } else { openPaywall() }
+            }
         }
     }
 
-    // ---- Imposter (secret words) ---------------------------------------
-
-    static let imposterFree = [
-        "Karaoke", "Tequila", "Afterparty", "Beer pong", "Hangover",
-        "Kebab", "Dance floor", "Shots", "Pre-drink", "Bouncer",
-        "Taxi", "Wingman", "Last call", "Happy hour", "Bartender",
-        "Festival", "Nightclub", "Rooftop bar", "Pub crawl", "DJ",
-        "Champagne", "Beach party", "House party", "Jägerbomb", "Cider",
-        "Espresso martini", "Dive bar", "VIP table", "Dance battle", "Toast",
-        "Ice bucket", "Cocktail", "Snapchat", "Group chat", "Selfie",
-        "Vegas", "Ibiza", "Cruise", "Sauna", "Midsummer",
-        "Crayfish party", "Studentflak", "Valborg", "Systembolaget", "Falukorv",
-        "IKEA", "Eurovision", "ABBA",
-    ]
-    static let imposterSpicy = [
-        "One-night stand", "Walk of shame", "Friends with benefits", "Skinny dipping",
-        "Body shot", "Strip poker", "Tinder date", "Sexting", "Love bite",
-        "Hot tub", "Lap dance", "First kiss", "Situationship", "Ex",
-        "Booty call", "Morning after", "Hotel room", "Truth or dare",
-        "Seven minutes in heaven", "Crush", "Threesome", "Roleplay",
-        "Sugar daddy", "Nudes",
-    ]
-
-    // ---- Never Have I Ever ---------------------------------------------
-
-    static let neverFree = [
-        "Never have I ever thrown up from drinking.",
-        "Never have I ever blacked out.",
-        "Never have I ever been kicked out of a bar.",
-        "Never have I ever cried at a party.",
-        "Never have I ever lied about how much I've drunk.",
-        "Never have I ever fallen asleep at a party.",
-        "Never have I ever texted an ex while drunk.",
-        "Never have I ever lost my phone on a night out.",
-        "Never have I ever danced on a table.",
-        "Never have I ever snuck into a club underage.",
-        "Never have I ever pretended to know a song at karaoke.",
-        "Never have I ever drunk-called my boss or teacher.",
-        "Never have I ever eaten food off the floor.",
-        "Never have I ever been in a drinking competition.",
-        "Never have I ever mixed more than four kinds of alcohol in one night.",
-        "Never have I ever woken up in someone else's clothes.",
-        "Never have I ever forgotten where I parked or left my bike.",
-        "Never have I ever been carried home.",
-        "Never have I ever started a sing-along on public transport.",
-        "Never have I ever lied to my parents about where I was.",
-        "Never have I ever ghosted the group chat the morning after.",
-        "Never have I ever ordered food for the table and eaten it all myself.",
-        "Never have I ever fake-laughed at a story I've heard five times.",
-        "Never have I ever been the first to leave without saying goodbye.",
-        "Never have I ever taken a nap in a bar bathroom.",
-        "Never have I ever borrowed money on a night out and never paid it back.",
-        "Never have I ever cried over a sports result.",
-        "Never have I ever been on TV or in the newspaper.",
-        "Never have I ever stalked someone's profile back more than a year.",
-        "Never have I ever sent a message to the wrong group chat.",
-        "Never have I ever pretended my phone died to leave early.",
-        "Never have I ever won a bet against everyone here.",
-        "Never have I ever lost a shoe on a night out.",
-        "Never have I ever hidden snacks from my friends.",
-        "Never have I ever slept through an entire day after partying.",
-        "Never have I ever been on a party bus.",
-        "Never have I ever jumped into water with my clothes on.",
-        "Never have I ever convinced a stranger we'd met before.",
-        "Never have I ever been the reason the group missed the last train.",
-        "Never have I ever ugly-cried to a song everyone else was dancing to.",
-    ]
-    static let neverSpicy = [
-        "Never have I ever kissed someone in this room.",
-        "Never have I ever had a one-night stand.",
-        "Never have I ever done the walk of shame.",
-        "Never have I ever kissed two people in the same night.",
-        "Never have I ever hooked up with a friend's ex.",
-        "Never have I ever sent a risky text and instantly regretted it.",
-        "Never have I ever had a crush on someone in this room.",
-        "Never have I ever lied about my body count.",
-        "Never have I ever hooked up with someone whose name I didn't know.",
-        "Never have I ever been caught kissing where I shouldn't have.",
-        "Never have I ever skinny-dipped.",
-        "Never have I ever had a friends-with-benefits arrangement.",
-        "Never have I ever ghosted someone after a date.",
-        "Never have I ever been ghosted after a date.",
-        "Never have I ever matched with someone in this room on a dating app.",
-        "Never have I ever kissed someone to make somebody else jealous.",
-        "Never have I ever dated two people at once.",
-        "Never have I ever had a summer fling I still think about.",
-        "Never have I ever given a fake number.",
-        "Never have I ever slid into a celebrity's DMs.",
-        "Never have I ever hooked up at a festival.",
-        "Never have I ever had an awkward morning-after breakfast.",
-        "Never have I ever pretended to be single.",
-        "Never have I ever fallen for a friend.",
-        "Never have I ever left a party early to meet someone.",
-        "Never have I ever been someone's rebound.",
-        "Never have I ever kept a hookup secret from this group.",
-        "Never have I ever regretted who I kissed at midnight on New Year's.",
-    ]
-
-    // ---- Pandora's Box (dares, rules, challenges) ----------------------
-
-    static let pandoraFree = [
-        "DARE — Swap shirts with the person on your left for the next 3 rounds.",
-        "RULE — No first names until your next turn. Slip up = drink.",
-        "DARE — Let the group pick your ringtone for the rest of the night.",
-        "CHALLENGE — Rock-paper-scissors with the person opposite. Loser drinks 2.",
-        "RULE — You can only speak in questions until your next turn.",
-        "DARE — Do your best impression of someone in the group. They guess who — wrong guess, they drink.",
-        "CHALLENGE — Everyone points at the best dancer on three. Winner picks who drinks 3.",
-        "DARE — Post the 7th photo in your camera roll to your story. Or drink 3.",
-        "RULE — Left hand only for drinks until your next turn.",
-        "DARE — Speak in an accent of the group's choosing until your next turn.",
-        "CHALLENGE — Hold a plank while the group counts to 20. Fail = drink 2.",
-        "RULE — Anyone who says \"drink\" drinks. Until your next turn.",
-        "DARE — Show the group your most recent emoji history.",
-        "CHALLENGE — Name 5 cocktails in 10 seconds or drink.",
-        "DARE — Let the person on your right send one (harmless) text from your phone.",
-        "RULE — Everyone must toast before every sip until your next turn.",
-        "DARE — Trade seats with whoever the group says has the best laugh.",
-        "CHALLENGE — Staring contest with the person opposite. Loser drinks.",
-        "DARE — Freestyle rap about the person on your left for 20 seconds.",
-        "RULE — New nickname: the group names you now. Answer only to it tonight.",
-        "CHALLENGE — Balance your phone on your head for 30 seconds. Drop = drink 2.",
-        "DARE — Call the 5th contact in your phone and sing them one line of ABBA. Or drink 3.",
-        "RULE — No pointing. Point = drink. Until your next turn.",
-        "CHALLENGE — The group picks a word. Say it naturally in conversation within 2 minutes or drink.",
-        "DARE — Do 10 pushups or drink 2.",
-        "RULE — You are the waiter until your next turn. Fetch everyone's drinks.",
-        "DARE — Let the group scroll your camera roll for 10 seconds (you can hover the panic finger).",
-        "CHALLENGE — Whisper challenge: mouth a sentence to the person opposite. They fail to guess = you drink together.",
-        "DARE — Dance with no music for 15 seconds while everyone watches silently.",
-        "RULE — Compliment whoever you speak to, every time, until your next turn.",
-        "CHALLENGE — Everyone votes: best story from tonight so far. Teller gives out 3 drinks.",
-        "DARE — Talk in third person until your next turn.",
-        "CHALLENGE — Close your eyes and name everyone's outfit colors. Each miss = 1 drink.",
-        "RULE — The floor is lava on \"lava\". Last one with feet down drinks. (Group calls it once.)",
-        "DARE — Recreate your most-used selfie face and hold it for 10 seconds.",
-        "CHALLENGE — Thumb war tournament, you vs. your pick. Loser drinks 2.",
-    ]
-    static let pandoraSpicy = [
-        "DARE — Give the person of your choice a 10-second shoulder massage.",
-        "TRUTH — Describe your worst date in 3 sentences. Refuse = drink 3.",
-        "DARE — Whisper something flirty to the person on your right. They rate it out of 10 — under 5, you drink.",
-        "RULE — You and the person opposite are \"married\" until your next turn: you drink when they drink.",
-        "TRUTH — Who in this group would you trust on a desert island — and who's getting voted off first?",
-        "DARE — Let the group read your last DM out loud. Or drink 4.",
-        "TRUTH — Show the group your dating app profile. No profile? Everyone else drinks.",
-        "DARE — Serenade the person of your choice with 15 seconds of a love song.",
-        "TRUTH — What's your most embarrassing hookup story? One-sentence version allowed.",
-        "DARE — Do your sexiest dance move. The group rates it. Under 5 average = drink 2.",
-        "RULE — Eye contact with whoever you talk to. Look away = sip. Until your next turn.",
-        "TRUTH — First impression of everyone here, rapid-fire honest.",
-        "DARE — Let someone in the group set your dating app bio for a week. Or drink 3.",
-        "TRUTH — Have you ever had a crush on someone in this group? Yes/no is enough — no names needed.",
-        "DARE — Recreate a romcom kiss scene… with your own hand. Full commitment.",
-        "TRUTH — What's the boldest text you've ever sent? Paraphrase counts.",
-        "DARE — Pick someone. Stare into each other's eyes for 20 seconds without laughing. Loser drinks.",
-        "TRUTH — What's your green flag, and which one of your red flags do you refuse to fix?",
-        "DARE — Give your best pickup line to the person opposite. If they smile, they drink; if not, you do.",
-        "TRUTH — Ever pretended to like a song / hobby / food to impress someone? Story time.",
-        "DARE — Text your crush \"thinking about you\" right now. Or drink 4.",
-        "TRUTH — Most-swiped type: describe it. The group guesses if your ex matches.",
-        "DARE — Slow dance with the person of your choice for 15 seconds. No music.",
-        "TRUTH — What happened on the wildest night out of your life? Short version, no skipping the good part.",
-    ]
-
-    // ---- Most Likely To ------------------------------------------------
-
-    static let mostLikelyFree = [
-        "Most likely to become famous.",
-        "Most likely to end tonight with a kebab.",
-        "Most likely to cry during a Disney movie.",
-        "Most likely to lose their phone tonight.",
-        "Most likely to start the dance floor.",
-        "Most likely to talk their way out of a fine.",
-        "Most likely to befriend the bouncer.",
-        "Most likely to be a millionaire by 35.",
-        "Most likely to move abroad on a whim.",
-        "Most likely to laugh at the wrong moment.",
-        "Most likely to fall asleep first tonight.",
-        "Most likely to order the most expensive thing on the menu.",
-        "Most likely to survive a zombie apocalypse.",
-        "Most likely to become a politician.",
-        "Most likely to accidentally like a 2014 photo while stalking.",
-        "Most likely to know every song lyric tonight.",
-        "Most likely to start a business with no plan.",
-        "Most likely to win a reality show.",
-        "Most likely to get lost on the way home.",
-        "Most likely to adopt five dogs.",
-        "Most likely to send a voice message longer than 3 minutes.",
-        "Most likely to be late to their own wedding.",
-        "Most likely to eat someone else's fries without asking.",
-        "Most likely to become everyone's boss one day.",
-        "Most likely to book a flight during this game.",
-        "Most likely to have an embarrassing search history.",
-        "Most likely to fight for the aux cable.",
-        "Most likely to start a podcast.",
-        "Most likely to get a tattoo they regret.",
-        "Most likely to charm their way backstage.",
-        "Most likely to still be partying at 60.",
-        "Most likely to trip while walking into the club.",
-        "Most likely to text the group chat at 4 AM.",
-        "Most likely to become a meme.",
-        "Most likely to give a toast that goes on too long.",
-        "Most likely to bring a stranger to the afterparty.",
-    ]
-    static let mostLikelySpicy = [
-        "Most likely to kiss a stranger tonight.",
-        "Most likely to have the wildest dating app stories.",
-        "Most likely to date two people at once and get away with it.",
-        "Most likely to fall in love on vacation.",
-        "Most likely to send a risky text tonight.",
-        "Most likely to have a secret admirer in this room.",
-        "Most likely to leave the party with someone's number.",
-        "Most likely to get back with their ex.",
-        "Most likely to have a celebrity hall pass they'd actually use.",
-        "Most likely to flirt with the bartender for free drinks.",
-        "Most likely to have kissed someone in this group.",
-        "Most likely to plan a wedding on the second date.",
-        "Most likely to ghost someone by accident.",
-        "Most likely to have their read receipts on, on purpose.",
-        "Most likely to fake a phone call to escape a bad date.",
-        "Most likely to say \"I love you\" first.",
-        "Most likely to have a type everyone can describe.",
-        "Most likely to marry rich.",
-        "Most likely to cause the drama in a reality dating show.",
-        "Most likely to slide into a DM tonight.",
-        "Most likely to have the best kiss-and-tell story.",
-        "Most likely to be someone's ex they still think about.",
-        "Most likely to turn a one-night stand into a relationship.",
-        "Most likely to know exactly what their ex is doing right now.",
-    ]
+    private func segment(_ label: String, icon: String?, active: Bool, tap: @escaping () -> Void) -> some View {
+        Button(action: tap) {
+            HStack(spacing: 6) {
+                if let icon { Image(systemName: icon).font(.system(size: 11, weight: .bold)) }
+                Text(label).font(.system(size: 12, weight: .black, design: .monospaced)).tracking(2)
+            }
+            .foregroundStyle(active ? Color.ink : Color.cream.opacity(0.75))
+            .padding(.vertical, 13)
+            .frame(maxWidth: .infinity)
+            .background(Capsule().fill(active ? accent : Color.cream.opacity(0.07)))
+            .overlay(Capsule().strokeBorder(Color.cream.opacity(active ? 0 : 0.14), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
+    }
 }
 
-// MARK: - Games hub
+/// Label + −/+ stepper row, used for players and imposters.
+private struct CountRow: View {
+    let label: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 12, weight: .black, design: .monospaced)).tracking(2)
+                .foregroundStyle(Color.bronze)
+            Spacer()
+            bubble("minus") { if value > range.lowerBound { value -= 1 } }
+            Text("\(value)")
+                .font(.system(size: 28, weight: .black, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .frame(minWidth: 48)
+            bubble("plus") { if value < range.upperBound { value += 1 } }
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.cream.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
+            .strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+    }
+
+    private func bubble(_ icon: String, tap: @escaping () -> Void) -> some View {
+        Button(action: tap) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(Color.cream)
+                .frame(width: 38, height: 38)
+                .background(Circle().fill(Color.cream.opacity(0.09)))
+                .overlay(Circle().strokeBorder(Color.cream.opacity(0.16), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
+/// Three fanned cards in the game's colours — the visual on every intro.
+private struct CardFan: View {
+    let kind: GameKind
+    var body: some View {
+        ZStack {
+            ForEach([-1, 1, 0], id: \.self) { i in
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(kind.gradient)
+                    .frame(width: 118, height: 160)
+                    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(Color.cream.opacity(0.35), lineWidth: 1))
+                    .overlay(Image(systemName: kind.icon)
+                        .font(.system(size: 40, weight: .bold))
+                        .foregroundStyle(Color.cream.opacity(i == 0 ? 0.95 : 0.35)))
+                    .rotationEffect(.degrees(Double(i) * 14))
+                    .offset(x: CGFloat(i) * 46, y: i == 0 ? -6 : 10)
+                    .opacity(i == 0 ? 1 : 0.85)
+                    .shadow(color: kind.accent.opacity(0.35), radius: 18, y: 10)
+            }
+        }
+        .frame(height: 190)
+    }
+}
+
+private func bigHeader(_ eyebrow: String, _ title: String) -> some View {
+    VStack(spacing: 8) {
+        Text(eyebrow)
+            .font(.system(size: 12, weight: .black, design: .monospaced)).tracking(2.4)
+            .foregroundStyle(Color.bronze)
+        Text(title)
+            .font(.system(size: 30, weight: .black, design: .rounded))
+            .italic().tracking(-1)
+            .foregroundStyle(Color.cream)
+            .multilineTextAlignment(.center)
+    }
+    .padding(.top, 10)
+}
+
+private let ember = Color(red: 0.86, green: 0.28, blue: 0.24)
+
+// MARK: - Hub
 
 struct GamesHubView: View {
+    @ObservedObject var group: SessionService
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = AfterDarkStore()
     @State private var paywallOpen = false
@@ -417,43 +404,51 @@ struct GamesHubView: View {
         NavigationStack {
             ZStack {
                 AtmosphereBackground(accent: .whiskey)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        header
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 16) {
+                        HStack {
+                            Text("Game Night")
+                                .font(.system(size: 23, weight: .heavy, design: .rounded))
+                                .italic()
+                                .tracking(-0.6)
+                                .foregroundStyle(Color.cream)
+                            Spacer()
+                            Button { dismiss() } label: {
+                                ZStack {
+                                    Circle().fill(Color.cream.opacity(0.05)).frame(width: 32, height: 32)
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.8))
+                                }
+                                .overlay(Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+                            }
+                            .buttonStyle(PressScaleStyle())
+                        }
+                        .padding(.top, 4)
+
                         LazyVGrid(columns: columns, spacing: 12) {
                             ForEach(GameKind.allCases) { kind in
-                                NavigationLink {
-                                    gamePage(kind)
-                                } label: {
-                                    gameCard(kind)
-                                }
-                                .buttonStyle(PressScaleStyle())
+                                NavigationLink(value: kind) { tile(kind) }
+                                    .buttonStyle(PressScaleStyle())
                             }
                         }
-                        afterDarkBanner
-                        Text("Drink responsibly — water counts as a drink in every game. Anyone can swap any prompt for a sip instead.")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.cream.opacity(0.45))
-                            .padding(.top, 2)
+
+                        spicyBanner
                     }
                     .padding(.horizontal, 20)
-                    .padding(.top, 12)
                     .padding(.bottom, 40)
                 }
             }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.cream.opacity(0.75))
-                            .frame(width: 32, height: 32)
-                            .background(Circle().fill(Color.cream.opacity(0.07)))
-                    }
-                    .buttonStyle(PressScaleStyle())
-                }
+            .navigationDestination(for: GameKind.self) { kind in
+                GameIntroView(kind: kind, group: group, paywallOpen: $paywallOpen)
             }
-            .toolbarBackground(.hidden, for: .navigationBar)
+            .navigationDestination(for: CardGameConfig.self) { config in
+                PromptGameView(config: config, paywallOpen: $paywallOpen)
+            }
+            .navigationDestination(for: ImposterConfig.self) { config in
+                ImposterGameView(config: config, group: group, paywallOpen: $paywallOpen)
+            }
+            .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
         .environmentObject(store)
@@ -464,558 +459,614 @@ struct GamesHubView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("GAME NIGHT")
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .tracking(2.4)
-                .foregroundStyle(Color.bronze)
-            Text("Pick your poison.")
-                .font(.system(size: 30, weight: .black, design: .rounded))
-                .italic().tracking(-1)
-                .foregroundStyle(Color.cream)
-            Text("Pass-the-phone games for the whole table. Free decks for everyone — AFTER DARK when the table can handle it.")
-                .font(.system(size: 13, design: .rounded))
-                .foregroundStyle(Color.cream.opacity(0.6))
-                .lineSpacing(2)
-        }
-    }
-
-    @ViewBuilder
-    private func gamePage(_ kind: GameKind) -> some View {
-        if kind == .imposter {
-            ImposterGameView(paywallOpen: $paywallOpen)
-        } else {
-            PromptGameView(kind: kind, paywallOpen: $paywallOpen)
-        }
-    }
-
-    private func gameCard(_ kind: GameKind) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ZStack {
-                Circle()
-                    .fill(kind.accent.opacity(0.16))
-                    .frame(width: 44, height: 44)
-                Image(systemName: kind.icon)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(kind.accent)
-            }
-            Spacer(minLength: 0)
+    private func tile(_ kind: GameKind) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            RoundedRectangle(cornerRadius: 24, style: .continuous).fill(kind.gradient)
+            RadialGradient(colors: [Color.cream.opacity(0.28), .clear],
+                           center: .init(x: 0.85, y: 0.1), startRadius: 4, endRadius: 150)
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            Image(systemName: kind.icon)
+                .font(.system(size: 78, weight: .bold))
+                .foregroundStyle(Color.cream.opacity(0.92))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .offset(y: -14)
             Text(kind.title)
-                .font(.system(size: 13, weight: .black, design: .monospaced))
-                .tracking(1.2)
+                .font(.system(size: 14, weight: .black, design: .monospaced))
+                .tracking(1.6)
                 .foregroundStyle(Color.cream)
+                .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
-                .multilineTextAlignment(.leading)
-            Text(kind.tagline)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.cream.opacity(0.55))
-                .multilineTextAlignment(.leading)
+                .padding(16)
         }
-        .frame(maxWidth: .infinity, minHeight: 148, alignment: .leading)
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.cream.opacity(0.05))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(kind.accent.opacity(0.25), lineWidth: 1)
-        )
+        .frame(height: 196)
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
+            .strokeBorder(Color.cream.opacity(0.18), lineWidth: 1))
+        .shadow(color: kind.accent.opacity(0.35), radius: 22, y: 12)
     }
 
-    private var afterDarkBanner: some View {
-        Button {
-            if !store.isSubscribed { paywallOpen = true }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: store.isSubscribed ? "flame.fill" : "lock.fill")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(Color.ink)
-                    .frame(width: 36, height: 36)
-                    .background(Circle().fill(Color.whiskey))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(store.isSubscribed ? "AFTER DARK — ACTIVE" : "UNLOCK AFTER DARK")
-                        .font(.system(size: 12, weight: .black, design: .monospaced))
-                        .tracking(1.6)
+    private var spicyBanner: some View {
+        Button { if !store.isSubscribed { paywallOpen = true } } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle().fill(Color.ink.opacity(0.35)).frame(width: 48, height: 48)
+                    Image(systemName: store.isSubscribed ? "checkmark" : "flame.fill")
+                        .font(.system(size: 20, weight: .black))
                         .foregroundStyle(Color.cream)
-                    Text(store.isSubscribed
-                         ? "Spicy decks unlocked in every game. Play nice."
-                         : "Spicier decks in all four games — for tables that can handle it.")
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.6))
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(store.isSubscribed ? "SPICY ROUNDS UNLOCKED" : "UNLOCK SPICIER ROUNDS")
+                        .font(.system(size: 15, weight: .black, design: .monospaced))
+                        .tracking(1.8)
+                        .foregroundStyle(Color.cream)
+                    Text("Bolder cards in every game.")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.85))
                 }
                 Spacer()
                 if !store.isSubscribed {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.whiskey)
+                        .font(.system(size: 14, weight: .black))
+                        .foregroundStyle(Color.cream)
                 }
             }
-            .padding(14)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.whiskey.opacity(0.10))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1)
-            )
+            .padding(18)
+            .background(RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(LinearGradient(colors: [Color.whiskey, ember], startPoint: .leading, endPoint: .trailing)))
+            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.22), lineWidth: 1))
+            .shadow(color: Color.whiskey.opacity(0.45), radius: 24, y: 12)
         }
         .buttonStyle(PressScaleStyle())
         .disabled(store.isSubscribed)
     }
 }
 
-// MARK: - Deck picker (shared)
+// MARK: - Intro (rules + deck + start)
 
-/// FREE / AFTER DARK segmented picker. Choosing AFTER DARK without the
-/// subscription bounces to the paywall instead of switching.
-private struct DeckPicker: View {
-    @Binding var spicy: Bool
-    let accent: Color
-    let subscribed: Bool
-    let openPaywall: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            segment("FREE", active: !spicy) { spicy = false }
-            segment(subscribed ? "AFTER DARK" : "AFTER DARK 🔒", active: spicy) {
-                if subscribed { spicy = true } else { openPaywall() }
-            }
-        }
-    }
-
-    private func segment(_ label: String, active: Bool, tap: @escaping () -> Void) -> some View {
-        Button(action: tap) {
-            Text(label)
-                .font(.system(size: 10, weight: .black, design: .monospaced))
-                .tracking(1.4)
-                .foregroundStyle(active ? Color.ink : Color.cream.opacity(0.7))
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity)
-                .background(
-                    Capsule().fill(active ? accent : Color.cream.opacity(0.06))
-                )
-                .overlay(Capsule().strokeBorder(Color.cream.opacity(active ? 0 : 0.14), lineWidth: 1))
-        }
-        .buttonStyle(PressScaleStyle())
-    }
-}
-
-// MARK: - Prompt card games (NHIE, Pandora, Most Likely To)
-
-/// The shared engine for the three card games: pick a deck, tap through a
-/// shuffled stack of prompt cards.
-struct PromptGameView: View {
+struct GameIntroView: View {
     let kind: GameKind
+    @ObservedObject var group: SessionService
     @Binding var paywallOpen: Bool
     @EnvironmentObject private var store: AfterDarkStore
 
     @State private var spicy = false
-    @State private var order: [Int] = []
-    @State private var index = 0
-    @State private var cardFlip = false
+    @State private var groupMode = false
+    @State private var playerCount = 4
+    @State private var imposterCount = 1
 
-    private var deck: GameDeck {
-        let d = GameContent.decks(for: kind)
-        return (spicy && store.isSubscribed) ? d.afterDark : d.free
+    private var groupPlayers: [UUID] {
+        var ids = group.members.filter(\.inLive).map(\.profileId)
+        if let me = group.myId, !ids.contains(me) { ids.append(me) }
+        return ids
     }
+    private var groupAvailable: Bool { group.isActive && groupPlayers.count >= 3 }
+    private var useGroup: Bool { groupMode && groupAvailable }
+    private var effectivePlayers: Int { useGroup ? groupPlayers.count : playerCount }
+    private var maxImposters: Int { ImposterConfig.maxImposters(for: effectivePlayers) }
 
     var body: some View {
         ZStack {
             AtmosphereBackground(accent: .whiskey)
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 22) {
+                    CardFan(kind: kind).padding(.top, 8)
+
                     Text(kind.title)
-                        .font(.system(size: 22, weight: .black, design: .rounded))
-                        .italic().tracking(-0.5)
-                        .foregroundStyle(Color.cream)
-                    Text(kind.rule)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.55))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                DeckPicker(spicy: $spicy, accent: kind.accent,
-                           subscribed: store.isSubscribed) { paywallOpen = true }
-
-                Spacer(minLength: 0)
-
-                // The card.
-                VStack(spacing: 18) {
-                    Image(systemName: kind.icon)
-                        .font(.system(size: 26, weight: .semibold))
-                        .foregroundStyle(kind.accent)
-                    Text(currentPrompt)
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .font(.system(size: 30, weight: .black, design: .rounded))
+                        .italic().tracking(-1)
                         .foregroundStyle(Color.cream)
                         .multilineTextAlignment(.center)
-                        .lineSpacing(4)
-                        .minimumScaleFactor(0.6)
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(Array(kind.rules.enumerated()), id: \.offset) { i, rule in
+                            HStack(alignment: .top, spacing: 14) {
+                                Text("\(i + 1)")
+                                    .font(.system(size: 13, weight: .black, design: .monospaced))
+                                    .foregroundStyle(Color.ink)
+                                    .frame(width: 28, height: 28)
+                                    .background(Circle().fill(kind.accent))
+                                Text(rule)
+                                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.cream)
+                                    .lineSpacing(3)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Color.ink.opacity(0.6)))
+                    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .strokeBorder(kind.accent.opacity(0.35), lineWidth: 1))
+
+                    DeckPicker(spicy: $spicy, accent: kind.accent,
+                               subscribed: store.isSubscribed) { paywallOpen = true }
+
+                    if kind == .imposter { imposterOptions }
+
+                    startLink.padding(.top, 4)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 30)
+            }
+        }
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .onChange(of: maxImposters) { _, m in imposterCount = min(imposterCount, m) }
+    }
+
+    @ViewBuilder
+    private var startLink: some View {
+        let colors = [kind.accent, kind.accentDeep]
+        let unlocked = spicy && store.isSubscribed
+        if kind == .imposter {
+            NavigationLink(value: ImposterConfig(groupMode: useGroup,
+                                                 playerCount: effectivePlayers,
+                                                 imposterCount: min(imposterCount, maxImposters),
+                                                 spicy: unlocked)) {
+                PrimaryLabel(title: kind.startLabel, colors: colors)
+            }
+            .buttonStyle(PressScaleStyle())
+        } else {
+            NavigationLink(value: CardGameConfig(kind: kind, spicy: unlocked)) {
+                PrimaryLabel(title: kind.startLabel, colors: colors)
+            }
+            .buttonStyle(PressScaleStyle())
+        }
+    }
+
+    private var imposterOptions: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                modeSegment("THIS PHONE", icon: "iphone", active: !groupMode) { groupMode = false }
+                modeSegment("GROUP", icon: "person.3.fill", active: groupMode, enabled: groupAvailable) {
+                    groupMode = true
+                }
+            }
+            if useGroup {
+                Text(group.isHost
+                     ? "You deal — all \(groupPlayers.count) phones in your sesh get a card."
+                     : "Your host deals. Your card lands on this phone.")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.7))
+                    .multilineTextAlignment(.center)
+            } else if !groupAvailable {
+                Text("Live group sesh with 3+ friends unlocks everyone-on-their-own-phone.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.45))
+                    .multilineTextAlignment(.center)
+            }
+            if !useGroup {
+                CountRow(label: "PLAYERS", value: $playerCount, range: 3...16)
+            }
+            if !useGroup || group.isHost {
+                CountRow(label: "IMPOSTERS", value: $imposterCount, range: 1...maxImposters)
+            }
+        }
+    }
+
+    private func modeSegment(_ label: String, icon: String, active: Bool, enabled: Bool = true,
+                             tap: @escaping () -> Void) -> some View {
+        Button(action: tap) {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 11, weight: .bold))
+                Text(label).font(.system(size: 12, weight: .black, design: .monospaced)).tracking(2)
+            }
+            .foregroundStyle(active ? Color.ink : Color.cream.opacity(enabled ? 0.75 : 0.3))
+            .padding(.vertical, 13)
+            .frame(maxWidth: .infinity)
+            .background(Capsule().fill(active ? Color.cream : Color.cream.opacity(0.07)))
+            .overlay(Capsule().strokeBorder(Color.cream.opacity(active ? 0 : 0.14), lineWidth: 1))
+        }
+        .disabled(!enabled)
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
+// MARK: - Prompt card games
+
+struct PromptGameView: View {
+    let config: CardGameConfig
+    @Binding var paywallOpen: Bool
+    @EnvironmentObject private var store: AfterDarkStore
+
+    @State private var spicy: Bool
+    @State private var cards: [String] = []
+    @State private var index = 0
+    @State private var dragX: CGFloat = 0
+
+    init(config: CardGameConfig, paywallOpen: Binding<Bool>) {
+        self.config = config
+        self._paywallOpen = paywallOpen
+        self._spicy = State(initialValue: config.spicy)
+    }
+
+    private var kind: GameKind { config.kind }
+    private var done: Bool { index >= cards.count }
+
+    var body: some View {
+        ZStack {
+            AtmosphereBackground(accent: .whiskey)
+            VStack(spacing: 18) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(kind.title)
+                        .font(.system(size: 23, weight: .heavy, design: .rounded))
+                        .italic().tracking(-0.6)
+                        .foregroundStyle(Color.cream)
+                    Spacer()
                     if spicy {
-                        Text("AFTER DARK")
-                            .font(.system(size: 9, weight: .black, design: .monospaced))
-                            .tracking(2.0)
-                            .foregroundStyle(Color.whiskey)
+                        HStack(spacing: 4) {
+                            Image(systemName: "flame.fill").font(.system(size: 10, weight: .bold))
+                            Text("SPICY").font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1.8)
+                        }
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Capsule().fill(Color.whiskey))
                     }
                 }
-                .padding(28)
-                .frame(maxWidth: .infinity, minHeight: 280)
-                .background(
-                    RoundedRectangle(cornerRadius: 26, style: .continuous)
-                        .fill(Color.ink.opacity(0.85))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 26, style: .continuous)
-                        .strokeBorder(kind.accent.opacity(0.4), lineWidth: 1.2)
-                )
-                .shadow(color: kind.accent.opacity(0.25), radius: 26, y: 12)
-                .rotation3DEffect(.degrees(cardFlip ? 0 : 6), axis: (x: 1, y: 0, z: 0))
-                .id("\(spicy)-\(index)")
-                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
-                                        removal: .move(edge: .leading).combined(with: .opacity)))
 
-                Spacer(minLength: 0)
-
-                Text("\(min(index + 1, deck.prompts.count)) / \(deck.prompts.count)")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .tracking(1.6)
-                    .foregroundStyle(Color.cream.opacity(0.4))
-
-                Button { next() } label: {
-                    HStack {
-                        Text("NEXT CARD")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(3)
-                        Spacer()
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                    }
-                    .foregroundStyle(Color.ink)
-                    .padding(.vertical, 16).padding(.horizontal, 20)
-                    .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(kind.accent))
-                    .shadow(color: kind.accent.opacity(0.45), radius: 18, y: 8)
+                if !done {
+                    progress
+                    Spacer(minLength: 0)
+                    card
+                        .offset(x: dragX)
+                        .rotationEffect(.degrees(Double(dragX / 30)))
+                        .gesture(
+                            DragGesture(minimumDistance: 20)
+                                .onChanged { dragX = $0.translation.width }
+                                .onEnded { v in
+                                    if v.translation.width < -70 { next() }
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { dragX = 0 }
+                                }
+                        )
+                        .onTapGesture { next() }
+                        .id(index)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .trailing).combined(with: .opacity),
+                            removal: .move(edge: .leading).combined(with: .opacity)))
+                    Spacer(minLength: 0)
+                    PrimaryButton(title: "NEXT CARD", colors: [kind.accent, kind.accentDeep]) { next() }
+                } else {
+                    roundOver
                 }
-                .buttonStyle(PressScaleStyle())
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 16)
         }
         .toolbarBackground(.hidden, for: .navigationBar)
-        .onAppear { reshuffle() }
-        .onChange(of: spicy) { _, _ in reshuffle() }
+        .onAppear { if cards.isEmpty { deal() } }
+        .onChange(of: spicy) { _, _ in deal() }
     }
 
-    private var currentPrompt: String {
-        guard !order.isEmpty else { return "" }
-        return deck.prompts[order[index % order.count]]
+    private var progress: some View {
+        HStack(spacing: 12) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.cream.opacity(0.1))
+                    Capsule().fill(kind.accent)
+                        .frame(width: geo.size.width * CGFloat(index + 1) / CGFloat(max(cards.count, 1)))
+                }
+            }
+            .frame(height: 6)
+            Text("\(index + 1)/\(cards.count)")
+                .font(.system(size: 12, weight: .black, design: .monospaced)).tracking(1)
+                .foregroundStyle(Color.cream.opacity(0.55))
+        }
     }
 
-    private func reshuffle() {
-        order = Array(deck.prompts.indices).shuffled()
-        index = 0
+    private var card: some View {
+        let (badge, body) = split(cards[index])
+        return ZStack(alignment: .topTrailing) {
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .fill(LinearGradient(colors: [kind.accent.opacity(0.28), Color.ink.opacity(0.9)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+            Image(systemName: kind.icon)
+                .font(.system(size: 120, weight: .bold))
+                .foregroundStyle(kind.accent.opacity(0.12))
+                .offset(x: 24, y: -20)
+            VStack(alignment: .leading, spacing: 18) {
+                if let badge {
+                    Text(badge)
+                        .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(2.2)
+                        .foregroundStyle(Color.ink)
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Capsule().fill(kind.accent))
+                } else {
+                    Text(kind.title)
+                        .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(2.2)
+                        .foregroundStyle(kind.accent)
+                }
+                Spacer(minLength: 0)
+                Text(body)
+                    .font(.system(size: 27, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .lineSpacing(4)
+                    .minimumScaleFactor(0.55)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Text("TAP OR SWIPE")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced)).tracking(2)
+                    .foregroundStyle(Color.cream.opacity(0.3))
+            }
+            .padding(26)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 400)
+        .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous)
+            .strokeBorder(kind.accent.opacity(0.5), lineWidth: 1.4))
+        .shadow(color: kind.accent.opacity(0.35), radius: 30, y: 16)
+    }
+
+    /// End of the 40 — the "step it up" moment.
+    private var roundOver: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Image(systemName: spicy ? "flame.fill" : "arrow.up.circle.fill")
+                .font(.system(size: 52, weight: .bold))
+                .foregroundStyle(Color.whiskey)
+            Text(spicy ? "Still standing?" : "Step it up?")
+                .font(.system(size: 34, weight: .black, design: .rounded))
+                .italic().tracking(-1)
+                .foregroundStyle(Color.cream)
+            Text(spicy ? "That's the spicy deck. Run it back." : "That was the free deck. The spicy one doesn't hold back.")
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.7))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 10)
+            Spacer()
+            if spicy {
+                PrimaryButton(title: "PLAY AGAIN", icon: "arrow.counterclockwise",
+                              colors: [Color.whiskey, ember]) { deal() }
+                GhostButton(title: "BACK TO FREE DECK") { spicy = false }
+            } else {
+                PrimaryButton(title: "GO SPICIER", icon: "flame.fill", colors: [Color.whiskey, ember]) {
+                    if store.isSubscribed { spicy = true } else { paywallOpen = true }
+                }
+                GhostButton(title: "PLAY AGAIN") { deal() }
+            }
+        }
+    }
+
+    /// "DARE — do X" → ("DARE", "do X"); plain prompts have no badge.
+    private func split(_ raw: String) -> (String?, String) {
+        guard let range = raw.range(of: " — ") else { return (nil, raw) }
+        let badge = String(raw[..<range.lowerBound])
+        if badge.count <= 10, badge == badge.uppercased() {
+            return (badge, String(raw[range.upperBound...]))
+        }
+        return (nil, raw)
+    }
+
+    private func deal() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            cards = GameContent.deal(for: kind, spicy: spicy && store.isSubscribed)
+            index = 0
+        }
     }
 
     private func next() {
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-            if index + 1 >= order.count {
-                reshuffle()   // ran the deck dry — new shuffle, keep playing
-            } else {
-                index += 1
-            }
-        }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { index += 1 }
     }
 }
 
 // MARK: - Imposter
 
-/// Undercover-style word game: everyone gets the secret word except one
-/// imposter. Phone passes around for private reveals, then the table talks,
-/// votes, and the reveal settles who drinks.
 struct ImposterGameView: View {
+    let config: ImposterConfig
+    @ObservedObject var group: SessionService
     @Binding var paywallOpen: Bool
     @EnvironmentObject private var store: AfterDarkStore
 
-    private enum Phase { case setup, reveal, discuss, unmasked }
+    @State private var spicy: Bool
 
-    @State private var phase: Phase = .setup
-    @State private var spicy = false
-    @State private var playerCount = 4
+    // Pass-the-phone state.
+    private enum Phase { case reveal, discuss, unmasked }
+    @State private var phase: Phase = .reveal
     @State private var word = ""
-    @State private var imposterIndex = 0
+    @State private var imposters: Set<Int> = []
+    @State private var starter = 0
     @State private var currentPlayer = 0
     @State private var peeking = false
     @State private var peeked = false
-    @State private var starter = 0
+
+    // Group state.
+    @State private var round: GameRoundState? = nil
+    @State private var cardShown = false
+    @State private var dealing = false
+    @State private var groupError: String? = nil
+
+    init(config: ImposterConfig, group: SessionService, paywallOpen: Binding<Bool>) {
+        self.config = config
+        self.group = group
+        self._paywallOpen = paywallOpen
+        self._spicy = State(initialValue: config.spicy)
+    }
+
+    private var accent: Color { GameKind.imposter.accent }
+    private var deep: Color { GameKind.imposter.accentDeep }
+    private var playerCount: Int { config.playerCount }
 
     var body: some View {
         ZStack {
             AtmosphereBackground(accent: .whiskey)
             Group {
-                switch phase {
-                case .setup:    setup
-                case .reveal:   reveal
-                case .discuss:  discuss
-                case .unmasked: unmasked
+                if config.groupMode {
+                    groupBody
+                } else {
+                    switch phase {
+                    case .reveal:   passReveal
+                    case .discuss:  discuss
+                    case .unmasked: unmasked
+                    }
                 }
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 16)
         }
         .toolbarBackground(.hidden, for: .navigationBar)
+        .onAppear { if !config.groupMode && word.isEmpty { dealLocal() } }
+        .task {
+            guard config.groupMode else { return }
+            while !Task.isCancelled {
+                await refreshRound()
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+        }
     }
 
-    // ---- setup ---------------------------------------------------------
+    // ---- shared pieces ---------------------------------------------------
 
-    private var setup: some View {
-        VStack(spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("IMPOSTER")
-                    .font(.system(size: 22, weight: .black, design: .rounded))
-                    .italic().tracking(-0.5)
-                    .foregroundStyle(Color.cream)
-                Text("Everyone sees the secret word — except one imposter, who has to blend in. Describe the word one by one, then vote. \(GameKind.imposter.rule)")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.cream.opacity(0.55))
-                    .lineSpacing(2)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            DeckPicker(spicy: $spicy, accent: GameKind.imposter.accent,
-                       subscribed: store.isSubscribed) { paywallOpen = true }
-
-            HStack {
-                Text("PLAYERS")
-                    .font(.system(size: 10, weight: .black, design: .monospaced))
-                    .tracking(1.8)
-                    .foregroundStyle(Color.bronze)
-                Spacer()
-                Button { if playerCount > 3 { playerCount -= 1 } } label: { stepperBubble("minus") }
-                    .buttonStyle(PressScaleStyle())
-                Text("\(playerCount)")
-                    .font(.system(size: 24, weight: .black, design: .rounded))
-                    .foregroundStyle(Color.cream)
-                    .frame(minWidth: 44)
-                Button { if playerCount < 12 { playerCount += 1 } } label: { stepperBubble("plus") }
-                    .buttonStyle(PressScaleStyle())
-            }
-            .padding(16)
-            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.cream.opacity(0.05)))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
-
-            Spacer()
-
-            Button { start() } label: {
-                HStack {
-                    Text("DEAL THE WORDS")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(3)
-                    Spacer()
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
+    private func roleCard(isImposter: Bool, word: String?, shown: Bool) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .fill(LinearGradient(colors: [accent.opacity(shown ? 0.32 : 0.16), Color.ink.opacity(0.92)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+            if shown {
+                VStack(spacing: 14) {
+                    if isImposter {
+                        Image(systemName: "theatermasks.fill")
+                            .font(.system(size: 46, weight: .bold))
+                            .foregroundStyle(accent)
+                        Text("YOU'RE AN IMPOSTER")
+                            .font(.system(size: 18, weight: .black, design: .monospaced)).tracking(1.8)
+                            .foregroundStyle(accent)
+                            .multilineTextAlignment(.center)
+                        Text("There's a secret word. You don't know it. Blend in.")
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.75))
+                            .multilineTextAlignment(.center)
+                    } else {
+                        Text("THE WORD")
+                            .font(.system(size: 12, weight: .black, design: .monospaced)).tracking(2.4)
+                            .foregroundStyle(Color.bronze)
+                        Text(word ?? "")
+                            .font(.system(size: 38, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .multilineTextAlignment(.center)
+                            .minimumScaleFactor(0.5)
+                    }
                 }
-                .foregroundStyle(Color.ink)
-                .padding(.vertical, 16).padding(.horizontal, 20)
-                .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(GameKind.imposter.accent))
-                .shadow(color: GameKind.imposter.accent.opacity(0.45), radius: 18, y: 8)
+                .padding(28)
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "hand.tap.fill")
+                        .font(.system(size: 34))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                    Text(config.groupMode ? "TAP TO SEE YOUR CARD" : "HOLD TO PEEK")
+                        .font(.system(size: 13, weight: .black, design: .monospaced)).tracking(2.2)
+                        .foregroundStyle(Color.cream.opacity(0.65))
+                }
             }
-            .buttonStyle(PressScaleStyle())
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 320)
+        .contentShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous)
+            .strokeBorder(accent.opacity(0.5), lineWidth: 1.4))
+        .shadow(color: accent.opacity(0.3), radius: 28, y: 14)
+    }
+
+    private var spicierButton: some View {
+        GhostButton(title: spicy ? "PLAY AGAIN" : "GO SPICIER 🔥") {
+            if spicy { return }
+            if store.isSubscribed { spicy = true } else { paywallOpen = true }
+        }
+    }
+
+    private func wordReveal(_ w: String) -> some View {
+        VStack(spacing: 6) {
+            Text("THE WORD WAS")
+                .font(.system(size: 12, weight: .black, design: .monospaced)).tracking(2.4)
+                .foregroundStyle(Color.bronze)
+            Text(w)
+                .font(.system(size: 28, weight: .black, design: .rounded))
+                .foregroundStyle(Color.whiskey)
+                .multilineTextAlignment(.center)
         }
         .padding(.top, 8)
     }
 
-    private func stepperBubble(_ icon: String) -> some View {
-        Image(systemName: icon)
-            .font(.system(size: 13, weight: .bold))
-            .foregroundStyle(Color.cream)
-            .frame(width: 34, height: 34)
-            .background(Circle().fill(Color.cream.opacity(0.08)))
-            .overlay(Circle().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
-    }
+    // ---- pass-the-phone -------------------------------------------------
 
-    // ---- reveal (pass the phone) ---------------------------------------
-
-    private var reveal: some View {
+    private var passReveal: some View {
         VStack(spacing: 22) {
-            Text("PLAYER \(currentPlayer + 1) OF \(playerCount)")
-                .font(.system(size: 11, weight: .black, design: .monospaced))
-                .tracking(2.2)
-                .foregroundStyle(Color.bronze)
-                .padding(.top, 10)
-            Text(peeked ? "Got it? Pass the phone." : "Your eyes only.")
-                .font(.system(size: 26, weight: .black, design: .rounded))
-                .italic().tracking(-0.8)
-                .foregroundStyle(Color.cream)
-
+            bigHeader("PLAYER \(currentPlayer + 1) OF \(playerCount)",
+                      peeked ? "Got it? Pass it on." : "Your eyes only.")
             Spacer()
-
-            ZStack {
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .fill(Color.ink.opacity(0.85))
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .strokeBorder(GameKind.imposter.accent.opacity(0.4), lineWidth: 1.2)
-                if peeking {
-                    VStack(spacing: 12) {
-                        if currentPlayer == imposterIndex {
-                            Image(systemName: "theatermasks.fill")
-                                .font(.system(size: 34))
-                                .foregroundStyle(GameKind.imposter.accent)
-                            Text("YOU ARE THE IMPOSTER")
-                                .font(.system(size: 16, weight: .black, design: .monospaced))
-                                .tracking(1.6)
-                                .foregroundStyle(GameKind.imposter.accent)
-                            Text("There is a secret word. You don't know it. Blend in.")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
-                                .foregroundStyle(Color.cream.opacity(0.7))
-                                .multilineTextAlignment(.center)
-                        } else {
-                            Text("THE WORD IS")
-                                .font(.system(size: 10, weight: .black, design: .monospaced))
-                                .tracking(2.2)
-                                .foregroundStyle(Color.bronze)
-                            Text(word)
-                                .font(.system(size: 30, weight: .black, design: .rounded))
-                                .foregroundStyle(Color.cream)
-                                .multilineTextAlignment(.center)
-                                .minimumScaleFactor(0.5)
+            roleCard(isImposter: imposters.contains(currentPlayer), word: word, shown: peeking)
+                .gesture(
+                    // Touch-down shows the card, touch-up hides it — no
+                    // timing thresholds, no phantom triggers.
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in
+                            if !peeking { peeking = true; peeked = true }
                         }
-                    }
-                    .padding(24)
-                } else {
-                    VStack(spacing: 10) {
-                        Image(systemName: "hand.tap.fill")
-                            .font(.system(size: 26))
-                            .foregroundStyle(Color.cream.opacity(0.5))
-                        Text("HOLD TO PEEK")
-                            .font(.system(size: 12, weight: .black, design: .monospaced))
-                            .tracking(2.0)
-                            .foregroundStyle(Color.cream.opacity(0.6))
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, minHeight: 260)
-            .onLongPressGesture(minimumDuration: .infinity, maximumDistance: 60) {
-            } onPressingChanged: { pressing in
-                peeking = pressing
-                if pressing { peeked = true }
-            }
-
+                        .onEnded { _ in peeking = false }
+                )
             Spacer()
-
-            Button { nextPlayer() } label: {
-                HStack {
-                    Text(currentPlayer + 1 == playerCount ? "EVERYONE'S SEEN IT" : "PASS TO PLAYER \(currentPlayer + 2)")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(2)
-                    Spacer()
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                }
-                .foregroundStyle(peeked ? Color.ink : Color.cream.opacity(0.4))
-                .padding(.vertical, 16).padding(.horizontal, 20)
-                .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(peeked ? GameKind.imposter.accent : Color.cream.opacity(0.08)))
-            }
-            .disabled(!peeked)
-            .buttonStyle(PressScaleStyle())
+            PrimaryButton(title: currentPlayer + 1 == playerCount ? "EVERYONE'S SEEN IT" : "PASS TO PLAYER \(currentPlayer + 2)",
+                          colors: [accent, deep], enabled: peeked) { nextPlayer() }
         }
     }
-
-    // ---- discussion + reveal -------------------------------------------
 
     private var discuss: some View {
         VStack(spacing: 20) {
             Spacer()
             Image(systemName: "bubble.left.and.bubble.right.fill")
-                .font(.system(size: 34))
-                .foregroundStyle(GameKind.imposter.accent)
+                .font(.system(size: 44, weight: .bold))
+                .foregroundStyle(accent)
             Text("Talk it out.")
-                .font(.system(size: 28, weight: .black, design: .rounded))
-                .italic().tracking(-0.8)
+                .font(.system(size: 34, weight: .black, design: .rounded))
+                .italic().tracking(-1)
                 .foregroundStyle(Color.cream)
-            VStack(spacing: 8) {
-                Text("Player \(starter + 1) starts — everyone describes the word in one sentence, without saying it.")
-                Text("Then the table votes on who the imposter is.")
+            VStack(spacing: 10) {
+                Text("Player \(starter + 1) starts.")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                Text(imposters.count > 1
+                     ? "One sentence each about the word — without saying it. \(imposters.count) imposters are hiding. Then vote."
+                     : "One sentence each about the word — without saying it. Then vote.")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.7))
+                    .multilineTextAlignment(.center)
             }
-            .font(.system(size: 14, weight: .medium, design: .rounded))
-            .foregroundStyle(Color.cream.opacity(0.65))
-            .multilineTextAlignment(.center)
-            .lineSpacing(3)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 8)
             Spacer()
-            Button {
+            PrimaryButton(title: imposters.count > 1 ? "REVEAL THE IMPOSTERS" : "REVEAL THE IMPOSTER",
+                          icon: "eye.fill", colors: [accent, deep]) {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { phase = .unmasked }
-            } label: {
-                HStack {
-                    Text("REVEAL THE IMPOSTER")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(2.4)
-                    Spacer()
-                    Image(systemName: "eye.fill")
-                        .font(.system(size: 12, weight: .bold))
-                }
-                .foregroundStyle(Color.ink)
-                .padding(.vertical, 16).padding(.horizontal, 20)
-                .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(GameKind.imposter.accent))
-                .shadow(color: GameKind.imposter.accent.opacity(0.45), radius: 18, y: 8)
             }
-            .buttonStyle(PressScaleStyle())
         }
     }
 
     private var unmasked: some View {
-        VStack(spacing: 20) {
+        let names = imposters.sorted().map { "Player \($0 + 1)" }
+        return VStack(spacing: 18) {
             Spacer()
             Image(systemName: "theatermasks.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(GameKind.imposter.accent)
-            Text("PLAYER \(imposterIndex + 1)")
-                .font(.system(size: 30, weight: .black, design: .rounded))
+                .font(.system(size: 52, weight: .bold))
+                .foregroundStyle(accent)
+            Text(names.joined(separator: " & "))
+                .font(.system(size: 34, weight: .black, design: .rounded))
+                .italic().tracking(-1)
                 .foregroundStyle(Color.cream)
-            Text("was the imposter")
-                .font(.system(size: 15, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.cream.opacity(0.65))
-            VStack(spacing: 4) {
-                Text("THE WORD WAS")
-                    .font(.system(size: 10, weight: .black, design: .monospaced))
-                    .tracking(2.2)
-                    .foregroundStyle(Color.bronze)
-                Text(word)
-                    .font(.system(size: 24, weight: .black, design: .rounded))
-                    .foregroundStyle(Color.whiskey)
-            }
-            .padding(.top, 6)
-            Text(GameKind.imposter.rule)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.cream.opacity(0.55))
                 .multilineTextAlignment(.center)
-                .padding(.top, 4)
+                .minimumScaleFactor(0.6)
+            Text(names.count > 1 ? "were the imposters" : "was the imposter")
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.7))
+            wordReveal(word)
             Spacer()
-            Button { start() } label: {
-                HStack {
-                    Text("NEW ROUND")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced)).tracking(3)
-                    Spacer()
-                    Image(systemName: "arrow.counterclockwise")
-                        .font(.system(size: 12, weight: .bold))
-                }
-                .foregroundStyle(Color.ink)
-                .padding(.vertical, 16).padding(.horizontal, 20)
-                .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(GameKind.imposter.accent))
-                .shadow(color: GameKind.imposter.accent.opacity(0.45), radius: 18, y: 8)
-            }
-            .buttonStyle(PressScaleStyle())
+            PrimaryButton(title: "NEW ROUND", icon: "arrow.counterclockwise", colors: [accent, deep]) { dealLocal() }
+            spicierButton
         }
     }
 
-    // ---- mechanics -----------------------------------------------------
-
-    private func start() {
-        let d = GameContent.decks(for: .imposter)
-        let deck = (spicy && store.isSubscribed) ? d.afterDark : d.free
-        word = deck.prompts.randomElement() ?? "Karaoke"
-        imposterIndex = Int.random(in: 0..<playerCount)
+    private func dealLocal() {
+        let pool = GameContent.pool(for: .imposter, spicy: spicy && store.isSubscribed)
+        word = pool.randomElement() ?? "Karaoke"
+        let count = min(config.imposterCount, ImposterConfig.maxImposters(for: playerCount))
+        imposters = Set(Array(0..<playerCount).shuffled().prefix(count))
         starter = Int.random(in: 0..<playerCount)
         currentPlayer = 0
         peeking = false
@@ -1027,136 +1078,331 @@ struct ImposterGameView: View {
         peeking = false
         peeked = false
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-            if currentPlayer + 1 == playerCount {
-                phase = .discuss
-            } else {
-                currentPlayer += 1
+            if currentPlayer + 1 == playerCount { phase = .discuss } else { currentPlayer += 1 }
+        }
+    }
+
+    // ---- group (everyone's own phone) ----------------------------------
+
+    private func name(_ id: UUID?) -> String {
+        guard let id else { return "Someone" }
+        if id == group.myId { return "You" }
+        return group.memberProfiles[id]?.name ?? "Someone"
+    }
+
+    private func imposterNames(_ round: GameRoundState) -> String {
+        let ids = round.imposterIds ?? []
+        return ids.map { name($0) }.joined(separator: " & ")
+    }
+
+    @ViewBuilder
+    private var groupBody: some View {
+        if let round, round.isPlayer {
+            VStack(spacing: 20) {
+                if round.revealed {
+                    bigHeader("ROUND OVER",
+                              "\(imposterNames(round)) \((round.imposterIds?.count ?? 1) > 1 || round.imposterIds?.first == group.myId ? "were" : "was") the imposter\((round.imposterIds?.count ?? 1) > 1 ? "s" : "").")
+                } else {
+                    bigHeader(round.imposterCount > 1
+                              ? "\(round.playerCount) PHONES · \(round.imposterCount) IMPOSTERS"
+                              : "\(round.playerCount) PHONES DEALT",
+                              cardShown ? "\(name(round.starterId)) start\(round.starterId == group.myId ? "" : "s")." : "Your card's in.")
+                }
+                Spacer()
+                if round.revealed {
+                    Image(systemName: "theatermasks.fill")
+                        .font(.system(size: 60, weight: .bold))
+                        .foregroundStyle(accent)
+                    wordReveal(round.word ?? "")
+                } else {
+                    roleCard(isImposter: round.isImposter, word: round.word, shown: cardShown)
+                        .onTapGesture {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { cardShown.toggle() }
+                        }
+                    if cardShown {
+                        Text("One sentence each about the word — without saying it. Then vote.")
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.65))
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                Spacer()
+                if group.isHost {
+                    if round.revealed {
+                        PrimaryButton(title: "NEW ROUND", icon: "arrow.counterclockwise", colors: [accent, deep]) {
+                            Task { await dealGroup() }
+                        }
+                        spicierButton
+                    } else {
+                        PrimaryButton(title: round.imposterCount > 1 ? "REVEAL THE IMPOSTERS" : "REVEAL THE IMPOSTER",
+                                      icon: "eye.fill", colors: [accent, deep]) {
+                            Task { await revealGroup(round.id) }
+                        }
+                    }
+                } else if round.revealed {
+                    Text("Waiting for \(name(round.hostId)) to deal again…")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.5))
+                }
             }
+        } else if group.isHost {
+            VStack(spacing: 20) {
+                bigHeader("GROUP ROUND", "Deal to \(groupPlayerIDs.count) phones.")
+                Spacer()
+                CardFan(kind: .imposter)
+                Text(config.imposterCount > 1
+                     ? "Everyone in your sesh gets their own card — \(config.imposterCount) of them are imposters."
+                     : "Everyone in your sesh gets their own card — one of them is the imposter.")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                if let groupError {
+                    Text(groupError)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Status.drunk.color)
+                        .multilineTextAlignment(.center)
+                }
+                Spacer()
+                PrimaryButton(title: dealing ? "DEALING…" : "DEAL THE WORDS", colors: [accent, deep], enabled: !dealing) {
+                    Task { await dealGroup() }
+                }
+            }
+        } else {
+            VStack(spacing: 20) {
+                bigHeader("GROUP ROUND", "Waiting for the deal.")
+                Spacer()
+                CardFan(kind: .imposter)
+                Text("\(name(group.session?.hostId)) deals. Your card lands here the moment it's out.")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                Spacer()
+            }
+        }
+    }
+
+    private var groupPlayerIDs: [UUID] {
+        var ids = group.members.filter(\.inLive).map(\.profileId)
+        if let me = group.myId, !ids.contains(me) { ids.append(me) }
+        return ids
+    }
+
+    private func refreshRound() async {
+        guard let sid = group.session?.id else { return }
+        do {
+            let state: GameRoundState? = try await supabase
+                .rpc("game_round_for_session", params: ["p_session": sid])
+                .execute()
+                .value
+            if state?.id != round?.id { cardShown = false }
+            round = state
+        } catch {
+            // Keep whatever we had; the next tick retries.
+        }
+    }
+
+    private func dealGroup() async {
+        guard let sid = group.session?.id, let me = group.myId else { return }
+        let players = groupPlayerIDs
+        guard players.count >= 3, let starterId = players.randomElement() else {
+            groupError = "Need at least 3 people in the sesh."
+            return
+        }
+        let count = min(config.imposterCount, ImposterConfig.maxImposters(for: players.count))
+        let imps = Array(players.shuffled().prefix(count))
+        guard let first = imps.first else { return }
+        dealing = true
+        groupError = nil
+        defer { dealing = false }
+        let useSpicy = spicy && store.isSubscribed
+        let pool = GameContent.pool(for: .imposter, spicy: useSpicy)
+        let insert = GameRoundInsert(session_id: sid, host_id: me, kind: "imposter",
+                                     word: pool.randomElement() ?? "Karaoke",
+                                     imposter_id: first, imposter_ids: imps,
+                                     starter_id: starterId, player_ids: players, spicy: useSpicy)
+        do {
+            try await supabase.from("game_rounds").insert(insert).execute()
+            cardShown = false
+            await refreshRound()
+        } catch {
+            groupError = "Couldn't deal — check your connection and try again."
+        }
+    }
+
+    private func revealGroup(_ id: UUID) async {
+        do {
+            try await supabase.from("game_rounds").update(RevealPatch(revealed: true))
+                .eq("id", value: id).execute()
+            await refreshRound()
+        } catch {
+            groupError = "Couldn't reveal — try again."
         }
     }
 }
 
-// MARK: - After Dark paywall
+// MARK: - Paywall
 
 struct AfterDarkPaywall: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: AfterDarkStore
 
+    private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+
+    private var yearlySaving: Int? {
+        guard let m = store.products.first(where: { $0.id.hasSuffix("monthly") }),
+              let y = store.products.first(where: { $0.id.hasSuffix("yearly") }) else { return nil }
+        let full = m.price * 12
+        guard full > 0 else { return nil }
+        let pct = (1 - (y.price / full)) * 100
+        return Int(NSDecimalNumber(decimal: pct).doubleValue.rounded())
+    }
+
     var body: some View {
         ZStack {
             Color.ink.ignoresSafeArea()
             DimpleDriftBackground(strength: 0.17, speed: 7, scale: 1.2)
-            RadialGradient(colors: [Color.whiskey.opacity(0.22), .clear],
-                           center: .init(x: 0.85, y: 0.0),
-                           startRadius: 10, endRadius: 380)
-            .ignoresSafeArea()
+            RadialGradient(colors: [Color.whiskey.opacity(0.32), .clear],
+                           center: .init(x: 0.8, y: 0.0), startRadius: 10, endRadius: 420)
+                .ignoresSafeArea()
+            RadialGradient(colors: [ember.opacity(0.22), .clear],
+                           center: .init(x: 0.1, y: 0.55), startRadius: 10, endRadius: 360)
+                .ignoresSafeArea()
 
-            VStack(spacing: 18) {
-                Capsule()
-                    .fill(Color.cream.opacity(0.2))
-                    .frame(width: 36, height: 4)
-                    .padding(.top, 10)
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 20) {
+                    Capsule().fill(Color.cream.opacity(0.2)).frame(width: 36, height: 4).padding(.top, 10)
 
-                Image(systemName: "flame.fill")
-                    .font(.system(size: 34))
-                    .foregroundStyle(Color.whiskey)
-                    .padding(.top, 8)
-                Text("AFTER DARK")
-                    .font(.system(size: 24, weight: .black, design: .monospaced))
-                    .tracking(3.5)
-                    .foregroundStyle(Color.cream)
-                Text("The spicy decks — for tables that can handle it.")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.cream.opacity(0.65))
-
-                VStack(alignment: .leading, spacing: 12) {
-                    perk("theatermasks.fill", "Spicy word packs in Imposter")
-                    perk("hand.raised.fill", "28 bolder Never Have I Ever prompts")
-                    perk("shippingbox.fill", "Daring truths & dares in Pandora's Box")
-                    perk("person.line.dotted.person.fill", "Flirtier Most Likely To rounds")
-                    perk("sparkles", "New cards added while you're subscribed")
-                }
-                .padding(18)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.cream.opacity(0.05)))
-                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1))
-
-                if store.isSubscribed {
-                    Text("You're in. Go play.")
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.whiskey)
-                        .padding(.top, 8)
-                } else if let err = store.loadError {
-                    Text(err)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.6))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                        .padding(.top, 8)
-                } else {
-                    ForEach(store.products, id: \.id) { product in
-                        Button {
-                            Task { await store.purchase(product) }
-                        } label: {
-                            HStack {
-                                Text(product.id.hasSuffix("yearly") ? "YEARLY" : "MONTHLY")
-                                    .font(.system(size: 12, weight: .black, design: .monospaced))
-                                    .tracking(2.0)
-                                Spacer()
-                                Text(product.displayPrice)
-                                    .font(.system(size: 15, weight: .black, design: .rounded))
-                            }
-                            .foregroundStyle(Color.ink)
-                            .padding(.vertical, 15).padding(.horizontal, 20)
-                            .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.whiskey))
+                    VStack(spacing: 10) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "flame.fill").font(.system(size: 12, weight: .bold))
+                            Text("AFTER DARK").font(.system(size: 12, weight: .black, design: .monospaced)).tracking(3)
                         }
-                        .buttonStyle(PressScaleStyle())
-                        .disabled(store.purchasing)
+                        .foregroundStyle(Color.whiskey)
+                        Text("Go spicier.")
+                            .font(.system(size: 42, weight: .black, design: .rounded))
+                            .italic().tracking(-1.5)
+                            .foregroundStyle(Color.cream)
+                        Text("Bolder cards. Wilder rounds. Every game.")
+                            .font(.system(size: 17, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.75))
                     }
+                    .padding(.top, 6)
+
+                    LazyVGrid(columns: columns, spacing: 10) {
+                        perk(.imposter, "Words you can't say out loud.")
+                        perk(.never, "The questions your friends dodge.")
+                        perk(.pandora, "Dares that actually dare.")
+                        perk(.mostLikely, "Point fingers. Lose friends.")
+                    }
+
+                    HStack(spacing: 8) {
+                        chip("WAY MORE CARDS")
+                        chip("NEW DECKS DROPPING")
+                    }
+
+                    if store.isSubscribed {
+                        Text("You're in. Go play.")
+                            .font(.system(size: 18, weight: .black, design: .rounded))
+                            .foregroundStyle(Color.whiskey)
+                            .padding(.top, 6)
+                    } else if store.products.isEmpty, let err = store.loadError {
+                        Text(err)
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.6))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                    } else {
+                        VStack(spacing: 10) {
+                            ForEach(store.products, id: \.id) { product in priceButton(product) }
+                        }
+                    }
+
+                    Button { Task { await store.restore() } } label: {
+                        Text(store.purchasing ? "Working…" : "Restore purchases")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.bronze)
+                    }
+                    .disabled(store.purchasing)
+                    .buttonStyle(PressScaleStyle())
+
+                    Text("Auto-renews until cancelled in Settings → Apple ID → Subscriptions. [Terms](https://sejdel.com/terms/) · [Privacy](https://sejdel.com/privacy/)")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .tint(Color.bronze)
+                        .foregroundStyle(Color.cream.opacity(0.45))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 24)
                 }
-
-                Button {
-                    Task { await store.restore() }
-                } label: {
-                    Text(store.purchasing ? "Working…" : "Restore purchases")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.bronze)
-                }
-                .disabled(store.purchasing)
-                .buttonStyle(PressScaleStyle())
-
-                Text("Auto-renews until cancelled in Settings → Apple ID → Subscriptions. [Terms](https://sejdel.com/terms/) · [Privacy](https://sejdel.com/privacy/)")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .tint(Color.bronze)
-                    .foregroundStyle(Color.cream.opacity(0.4))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-
-                Spacer(minLength: 6)
+                .padding(.horizontal, 20)
             }
-            .padding(.horizontal, 20)
         }
         .preferredColorScheme(.dark)
         .onChange(of: store.isSubscribed) { _, unlocked in
-            if unlocked {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { dismiss() }
-            }
+            if unlocked { DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { dismiss() } }
         }
         .task { if store.products.isEmpty { await store.load() } }
     }
 
-    private func perk(_ icon: String, _ text: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.whiskey)
-                .frame(width: 22)
-            Text(text)
-                .font(.system(size: 13, weight: .medium, design: .rounded))
+    private func perk(_ kind: GameKind, _ line: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: kind.icon)
+                .font(.system(size: 26, weight: .bold))
+                .foregroundStyle(Color.cream)
+            Spacer(minLength: 0)
+            Text(kind.title)
+                .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(1.4)
                 .foregroundStyle(Color.cream.opacity(0.85))
+            Text(line)
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 150, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(kind.gradient))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .strokeBorder(Color.cream.opacity(0.2), lineWidth: 1))
+        .shadow(color: kind.accent.opacity(0.3), radius: 18, y: 10)
+    }
+
+    private func chip(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(1.6)
+            .foregroundStyle(Color.whiskey)
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .background(Capsule().fill(Color.whiskey.opacity(0.12)))
+            .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1))
+    }
+
+    private func priceButton(_ product: Product) -> some View {
+        let yearly = product.id.hasSuffix("yearly")
+        return Button { Task { await store.purchase(product) } } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(yearly ? "YEARLY" : "MONTHLY")
+                        .font(.system(size: 13, weight: .black, design: .monospaced)).tracking(2.2)
+                    if yearly, let s = yearlySaving, s > 0 {
+                        Text("BEST VALUE · SAVE \(s)%")
+                            .font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1.2)
+                            .opacity(0.75)
+                    } else if !yearly {
+                        Text("CANCEL ANYTIME")
+                            .font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1.2)
+                            .opacity(0.75)
+                    }
+                }
+                Spacer()
+                Text(product.displayPrice)
+                    .font(.system(size: 20, weight: .black, design: .rounded))
+            }
+            .foregroundStyle(Color.ink)
+            .padding(.vertical, 16).padding(.horizontal, 20)
+            .background(RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(LinearGradient(colors: yearly ? [Color.whiskey, ember] : [Color.cream, Color.cream.opacity(0.85)],
+                                     startPoint: .leading, endPoint: .trailing)))
+            .shadow(color: (yearly ? Color.whiskey : Color.cream).opacity(0.35), radius: 18, y: 10)
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(store.purchasing)
     }
 }

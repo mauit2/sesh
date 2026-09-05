@@ -1,5 +1,5 @@
 {
-  "originHash" : "287f221152217be397dc7f73c322dc513c32fe812ed8c184adc8ef15090be0ff",
+  "originHash" : "79d93cc7c11602b72c4ca0f75f87379d4a7784f17567e57bdcccdea7dd2d3d66",
   "pins" : [
     {
       "identity" : "mapbox-common-ios",
@@ -26,6 +26,15 @@
       "state" : {
         "revision" : "187cc7fdef044a64eeea4359be5cd69617936ac1",
         "version" : "11.27.0"
+      }
+    },
+    {
+      "identity" : "snap-kit-spm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Snapchat/snap-kit-spm",
+      "state" : {
+        "revision" : "b4593a1ec3813af844806fef319ef68888611fba",
+        "version" : "2.6.0"
       }
     },
     {
