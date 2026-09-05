@@ -506,6 +506,49 @@ private func bigHeader(_ eyebrow: String, _ title: String) -> some View {
 
 private let ember = Color(red: 0.86, green: 0.28, blue: 0.24)
 
+/// Wraps fixed-size chips onto as many centered lines as needed — a chip
+/// never breaks inside its own text.
+private struct ChipFlow: Layout {
+    var spacing: CGFloat = 8
+
+    private func rows(_ subviews: Subviews, width: CGFloat) -> [[(Int, CGSize)]] {
+        var rows: [[(Int, CGSize)]] = [[]]
+        var x: CGFloat = 0
+        for (i, v) in subviews.enumerated() {
+            let size = v.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                rows.append([])
+                x = 0
+            }
+            rows[rows.count - 1].append((i, size))
+            x += size.width + spacing
+        }
+        return rows
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        let height = rows(subviews, width: width).reduce(CGFloat(0)) { acc, row in
+            acc + (row.map { $0.1.height }.max() ?? 0)
+        } + spacing * CGFloat(max(0, rows(subviews, width: width).count - 1))
+        return CGSize(width: proposal.width ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(subviews, width: bounds.width) {
+            let rowWidth = row.reduce(CGFloat(0)) { $0 + $1.1.width } + spacing * CGFloat(max(0, row.count - 1))
+            let rowHeight = row.map { $0.1.height }.max() ?? 0
+            var x = bounds.minX + (bounds.width - rowWidth) / 2
+            for (i, size) in row {
+                subviews[i].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += rowHeight + spacing
+        }
+    }
+}
+
 // MARK: - Hub
 
 struct GamesHubView: View {
@@ -1455,7 +1498,7 @@ struct AfterDarkPaywall: View {
                         perk(.mostLikely, "Point fingers. Lose friends.")
                     }
 
-                    HStack(spacing: 8) {
+                    ChipFlow(spacing: 8) {
                         chip("UNLIMITED ROUNDS")
                         chip("40 CARDS A ROUND")
                         chip("EVERY DECK")
@@ -1529,6 +1572,8 @@ struct AfterDarkPaywall: View {
     private func chip(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(1.6)
+            .lineLimit(1)
+            .fixedSize()
             .foregroundStyle(Color.whiskey)
             .padding(.horizontal, 14).padding(.vertical, 9)
             .background(Capsule().fill(Color.whiskey.opacity(0.12)))
