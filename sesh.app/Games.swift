@@ -57,25 +57,38 @@ final class AfterDarkStore: ObservableObject {
         let id: String
         let displayPrice: String
         /// Yearly only: the price divided by 52, in the buyer's own currency.
-        /// Shown instead of a "save x%" claim, which varies wildly between
-        /// storefronts once Apple equalizes prices.
         let weeklyEquivalent: String?
+        /// Yearly only: saving versus 52 weekly payments, computed from the
+        /// buyer's own storefront prices so it's true in every country.
+        let savingPercent: Int?
         let product: Product?
         var isYearly: Bool { id.hasSuffix("yearly") }
+    }
+
+    private static func saving(weekly: Decimal, yearly: Decimal) -> Int? {
+        let full = weekly * 52
+        guard full > 0, yearly < full else { return nil }
+        let pct = (1 - yearly / full) * 100
+        return Int(NSDecimalNumber(decimal: pct).doubleValue.rounded())
     }
 
     /// What the paywall lists: live products, or the preview stand-ins.
     var offers: [Offer] {
         if !products.isEmpty {
+            let weekly = products.first { !$0.id.hasSuffix("yearly") }?.price
             return products.map { p in
-                Offer(id: p.id, displayPrice: p.displayPrice,
-                      weeklyEquivalent: p.id.hasSuffix("yearly") ? (p.price / 52).formatted(p.priceFormatStyle) : nil,
-                      product: p)
+                let yearly = p.id.hasSuffix("yearly")
+                return Offer(id: p.id, displayPrice: p.displayPrice,
+                             weeklyEquivalent: yearly ? (p.price / 52).formatted(p.priceFormatStyle) : nil,
+                             savingPercent: (yearly && weekly != nil) ? Self.saving(weekly: weekly!, yearly: p.price) : nil,
+                             product: p)
             }
         }
         if Self.previewMode {
-            return [Offer(id: "sejdel.afterdark.weekly", displayPrice: "9,00 kr", weeklyEquivalent: nil, product: nil),
-                    Offer(id: "sejdel.afterdark.yearly", displayPrice: "399,00 kr", weeklyEquivalent: "7,67 kr", product: nil)]
+            return [Offer(id: "sejdel.afterdark.weekly", displayPrice: "9,00 kr", weeklyEquivalent: nil,
+                          savingPercent: nil, product: nil),
+                    Offer(id: "sejdel.afterdark.yearly", displayPrice: "399,00 kr", weeklyEquivalent: "7,67 kr",
+                          savingPercent: Self.saving(weekly: 9, yearly: 399), product: nil)]
         }
         return []
     }
@@ -217,6 +230,65 @@ struct ImposterConfig: Hashable {
 
     /// Sensible ceiling: never half the table or more.
     static func maxImposters(for players: Int) -> Int { max(1, (players - 1) / 2) }
+}
+
+// MARK: - Free-play limit (card games only)
+
+/// Without After Dark, each card game allows one 20-card round per 24 h.
+/// The clock starts when the round is dealt. Imposter is never limited.
+@MainActor
+final class FreePlayLimiter: ObservableObject {
+    static let shared = FreePlayLimiter()
+    static let cooldown: TimeInterval = 24 * 60 * 60
+    private static let storeKey = "games.lastFreeRound"
+
+    /// Observable so the intro underneath a pushed game re-renders the
+    /// moment a round is dealt — a view below the stack top never gets
+    /// `onAppear` again on pop.
+    @Published private(set) var lastPlayed: [String: TimeInterval]
+
+    private init() {
+        lastPlayed = UserDefaults.standard.dictionary(forKey: Self.storeKey) as? [String: TimeInterval] ?? [:]
+    }
+
+    func markPlayed(_ kind: GameKind) {
+        lastPlayed[kind.rawValue] = Date().timeIntervalSince1970
+        UserDefaults.standard.set(lastPlayed, forKey: Self.storeKey)
+    }
+
+    /// When the next free round unlocks, or nil if one is available now.
+    func nextAllowed(_ kind: GameKind) -> Date? {
+        guard let t = lastPlayed[kind.rawValue] else { return nil }
+        let next = Date(timeIntervalSince1970: t).addingTimeInterval(Self.cooldown)
+        return next > Date() ? next : nil
+    }
+
+    static func format(_ seconds: TimeInterval) -> String {
+        let i = max(0, Int(seconds))
+        return String(format: "%02d:%02d:%02d", i / 3600, (i % 3600) / 60, i % 60)
+    }
+}
+
+/// Live countdown to the next free round.
+private struct CooldownPill: View {
+    let until: Date
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            VStack(spacing: 6) {
+                Text("NEXT FREE ROUND IN")
+                    .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(2.2)
+                    .foregroundStyle(Color.bronze)
+                Text(FreePlayLimiter.format(until.timeIntervalSince(ctx.date)))
+                    .font(.system(size: 30, weight: .black, design: .monospaced))
+                    .foregroundStyle(Color.cream)
+            }
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.cream.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(Color.cream.opacity(0.14), lineWidth: 1))
+        }
+    }
 }
 
 // MARK: - Group Imposter round (Supabase)
@@ -581,6 +653,7 @@ struct GameIntroView: View {
     @State private var groupMode = false
     @State private var playerCount = 4
     @State private var imposterCount = 1
+    @ObservedObject private var limiter = FreePlayLimiter.shared
 
     private var groupPlayers: [UUID] {
         var ids = group.members.filter(\.inLive).map(\.profileId)
@@ -654,6 +727,14 @@ struct GameIntroView: View {
                 PrimaryLabel(title: kind.startLabel, colors: colors)
             }
             .buttonStyle(PressScaleStyle())
+        } else if !store.hasSpicy, let until = limiter.nextAllowed(kind) {
+            // Free round already used today — show the clock and the way out.
+            VStack(spacing: 12) {
+                CooldownPill(until: until)
+                PrimaryButton(title: "UNLOCK MORE ROUNDS", icon: "flame.fill", colors: [Color.whiskey, ember]) {
+                    paywallOpen = true
+                }
+            }
         } else {
             NavigationLink(value: CardGameConfig(kind: kind, spicy: unlocked)) {
                 PrimaryLabel(title: kind.startLabel, colors: colors)
@@ -717,10 +798,13 @@ struct PromptGameView: View {
     @Binding var paywallOpen: Bool
     @EnvironmentObject private var store: AfterDarkStore
 
+    @Environment(\.dismiss) private var dismiss
     @State private var spicy: Bool
     @State private var cards: [String] = []
     @State private var index = 0
     @State private var dragX: CGFloat = 0
+    /// Set when a free round is dealt — drives the end-of-round cooldown.
+    @State private var lockedUntil: Date? = nil
 
     init(config: CardGameConfig, paywallOpen: Binding<Bool>) {
         self.config = config
@@ -803,20 +887,20 @@ struct PromptGameView: View {
 
     private var card: some View {
         let (badge, body) = split(cards[index])
-        return ZStack(alignment: .topTrailing) {
+        return ZStack {
             RoundedRectangle(cornerRadius: 30, style: .continuous)
                 .fill(LinearGradient(colors: [kind.accent.opacity(0.28), Color.ink.opacity(0.9)],
                                      startPoint: .topLeading, endPoint: .bottomTrailing))
-            Image(systemName: kind.icon)
-                .font(.system(size: 120, weight: .bold))
-                .foregroundStyle(kind.accent.opacity(0.12))
-                .offset(x: 24, y: -20)
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(spacing: 16) {
+                Image(systemName: kind.icon)
+                    .font(.system(size: 34, weight: .bold))
+                    .foregroundStyle(kind.accent)
                 if let badge {
+                    // Pandora's category — big and unmissable.
                     Text(badge)
-                        .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(2.2)
+                        .font(.system(size: 16, weight: .black, design: .monospaced)).tracking(3.2)
                         .foregroundStyle(Color.ink)
-                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .padding(.horizontal, 20).padding(.vertical, 10)
                         .background(Capsule().fill(kind.accent))
                 } else {
                     Text(kind.title)
@@ -827,6 +911,7 @@ struct PromptGameView: View {
                 Text(body)
                     .font(.system(size: 27, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.cream)
+                    .multilineTextAlignment(.center)
                     .lineSpacing(4)
                     .minimumScaleFactor(0.55)
                     .fixedSize(horizontal: false, vertical: true)
@@ -836,7 +921,7 @@ struct PromptGameView: View {
                     .foregroundStyle(Color.cream.opacity(0.3))
             }
             .padding(26)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 400)
@@ -845,8 +930,38 @@ struct PromptGameView: View {
         .shadow(color: kind.accent.opacity(0.35), radius: 30, y: 16)
     }
 
-    /// End of the 40 — the "step it up" moment.
+    /// End of the round. Free players hit the 24 h clock; After Dark gets
+    /// the "step it up" moment.
+    @ViewBuilder
     private var roundOver: some View {
+        if !store.hasSpicy, let until = lockedUntil ?? FreePlayLimiter.shared.nextAllowed(kind) {
+            VStack(spacing: 20) {
+                Spacer()
+                Image(systemName: "hourglass")
+                    .font(.system(size: 52, weight: .bold))
+                    .foregroundStyle(Color.whiskey)
+                Text("Want to play more?")
+                    .font(.system(size: 34, weight: .black, design: .rounded))
+                    .italic().tracking(-1)
+                    .foregroundStyle(Color.cream)
+                CooldownPill(until: until)
+                Text("Every card, 40 a round, no waiting.")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 10)
+                Spacer()
+                PrimaryButton(title: "UNLOCK MORE ROUNDS", icon: "flame.fill", colors: [Color.whiskey, ember]) {
+                    paywallOpen = true
+                }
+                GhostButton(title: "DONE FOR NOW") { dismiss() }
+            }
+        } else {
+            premiumRoundOver
+        }
+    }
+
+    private var premiumRoundOver: some View {
         VStack(spacing: 20) {
             Spacer()
             Image(systemName: spicy ? "flame.fill" : "arrow.up.circle.fill")
@@ -886,9 +1001,15 @@ struct PromptGameView: View {
     }
 
     private func deal() {
+        let premium = store.hasSpicy
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-            cards = GameContent.deal(for: kind, spicy: spicy && store.hasSpicy)
+            cards = GameContent.deal(for: kind, spicy: spicy && premium,
+                                     count: premium ? GameContent.roundSize : GameContent.freeRoundSize)
             index = 0
+        }
+        if !premium {
+            FreePlayLimiter.shared.markPlayed(kind)
+            lockedUntil = Date().addingTimeInterval(FreePlayLimiter.cooldown)
         }
     }
 
@@ -1335,8 +1456,9 @@ struct AfterDarkPaywall: View {
                     }
 
                     HStack(spacing: 8) {
-                        chip("WAY MORE CARDS")
-                        chip("NEW DECKS DROPPING")
+                        chip("UNLIMITED ROUNDS")
+                        chip("40 CARDS A ROUND")
+                        chip("EVERY DECK")
                     }
 
                     if store.hasSpicy {
@@ -1433,8 +1555,17 @@ struct AfterDarkPaywall: View {
                     }
                 }
                 Spacer()
-                Text(offer.displayPrice)
-                    .font(.system(size: 20, weight: .black, design: .rounded))
+                VStack(alignment: .trailing, spacing: 6) {
+                    if yearly, let pct = offer.savingPercent {
+                        Text("SAVE \(pct)%")
+                            .font(.system(size: 18, weight: .black, design: .rounded))
+                            .foregroundStyle(ember)
+                            .padding(.horizontal, 12).padding(.vertical, 5)
+                            .background(Capsule().fill(Color.cream))
+                    }
+                    Text(offer.displayPrice)
+                        .font(.system(size: 20, weight: .black, design: .rounded))
+                }
             }
             .foregroundStyle(Color.ink)
             .padding(.vertical, 16).padding(.horizontal, 20)

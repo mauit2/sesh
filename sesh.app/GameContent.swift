@@ -25,9 +25,12 @@ enum GameContent {
         }
     }
 
-    /// A fresh round: `roundSize` cards, no repeats, random order.
-    static func deal(for kind: GameKind, spicy: Bool) -> [String] {
-        Array(pool(for: kind, spicy: spicy).shuffled().prefix(roundSize))
+    /// Free rounds are half-length; After Dark plays the full 40.
+    static let freeRoundSize = 20
+
+    /// A fresh round: `count` cards, no repeats, random order.
+    static func deal(for kind: GameKind, spicy: Bool, count: Int = roundSize) -> [String] {
+        Array(pool(for: kind, spicy: spicy).shuffled().prefix(count))
     }
 
     // MARK: - Imposter — secret words
