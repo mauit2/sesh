@@ -29,21 +29,21 @@
           "codeOffers" : [
 
           ],
-          "displayPrice" : "29.00",
+          "displayPrice" : "10.00",
           "familyShareable" : false,
           "groupNumber" : 1,
-          "internalID" : "AD9E1B20-0000-4000-8000-000000000011",
+          "internalID" : "AD9E1B20-0000-4000-8000-000000000013",
           "introductoryOffer" : null,
           "localizations" : [
             {
               "description" : "Spicy decks in every game",
-              "displayName" : "After Dark Monthly",
+              "displayName" : "After Dark Weekly",
               "locale" : "en_US"
             }
           ],
-          "productID" : "sejdel.afterdark.monthly",
-          "recurringSubscriptionPeriod" : "P1M",
-          "referenceName" : "After Dark Monthly",
+          "productID" : "sejdel.afterdark.weekly",
+          "recurringSubscriptionPeriod" : "P1W",
+          "referenceName" : "After Dark Weekly",
           "subscriptionGroupID" : "AD9E1B20-0000-4000-8000-000000000010",
           "type" : "RecurringSubscription"
         },
@@ -54,7 +54,7 @@
           "codeOffers" : [
 
           ],
-          "displayPrice" : "199.00",
+          "displayPrice" : "399.00",
           "familyShareable" : false,
           "groupNumber" : 2,
           "internalID" : "AD9E1B20-0000-4000-8000-000000000012",

@@ -14,8 +14,8 @@
 // RPC (an imposter's device never receives the word before the reveal).
 //
 // Monetization: one auto-renewable subscription group ("After Dark") with a
-// monthly and a yearly product. Ids must match App Store Connect exactly:
-//   sejdel.afterdark.monthly
+// weekly and a yearly product. Ids must match App Store Connect exactly:
+//   sejdel.afterdark.weekly
 //   sejdel.afterdark.yearly
 // Local testing: AfterDark.storekit at the repo root, selected in the
 // scheme's Run options.
@@ -29,12 +29,18 @@ import Supabase
 
 @MainActor
 final class AfterDarkStore: ObservableObject {
-    static let productIDs = ["sejdel.afterdark.monthly", "sejdel.afterdark.yearly"]
+    static let productIDs = ["sejdel.afterdark.weekly", "sejdel.afterdark.yearly"]
 
     @Published var products: [Product] = []
     @Published var isSubscribed = false
     @Published var purchasing = false
     @Published var loadError: String? = nil
+    /// App admins (app_admins table, via AdminService) get the spicy decks
+    /// without paying — set by the hub from the live admin flag.
+    @Published var adminOverride = false
+
+    /// The one gate every deck picker reads.
+    var hasSpicy: Bool { isSubscribed || adminOverride }
 
     private var updatesTask: Task<Void, Never>? = nil
 
@@ -394,6 +400,8 @@ private let ember = Color(red: 0.86, green: 0.28, blue: 0.24)
 
 struct GamesHubView: View {
     @ObservedObject var group: SessionService
+    /// Live flag from AdminService — admins play spicy decks for free.
+    let isAdmin: Bool
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = AfterDarkStore()
     @State private var paywallOpen = false
@@ -452,6 +460,8 @@ struct GamesHubView: View {
         }
         .preferredColorScheme(.dark)
         .environmentObject(store)
+        .onAppear { store.adminOverride = isAdmin }
+        .onChange(of: isAdmin) { _, v in store.adminOverride = v }
         .sheet(isPresented: $paywallOpen) {
             AfterDarkPaywall()
                 .environmentObject(store)
@@ -485,16 +495,16 @@ struct GamesHubView: View {
     }
 
     private var spicyBanner: some View {
-        Button { if !store.isSubscribed { paywallOpen = true } } label: {
+        Button { if !store.hasSpicy { paywallOpen = true } } label: {
             HStack(spacing: 14) {
                 ZStack {
                     Circle().fill(Color.ink.opacity(0.35)).frame(width: 48, height: 48)
-                    Image(systemName: store.isSubscribed ? "checkmark" : "flame.fill")
+                    Image(systemName: store.hasSpicy ? "checkmark" : "flame.fill")
                         .font(.system(size: 20, weight: .black))
                         .foregroundStyle(Color.cream)
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(store.isSubscribed ? "SPICY ROUNDS UNLOCKED" : "UNLOCK SPICIER ROUNDS")
+                    Text(store.hasSpicy ? "SPICY ROUNDS UNLOCKED" : "UNLOCK SPICIER ROUNDS")
                         .font(.system(size: 15, weight: .black, design: .monospaced))
                         .tracking(1.8)
                         .foregroundStyle(Color.cream)
@@ -503,7 +513,7 @@ struct GamesHubView: View {
                         .foregroundStyle(Color.cream.opacity(0.85))
                 }
                 Spacer()
-                if !store.isSubscribed {
+                if !store.hasSpicy {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 14, weight: .black))
                         .foregroundStyle(Color.cream)
@@ -517,7 +527,7 @@ struct GamesHubView: View {
             .shadow(color: Color.whiskey.opacity(0.45), radius: 24, y: 12)
         }
         .buttonStyle(PressScaleStyle())
-        .disabled(store.isSubscribed)
+        .disabled(store.hasSpicy)
     }
 }
 
@@ -580,7 +590,7 @@ struct GameIntroView: View {
                         .strokeBorder(kind.accent.opacity(0.35), lineWidth: 1))
 
                     DeckPicker(spicy: $spicy, accent: kind.accent,
-                               subscribed: store.isSubscribed) { paywallOpen = true }
+                               subscribed: store.hasSpicy) { paywallOpen = true }
 
                     if kind == .imposter { imposterOptions }
 
@@ -597,7 +607,7 @@ struct GameIntroView: View {
     @ViewBuilder
     private var startLink: some View {
         let colors = [kind.accent, kind.accentDeep]
-        let unlocked = spicy && store.isSubscribed
+        let unlocked = spicy && store.hasSpicy
         if kind == .imposter {
             NavigationLink(value: ImposterConfig(groupMode: useGroup,
                                                  playerCount: effectivePlayers,
@@ -820,7 +830,7 @@ struct PromptGameView: View {
                 GhostButton(title: "BACK TO FREE DECK") { spicy = false }
             } else {
                 PrimaryButton(title: "GO SPICIER", icon: "flame.fill", colors: [Color.whiskey, ember]) {
-                    if store.isSubscribed { spicy = true } else { paywallOpen = true }
+                    if store.hasSpicy { spicy = true } else { paywallOpen = true }
                 }
                 GhostButton(title: "PLAY AGAIN") { deal() }
             }
@@ -839,7 +849,7 @@ struct PromptGameView: View {
 
     private func deal() {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-            cards = GameContent.deal(for: kind, spicy: spicy && store.isSubscribed)
+            cards = GameContent.deal(for: kind, spicy: spicy && store.hasSpicy)
             index = 0
         }
     }
@@ -969,7 +979,7 @@ struct ImposterGameView: View {
     private var spicierButton: some View {
         GhostButton(title: spicy ? "PLAY AGAIN" : "GO SPICIER 🔥") {
             if spicy { return }
-            if store.isSubscribed { spicy = true } else { paywallOpen = true }
+            if store.hasSpicy { spicy = true } else { paywallOpen = true }
         }
     }
 
@@ -1063,7 +1073,7 @@ struct ImposterGameView: View {
     }
 
     private func dealLocal() {
-        let pool = GameContent.pool(for: .imposter, spicy: spicy && store.isSubscribed)
+        let pool = GameContent.pool(for: .imposter, spicy: spicy && store.hasSpicy)
         word = pool.randomElement() ?? "Karaoke"
         let count = min(config.imposterCount, ImposterConfig.maxImposters(for: playerCount))
         imposters = Set(Array(0..<playerCount).shuffled().prefix(count))
@@ -1214,7 +1224,7 @@ struct ImposterGameView: View {
         dealing = true
         groupError = nil
         defer { dealing = false }
-        let useSpicy = spicy && store.isSubscribed
+        let useSpicy = spicy && store.hasSpicy
         let pool = GameContent.pool(for: .imposter, spicy: useSpicy)
         let insert = GameRoundInsert(session_id: sid, host_id: me, kind: "imposter",
                                      word: pool.randomElement() ?? "Karaoke",
@@ -1249,9 +1259,9 @@ struct AfterDarkPaywall: View {
     private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
 
     private var yearlySaving: Int? {
-        guard let m = store.products.first(where: { $0.id.hasSuffix("monthly") }),
+        guard let w = store.products.first(where: { $0.id.hasSuffix("weekly") }),
               let y = store.products.first(where: { $0.id.hasSuffix("yearly") }) else { return nil }
-        let full = m.price * 12
+        let full = w.price * 52
         guard full > 0 else { return nil }
         let pct = (1 - (y.price / full)) * 100
         return Int(NSDecimalNumber(decimal: pct).doubleValue.rounded())
@@ -1300,7 +1310,7 @@ struct AfterDarkPaywall: View {
                         chip("NEW DECKS DROPPING")
                     }
 
-                    if store.isSubscribed {
+                    if store.hasSpicy {
                         Text("You're in. Go play.")
                             .font(.system(size: 18, weight: .black, design: .rounded))
                             .foregroundStyle(Color.whiskey)
@@ -1337,7 +1347,7 @@ struct AfterDarkPaywall: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onChange(of: store.isSubscribed) { _, unlocked in
+        .onChange(of: store.hasSpicy) { _, unlocked in
             if unlocked { DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { dismiss() } }
         }
         .task { if store.products.isEmpty { await store.load() } }
@@ -1379,7 +1389,7 @@ struct AfterDarkPaywall: View {
         return Button { Task { await store.purchase(product) } } label: {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(yearly ? "YEARLY" : "MONTHLY")
+                    Text(yearly ? "YEARLY" : "WEEKLY")
                         .font(.system(size: 13, weight: .black, design: .monospaced)).tracking(2.2)
                     if yearly, let s = yearlySaving, s > 0 {
                         Text("BEST VALUE · SAVE \(s)%")

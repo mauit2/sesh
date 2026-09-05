@@ -6487,7 +6487,7 @@ private struct SessionView: View {
                 .presentationBackground(Color.ink)
         }
         .fullScreenCover(isPresented: $gamesOpen) {
-            GamesHubView(group: liveGroup)
+            GamesHubView(group: liveGroup, isAdmin: admin.isAdmin)
         }
         .sheet(item: $groupSheetScope) { scope in
             // One sheet, two scopes. The store + cousin pair flips
