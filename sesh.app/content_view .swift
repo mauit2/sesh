@@ -4593,6 +4593,9 @@ private struct ModeTopBar: View {
     let dmUnread: Int
     let onTapDMs: () -> Void
     let onTapFriends: () -> Void
+    /// Games hub — pass-the-phone drinking games, controller icon next to
+    /// the friends button.
+    let onTapGames: () -> Void
     /// LIVE-tab status, surfaced in the top bar so the in-page header can go
     /// away and the content moves up. `liveStarted == nil` ⇒ not started yet.
     var liveStarted: Date? = nil
@@ -4635,6 +4638,21 @@ private struct ModeTopBar: View {
                 }
                 .accessibilityLabel(liveIsHost ? "End group sesh" : "Leave or end group sesh")
             }
+            // Games — the drinking-games hub, sitting beside the friends
+            // icon. Same chip styling as the rest of the cluster.
+            Button(action: onTapGames) {
+                ZStack {
+                    Circle()
+                        .fill(Color.cream.opacity(0.05))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: "gamecontroller.fill")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.8))
+                }
+                .overlay(Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
+            }
+            .buttonStyle(PressScaleStyle())
+            .accessibilityLabel("Drinking games")
             // Friends — set your @username, search + add friends, invite
             // them to a sesh. Always present.
             Button(action: onTapFriends) {
@@ -5266,6 +5284,9 @@ private struct SessionView: View {
     /// because each action removes the row from `invites.pending`.
     @State private var invitesSheetOpen = false
     @State private var friendsSheetOpen = false
+    /// Games hub (controller icon in the top bar). Full-screen so a stray
+    /// swipe can't dismiss mid-round while the phone is being passed around.
+    @State private var gamesOpen = false
     /// Friends roster + incoming requests. App-wide so the bell badge and
     /// the unified inbox stay current; polls every 8s while signed in.
     @StateObject private var friends = FriendsService()
@@ -6465,6 +6486,9 @@ private struct SessionView: View {
             FriendsView(friends: friends, auth: auth, feed: feed)
                 .presentationBackground(Color.ink)
         }
+        .fullScreenCover(isPresented: $gamesOpen) {
+            GamesHubView()
+        }
         .sheet(item: $groupSheetScope) { scope in
             // One sheet, two scopes. The store + cousin pair flips
             // depending on which page asked to open it. Mirror button
@@ -6670,6 +6694,7 @@ private struct SessionView: View {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = .chats }
             },
             onTapFriends: { friendsSheetOpen = true },
+            onTapGames: { gamesOpen = true },
             liveStarted: liveStartTime,
             liveInGroup: liveGroup.isActive,
             liveMemberCount: liveGroup.members.count,

@@ -1,0 +1,82 @@
+{
+  "identifier" : "C0FFEE00-AFD0-4E57-9D4A-000000000001",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_failTransactionsEnabled" : false,
+    "_locale" : "sv_SE",
+    "_storefront" : "SWE",
+    "_storeKitErrors" : [
+
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "AD9E1B20-0000-4000-8000-000000000010",
+      "localizations" : [
+
+      ],
+      "name" : "After Dark",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "29.00",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "AD9E1B20-0000-4000-8000-000000000011",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Spicy decks in every game",
+              "displayName" : "After Dark Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "sejdel.afterdark.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "After Dark Monthly",
+          "subscriptionGroupID" : "AD9E1B20-0000-4000-8000-000000000010",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "199.00",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "AD9E1B20-0000-4000-8000-000000000012",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Spicy decks in every game, all year",
+              "displayName" : "After Dark Yearly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "sejdel.afterdark.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "After Dark Yearly",
+          "subscriptionGroupID" : "AD9E1B20-0000-4000-8000-000000000010",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}
