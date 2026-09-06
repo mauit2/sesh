@@ -29,6 +29,9 @@ import Supabase
 
 @MainActor
 final class AfterDarkStore: ObservableObject {
+    /// One store for the whole app — the games hub, the Vitals card and
+    /// the paywall all read the same entitlement.
+    static let shared = AfterDarkStore()
     static let productIDs = ["sejdel.afterdark.weekly", "sejdel.afterdark.yearly"]
 
     @Published var products: [Product] = []
@@ -562,6 +565,81 @@ private struct ChipFlow: Layout {
     }
 }
 
+// MARK: - Sips
+
+/// "Who's drinking?" — tap a name to log a sip (50 ml at 5%, about 2 g of
+/// ethanol) for anyone in the live sesh, yourself included. Rows go through
+/// the `log_sip` RPC so one phone can log for another; everyone's BAC picks
+/// it up on the next group poll. Hidden outside a live group.
+struct SipRow: View {
+    @ObservedObject var group: SessionService
+    @State private var bumps: [UUID: Int] = [:]
+    @State private var busy: Set<UUID> = []
+    @State private var error: String? = nil
+
+    private struct SipParams: Encodable { let p_session: UUID; let p_profile: UUID }
+
+    private var members: [UUID] {
+        var ids = group.members.filter(\.inLive).map(\.profileId)
+        if let me = group.myId, !ids.contains(me) { ids.append(me) }
+        return ids
+    }
+
+    var body: some View {
+        if group.isActive, let sid = group.session?.id, !members.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("WHO'S DRINKING? TAP TO LOG A SIP")
+                    .font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1.8)
+                    .foregroundStyle(Color.bronze)
+                ChipFlow(spacing: 8) {
+                    ForEach(members, id: \.self) { id in
+                        let n = bumps[id, default: 0]
+                        Button { sip(sid, id) } label: {
+                            HStack(spacing: 6) {
+                                Text(name(id))
+                                if n > 0 { Text("+\(n)").opacity(0.8) }
+                            }
+                            .font(.system(size: 12, weight: .black, design: .rounded))
+                            .foregroundStyle(n > 0 ? Color.ink : Color.cream)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .padding(.horizontal, 14).padding(.vertical, 9)
+                            .background(Capsule().fill(n > 0 ? Color.whiskey : Color.cream.opacity(0.08)))
+                            .overlay(Capsule().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                        .disabled(busy.contains(id))
+                    }
+                }
+                if let error {
+                    Text(error)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Status.drunk.color)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func name(_ id: UUID) -> String {
+        if id == group.myId { return "You" }
+        return group.memberProfiles[id]?.name ?? "Someone"
+    }
+
+    private func sip(_ sid: UUID, _ id: UUID) {
+        busy.insert(id); error = nil
+        Task {
+            do {
+                _ = try await supabase.rpc("log_sip", params: SipParams(p_session: sid, p_profile: id)).execute()
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { bumps[id, default: 0] += 1 }
+            } catch {
+                self.error = "Couldn't log that sip — try again."
+            }
+            busy.remove(id)
+        }
+    }
+}
+
 // MARK: - Hub
 
 struct GamesHubView: View {
@@ -569,7 +647,7 @@ struct GamesHubView: View {
     /// Live flag from AdminService — admins play spicy decks for free.
     let isAdmin: Bool
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var store = AfterDarkStore()
+    @ObservedObject private var store = AfterDarkStore.shared
     @State private var paywallOpen = false
     /// A Speakeasy round running in the live sesh — lets non-subscribers
     /// join a table a subscriber opened.
@@ -630,7 +708,7 @@ struct GamesHubView: View {
                 SpeakeasyGameView(session: ticket.session, group: group)
             }
             .navigationDestination(for: CardGameConfig.self) { config in
-                PromptGameView(config: config, paywallOpen: $paywallOpen)
+                PromptGameView(config: config, group: group, paywallOpen: $paywallOpen)
             }
             .navigationDestination(for: ImposterConfig.self) { config in
                 ImposterGameView(config: config, group: group, paywallOpen: $paywallOpen)
@@ -914,6 +992,7 @@ struct GameIntroView: View {
 
 struct PromptGameView: View {
     let config: CardGameConfig
+    @ObservedObject var group: SessionService
     @Binding var paywallOpen: Bool
     @EnvironmentObject private var store: AfterDarkStore
 
@@ -925,8 +1004,9 @@ struct PromptGameView: View {
     /// Set when a free round is dealt — drives the end-of-round cooldown.
     @State private var lockedUntil: Date? = nil
 
-    init(config: CardGameConfig, paywallOpen: Binding<Bool>) {
+    init(config: CardGameConfig, group: SessionService, paywallOpen: Binding<Bool>) {
         self.config = config
+        self.group = group
         self._paywallOpen = paywallOpen
         self._spicy = State(initialValue: config.spicy)
     }
@@ -975,6 +1055,7 @@ struct PromptGameView: View {
                             insertion: .move(edge: .trailing).combined(with: .opacity),
                             removal: .move(edge: .leading).combined(with: .opacity)))
                     Spacer(minLength: 0)
+                    SipRow(group: group)
                     PrimaryButton(title: "NEXT CARD", colors: [kind.accent, kind.accentDeep]) { next() }
                 } else {
                     roundOver
@@ -1320,6 +1401,7 @@ struct ImposterGameView: View {
             }
             .padding(.horizontal, 8)
             Spacer()
+            SipRow(group: group)
             PrimaryButton(title: imposters.count > 1 ? "REVEAL THE IMPOSTERS" : "REVEAL THE IMPOSTER",
                           icon: "eye.fill", colors: [accent, deep]) {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { phase = .unmasked }
@@ -1345,6 +1427,7 @@ struct ImposterGameView: View {
                 .foregroundStyle(Color.cream.opacity(0.7))
             wordReveal(word)
             Spacer()
+            SipRow(group: group)
             PrimaryButton(title: "NEW ROUND", icon: "arrow.counterclockwise", colors: [accent, deep]) { dealLocal() }
             spicierButton
         }
@@ -1415,6 +1498,7 @@ struct ImposterGameView: View {
                     }
                 }
                 Spacer()
+                SipRow(group: group)
                 if group.isHost {
                     if round.revealed {
                         PrimaryButton(title: "NEW ROUND", icon: "arrow.counterclockwise", colors: [accent, deep]) {

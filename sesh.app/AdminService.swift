@@ -34,6 +34,7 @@ final class AdminService: ObservableObject {
     func refresh() async {
         guard let uid = supabase.auth.currentUser?.id else {
             isAdmin = false; isOwner = false; admins = []
+            await MainActor.run { AfterDarkStore.shared.adminOverride = false }
             return
         }
         do {
@@ -48,6 +49,9 @@ final class AdminService: ObservableObject {
         } catch {
             isAdmin = false; isOwner = false
         }
+        // Admins get After Dark for free — keep the shared store in step.
+        let admin = isAdmin
+        await MainActor.run { AfterDarkStore.shared.adminOverride = admin }
         await loadAdmins()
     }
 

@@ -515,6 +515,7 @@ struct SpeakeasyGameView: View {
                         header(s)
                         board(s)
                         phasePanel(s)
+                        SipRow(group: group)
                         seats(s)
                         logBox(s)
                     }

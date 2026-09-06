@@ -13958,7 +13958,11 @@ private struct LiveSeshView: View {
     /// group rows only carry volume/ABV, so they're ethanol-only (7 kcal/g).
     private var myDrinkKcal: Double {
         if inGroup {
-            return group.drinks(for: profile.id).reduce(0) { $0 + $1.grams * 7.0 }
+            // Live rows only — the regular ledger is a different night.
+            let heads = Double(max(group.members.count + group.ghosts.count, 1))
+            return group.liveTimeline(for: profile.id).reduce(0) { acc, d in
+                acc + (d.shared ? d.grams / heads : d.grams) * 7.0
+            }
         }
         return live.drinks.reduce(0) { $0 + $1.option().kcal }
     }
@@ -15733,8 +15737,10 @@ private struct SeshVitalsCard: View {
     let drinkKcal: Double
 
     @ObservedObject private var health = HealthService.shared
+    @ObservedObject private var afterDark = AfterDarkStore.shared
     @State private var vitals = HealthService.Vitals()
     @State private var connecting = false
+    @State private var paywallOpen = false
 
     /// Re-query at most every 30s while the tab is open.
     private var bucket: Int { Int(now.timeIntervalSince1970 / 30) }
@@ -15754,8 +15760,10 @@ private struct SeshVitalsCard: View {
                     }
                     if !health.isConnected {
                         connectCTA
-                    } else {
+                    } else if afterDark.hasSpicy {
                         grid
+                    } else {
+                        lockedGrid
                     }
                 }
                 .padding(18)
@@ -15765,7 +15773,35 @@ private struct SeshVitalsCard: View {
                     guard health.isConnected else { return }
                     vitals = await health.vitals(from: start, to: now)
                 }
+                .sheet(isPresented: $paywallOpen) {
+                    AfterDarkPaywall()
+                        .environmentObject(AfterDarkStore.shared)
+                        .presentationBackground(Color.ink)
+                }
             }
+        }
+    }
+
+    /// The calorie counter is an After Dark perk: blur the numbers and
+    /// put the unlock right on top of them.
+    private var lockedGrid: some View {
+        ZStack {
+            grid
+                .blur(radius: 7)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            Button { paywallOpen = true } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "lock.fill").font(.system(size: 12, weight: .black))
+                    Text("CALORIES · AFTER DARK")
+                        .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(1.8)
+                }
+                .foregroundStyle(Color.ink)
+                .padding(.horizontal, 16).padding(.vertical, 11)
+                .background(Capsule().fill(Color.whiskey))
+                .shadow(color: Color.whiskey.opacity(0.4), radius: 14, y: 6)
+            }
+            .buttonStyle(PressScaleStyle())
         }
     }
 
