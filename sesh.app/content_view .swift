@@ -6453,7 +6453,9 @@ private struct SessionView: View {
     /// (once per campaign per device, once per launch). No-op when nothing
     /// qualifies or one already showed this launch.
     private func maybeShowInterstitial() {
-        guard !DealsInterstitial.shownThisLaunch, interstitial == nil else { return }
+        // Never over the first-run tour — it steals the tap and yanks the
+        // user to Maps mid-explanation. It'll show on a later launch.
+        guard !tourOpen, !DealsInterstitial.shownThisLaunch, interstitial == nil else { return }
         guard let cand = venues.interstitialCandidate(near: location.location,
                                                        excluding: DealsInterstitial.seenIDs())
         else { return }
@@ -6562,8 +6564,8 @@ private struct SessionView: View {
             onTapDMs: {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = .chats }
             },
-            onTapFriends: { friendsSheetOpen = true },
-            onTapGames: { gamesOpen = true },
+            onTapFriends: { friendsSheetOpen = true; TourAction.friendsOpened.post() },
+            onTapGames: { gamesOpen = true; TourAction.gamesOpened.post() },
             liveStarted: liveStartTime,
             liveInGroup: liveGroup.isActive,
             liveMemberCount: liveGroup.members.count,
@@ -11888,6 +11890,8 @@ private struct LiveSegmentControl: View {
     var groupCount: Int = 0
     /// Drinks logged tonight — badged on RECAP (0 hides it).
     var drinkCount: Int = 0
+    /// The tour can ask for a pane while it's explaining it.
+    @ObservedObject private var tourDemo = TourDemo.shared
 
     private func badge(for tab: LiveTab) -> Int {
         switch tab {
@@ -11898,6 +11902,14 @@ private struct LiveSegmentControl: View {
     }
 
     var body: some View {
+        bar.onChange(of: tourDemo.livePane) { _, pane in
+            if let pane {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) { selection = pane }
+            }
+        }
+    }
+
+    private var bar: some View {
         HStack(spacing: 4) {
             ForEach(LiveTab.allCases) { tab in
                 let active = selection == tab
@@ -11933,6 +11945,7 @@ private struct LiveSegmentControl: View {
                     )
                 }
                 .buttonStyle(PressScaleStyle())
+                .tourAnchor(.livePane(tab))
             }
         }
         .padding(4)
@@ -13798,6 +13811,7 @@ private struct LiveSeshView: View {
 
     private func logDrink(_ option: DrinkOption) {
         recents.record(option)
+        TourAction.drinkLogged.post()
         // Mirror your own drink into Apple Health (calories + standard
         // drinks). No-ops entirely unless you've connected Health.
         HealthService.shared.log(option)
@@ -14563,12 +14577,15 @@ private struct LiveSeshView: View {
                 drinkCount: totalDrinkCount
             )
 
-            switch liveTab {
-            case .night:  nightTab(now: now)
-            case .group:  groupTab(now: now)
-            case .recap:  recapTab(now: now)
-            case .vitals: vitalsTab(now: now)
+            Group {
+                switch liveTab {
+                case .night:  nightTab(now: now)
+                case .group:  groupTab(now: now)
+                case .recap:  recapTab(now: now)
+                case .vitals: vitalsTab(now: now)
+                }
             }
+            .tourAnchor(.livePanel)
             Spacer(minLength: 24)
         }
         .padding(.horizontal, 22)
@@ -15560,7 +15577,11 @@ private struct SeshVitalsCard: View {
 
     @ObservedObject private var health = HealthService.shared
     @ObservedObject private var afterDark = AfterDarkStore.shared
+    @ObservedObject private var tourDemo = TourDemo.shared
     @State private var vitals = HealthService.Vitals()
+    /// What the tour shows on its Vitals step — a believable night.
+    private static let sample = HealthService.Vitals(activeKcal: 410, steps: 4200, avgHeartRate: 96, peakHeartRate: 132)
+    private var shownVitals: HealthService.Vitals { tourDemo.vitalsSample ? Self.sample : vitals }
     @State private var connecting = false
     @State private var paywallOpen = false
 
@@ -15580,7 +15601,14 @@ private struct SeshVitalsCard: View {
                             .foregroundStyle(Color.bronze)
                         Spacer()
                     }
-                    if !health.isConnected {
+                    if tourDemo.vitalsSample {
+                        VStack(alignment: .leading, spacing: 10) {
+                            grid
+                            Text("SAMPLE · THIS IS WHAT A NIGHT LOOKS LIKE WITH APPLE HEALTH")
+                                .font(.system(size: 9, weight: .black, design: .monospaced)).tracking(1.4)
+                                .foregroundStyle(Color.whiskey)
+                        }
+                    } else if !health.isConnected {
                         connectCTA
                     } else if afterDark.hasSpicy {
                         grid
@@ -15629,24 +15657,24 @@ private struct SeshVitalsCard: View {
 
     /// Warm green for the "burned" side (matches the price-cheap green).
     private var burnGreen: Color { Color(red: 0.49, green: 0.79, blue: 0.42) }
-    private var consumed: Double { max(drinkKcal, 0) }
-    private var burned: Double { max(vitals.activeKcal ?? 0, 0) }
+    private var consumed: Double { tourDemo.vitalsSample ? 640 : max(drinkKcal, 0) }
+    private var burned: Double { max(shownVitals.activeKcal ?? 0, 0) }
 
     private var grid: some View {
         VStack(spacing: 12) {
             // The headline: calories in vs out, live.
             HStack(spacing: 10) {
                 stat(icon: "wineglass.fill", value: "\(Int(consumed.rounded()))", unit: "kcal in", tint: Color.whiskey)
-                stat(icon: "flame.fill", value: vitals.activeKcal.map { "\(Int($0.rounded()))" } ?? "—", unit: "kcal burned", tint: burnGreen)
+                stat(icon: "flame.fill", value: shownVitals.activeKcal.map { "\(Int($0.rounded()))" } ?? "—", unit: "kcal burned", tint: burnGreen)
             }
             balance
             // Secondary: steps + heart rate (HR only with an Apple Watch).
             HStack(spacing: 10) {
-                stat(icon: "figure.walk", value: vitals.steps.map(stepStr) ?? "—", unit: "steps")
-                if let hr = vitals.avgHeartRate {
+                stat(icon: "figure.walk", value: shownVitals.steps.map(stepStr) ?? "—", unit: "steps")
+                if let hr = shownVitals.avgHeartRate {
                     stat(icon: "heart.fill",
                          value: "\(Int(hr.rounded()))",
-                         unit: vitals.peakHeartRate.map { "avg · \(Int($0.rounded())) peak" } ?? "avg bpm")
+                         unit: shownVitals.peakHeartRate.map { "avg · \(Int($0.rounded())) peak" } ?? "avg bpm")
                 } else {
                     stat(icon: "heart.fill", value: "—", unit: "bpm · needs watch")
                 }

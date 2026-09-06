@@ -2461,6 +2461,7 @@ private struct OffersMapView: View {
         .padding(3)
         .background(Capsule().fill(Color.ink.opacity(0.65)))
         .frame(maxWidth: 290)
+        .tourAnchor(.mapModes)
     }
 
     private func segButton(_ title: String, _ mode: DealsMapMode) -> some View {
