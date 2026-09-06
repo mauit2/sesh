@@ -567,8 +567,9 @@ private struct ChipFlow: Layout {
 
 // MARK: - Sips
 
-/// "Who's drinking?" — tap a name to log a sip (50 ml at 5%, about 2 g of
-/// ethanol) for anyone in the live sesh, yourself included. Rows go through
+/// "Who's drinking?" — tap a name to log a sip for anyone in the live sesh,
+/// yourself included. A sip is a twentieth of a 33 cl 5% beer (16.5 ml,
+/// ≈0.65 g ethanol); the size lives in the `log_sip` RPC. Rows go through
 /// the `log_sip` RPC so one phone can log for another; everyone's BAC picks
 /// it up on the next group poll. Hidden outside a live group.
 struct SipRow: View {
