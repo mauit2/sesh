@@ -1619,8 +1619,6 @@ struct AfterDarkPaywall: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: AfterDarkStore
 
-    private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
-
     var body: some View {
         ZStack {
             Color.ink.ignoresSafeArea()
@@ -1652,40 +1650,16 @@ struct AfterDarkPaywall: View {
                     }
                     .padding(.top, 6)
 
-                    HStack(spacing: 14) {
-                        Image(systemName: GameKind.speakeasy.icon)
-                            .font(.system(size: 30, weight: .bold))
-                            .foregroundStyle(Color.cream)
-                            .frame(width: 44)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("SPEAKEASY · AFTER DARK ONLY")
-                                .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(1.4)
-                                .foregroundStyle(Color.cream.opacity(0.85))
-                            Text("Hidden roles for the whole table. You host, your sesh plays free.")
-                                .font(.system(size: 15, weight: .bold, design: .rounded))
-                                .foregroundStyle(Color.cream)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 0)
+                    // One card, four reasons. Everything else is noise.
+                    VStack(spacing: 0) {
+                        perkRow("flame.fill", Color.whiskey, "Spicy decks in every game", "800+ bolder cards. Nothing held back.")
+                        perkRow(GameKind.speakeasy.icon, GameKind.speakeasy.accent, "Speakeasy", "Hidden roles for the whole table. You host, your sesh plays free.")
+                        perkRow("infinity", GameKind.imposter.accent, "Unlimited rounds", "40 cards a round. No 24-hour wait.")
+                        perkRow("bolt.heart.fill", Color(red: 0.49, green: 0.79, blue: 0.42), "Sesh Vitals", "Calories in vs burned, steps and heart rate — live.", last: true)
                     }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(GameKind.speakeasy.gradient))
-                    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.cream.opacity(0.2), lineWidth: 1))
-                    .shadow(color: GameKind.speakeasy.accent.opacity(0.3), radius: 18, y: 10)
-
-                    LazyVGrid(columns: columns, spacing: 10) {
-                        perk(.imposter, "Words you can't say out loud.")
-                        perk(.never, "The questions your friends dodge.")
-                        perk(.pandora, "Dares that actually dare.")
-                        perk(.mostLikely, "Point fingers. Lose friends.")
-                    }
-
-                    ChipFlow(spacing: 8) {
-                        chip("UNLIMITED ROUNDS")
-                        chip("40 CARDS A ROUND")
-                        chip("EVERY DECK")
-                    }
+                    .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Color.ink.opacity(0.7)))
+                    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1.2))
+                    .shadow(color: Color.whiskey.opacity(0.2), radius: 22, y: 12)
 
                     if store.hasSpicy {
                         Text("You're in. Go play.")
@@ -1700,7 +1674,11 @@ struct AfterDarkPaywall: View {
                             .padding(.horizontal, 16)
                     } else {
                         VStack(spacing: 10) {
-                            ForEach(store.offers) { offer in priceButton(offer) }
+                            ForEach(store.offers.sorted { $0.isYearly && !$1.isYearly }) { offer in priceButton(offer) }
+                            Text("Cancel anytime. Cheaper than one beer a month.")
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.7))
+                                .padding(.top, 2)
                         }
                     }
 
@@ -1730,37 +1708,31 @@ struct AfterDarkPaywall: View {
         .task { if store.products.isEmpty { await store.load() } }
     }
 
-    private func perk(_ kind: GameKind, _ line: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Image(systemName: kind.icon)
-                .font(.system(size: 26, weight: .bold))
-                .foregroundStyle(Color.cream)
-            Spacer(minLength: 0)
-            Text(kind.title)
-                .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(1.4)
-                .foregroundStyle(Color.cream.opacity(0.85))
-            Text(line)
-                .font(.system(size: 15, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.cream)
-                .fixedSize(horizontal: false, vertical: true)
+    private func perkRow(_ icon: String, _ tint: Color, _ title: String, _ line: String, last: Bool = false) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle().fill(tint.opacity(0.18)).frame(width: 44, height: 44)
+                    Image(systemName: icon)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(tint)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 17, weight: .black, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    Text(line)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.65))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 18).padding(.vertical, 14)
+            if !last {
+                Rectangle().fill(Color.cream.opacity(0.07)).frame(height: 1).padding(.leading, 76)
+            }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 150, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(kind.gradient))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
-            .strokeBorder(Color.cream.opacity(0.2), lineWidth: 1))
-        .shadow(color: kind.accent.opacity(0.3), radius: 18, y: 10)
-    }
-
-    private func chip(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(1.6)
-            .lineLimit(1)
-            .fixedSize()
-            .foregroundStyle(Color.whiskey)
-            .padding(.horizontal, 14).padding(.vertical, 9)
-            .background(Capsule().fill(Color.whiskey.opacity(0.12)))
-            .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1))
     }
 
     private func priceButton(_ offer: AfterDarkStore.Offer) -> some View {
