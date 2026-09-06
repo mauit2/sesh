@@ -3009,7 +3009,9 @@ struct FriendsPulseStrip: View {
         return StoryViewerContext(people: people, startPerson: start)
     }
 
-    var body: some View {
+    var body: some View { stripContent.tourAnchor(.stories) }
+
+    private var stripContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             // (No "TONIGHT" label — the Home title above and the tonight
             // strip below already frame the section; the label was noise.)
@@ -4658,6 +4660,7 @@ private struct ModeTopBar: View {
             }
             .buttonStyle(PressScaleStyle())
             .accessibilityLabel("Drinking games")
+            .tourAnchor(.games)
             // Friends — set your @username, search + add friends, invite
             // them to a sesh. Always present.
             Button(action: onTapFriends) {
@@ -4673,6 +4676,7 @@ private struct ModeTopBar: View {
             }
             .buttonStyle(PressScaleStyle())
             .accessibilityLabel("Friends")
+            .tourAnchor(.friends)
             // Notification-center bell — always present, sitting next to the
             // friends icon. Shows a count badge only when there's something
             // pending (friend requests + sesh invites).
@@ -4731,6 +4735,7 @@ private struct ModeTopBar: View {
             }
             .buttonStyle(PressScaleStyle())
             .accessibilityLabel(dmUnread > 0 ? "Messages, \(dmUnread) unread" : "Messages")
+            .tourAnchor(.dms)
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: inboxCount > 0)
     }
@@ -4897,163 +4902,23 @@ private struct LivePulseDot: View {
 
 // MARK: - Session view (the former ContentView)
 
-// MARK: - First-run walkthrough
+// MARK: - First-run tour
 
-/// Five-page welcome tour shown once per account on first sign-in (and
-/// replayable from the profile sheet). One idea per page — what each tab
-/// is for — so a brand-new user knows the lay of the land in 30 seconds.
-private struct WelcomeTourView: View {
-    let onDone: () -> Void
-    @State private var page = 0
-
-    private struct TourPage {
-        let icon: String
-        let kicker: String
-        let title: String
-        let text: String
-    }
-
-    private static let pages: [TourPage] = [
-        TourPage(
-            icon: "sparkles",
-            kicker: "WELCOME",
-            title: "Welcome to sejdel",
-            text: "Your night, tracked — from the first pour to the morning recap. Here's the quick lay of the land."
-        ),
-        TourPage(
-            icon: "gauge.medium",
-            kicker: "PLAN",
-            title: "Plan the party before it starts",
-            text: "Create a party or a trip, invite the crew, pick a level — and the calculator tells you exactly how much to buy. Tonight's own planner lives here too."
-        ),
-        TourPage(
-            icon: "dot.radiowaves.left.and.right",
-            kicker: "LIVE",
-            title: "Log as you go",
-            text: "One tap per drink. Check in to bars, bring your crew, and watch everyone's BAC in real time."
-        ),
-        TourPage(
-            icon: "square.stack.fill",
-            kicker: "NIGHTLINE",
-            title: "Your friends' nights",
-            text: "Stories and recaps from your friends land here — and you can see who's out right now."
-        ),
-        TourPage(
-            icon: "map.fill",
-            kicker: "DEALS",
-            title: "Drink smarter, pay less",
-            text: "Tonight's specials around you, on the map. Check in and the menu knows the deals."
-        ),
-    ]
-
-    private var isLast: Bool { page == Self.pages.count - 1 }
-
-    var body: some View {
-        ZStack {
-            AtmosphereBackground(accent: .whiskey)
-
-            VStack(spacing: 0) {
-                HStack {
-                    Spacer()
-                    Button {
-                        onDone()
-                    } label: {
-                        Text("SKIP")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .tracking(2)
-                            .foregroundStyle(Color.bronze)
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 14)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PressScaleStyle())
-                }
-                .padding(.top, 14)
-                .padding(.trailing, 10)
-
-                TabView(selection: $page) {
-                    ForEach(Array(Self.pages.enumerated()), id: \.offset) { idx, p in
-                        tourPage(p).tag(idx)
-                    }
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-
-                HStack(spacing: 7) {
-                    ForEach(Self.pages.indices, id: \.self) { idx in
-                        Capsule()
-                            .fill(idx == page ? Color.whiskey : Color.cream.opacity(0.15))
-                            .frame(width: idx == page ? 22 : 7, height: 7)
-                    }
-                }
-                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: page)
-                .padding(.bottom, 24)
-
-                PrimaryGlowButton(
-                    title: isLast ? "Let's go" : "Next",
-                    systemImage: isLast ? "checkmark" : "arrow.right"
-                ) {
-                    if isLast {
-                        onDone()
-                    } else {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
-                            page += 1
-                        }
-                    }
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 28)
-            }
-        }
-    }
-
-    private func tourPage(_ p: TourPage) -> some View {
-        VStack(spacing: 22) {
-            Spacer()
-            ZStack {
-                Circle()
-                    .fill(Color.whiskey.opacity(0.1))
-                    .frame(width: 110, height: 110)
-                Circle()
-                    .strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1)
-                    .frame(width: 110, height: 110)
-                Image(systemName: p.icon)
-                    .font(.system(size: 42, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.whiskey)
-            }
-            VStack(spacing: 10) {
-                SectionLabel(p.kicker, color: .whiskey)
-                Text(p.title)
-                    .font(.system(size: 26, weight: .heavy, design: .rounded))
-                    .tracking(-0.8)
-                    .foregroundStyle(Color.cream)
-                    .multilineTextAlignment(.center)
-                Text(p.text)
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.cream.opacity(0.7))
-                    .lineSpacing(3)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal, 36)
-            Spacer()
-            Spacer()
-        }
-    }
-}
-
-/// Profile sheet + first-run tour in one modifier. The tour pops
-/// automatically the first time an account lands in the app, and is
-/// replayable from the profile sheet's "Replay the tour" row. Extracted
-/// from SessionView.body to keep its chain inside the type-checker's
-/// budget.
+/// Profile sheet + first-run tour trigger in one modifier (extracted from
+/// SessionView.body to keep its chain inside the type-checker's budget).
+/// The coach-mark tour itself is `TourModifier` (Tour.swift); this decides
+/// WHEN it runs: automatically the first time a brand-new account opens the
+/// app, and on demand from the profile's "Replay the tour" row. Anyone who
+/// saw an earlier version of the tour on this device never sees it again.
 private struct ProfileAndTourModifier: ViewModifier {
     @Binding var profileOpen: Bool
     @Binding var tourOpen: Bool
-    @Binding var walkthroughOpen: Bool
     let seenKey: String
-    /// Shown once per install, right after the tour.
+    let legacySeenKey: String
+    /// Shown once per install, right after the first-run tour.
     private let crewKey = "sesh.crewPrompt.seen.v1"
     @State private var crewOpen = false
+    @State private var firstRun = false
     let profile: Profile
     @ObservedObject var auth: AuthService
     @ObservedObject var admin: AdminService
@@ -5066,27 +4931,11 @@ private struct ProfileAndTourModifier: ViewModifier {
                 ProfileSheet(
                     profile: profile, auth: auth, admin: admin,
                     friends: friends, feed: feed,
-                    onReplayTour: { tourOpen = true },
-                    onWalkthrough: { profileOpen = false; walkthroughOpen = true }
+                    onReplayTour: { profileOpen = false; tourOpen = true }
                 )
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
                     .presentationBackground(Color.ink)
-            }
-            .fullScreenCover(isPresented: $tourOpen) {
-                WelcomeTourView {
-                    UserDefaults.standard.set(true, forKey: seenKey)
-                    tourOpen = false
-                    // The tour hands straight off to "bring your crew" — the
-                    // moment intent is highest. Only on the FIRST run, never
-                    // on a replay from the profile, and only once ever: an
-                    // onboarding wall that keeps asking for the address book
-                    // is how apps get deleted.
-                    if !UserDefaults.standard.bool(forKey: crewKey) {
-                        UserDefaults.standard.set(true, forKey: crewKey)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { crewOpen = true }
-                    }
-                }
             }
             .sheet(isPresented: $crewOpen) {
                 FindCrewSheet(friends: friends,
@@ -5098,9 +4947,24 @@ private struct ProfileAndTourModifier: ViewModifier {
                 .presentationBackground(Color.ink)
             }
             .onAppear {
-                if !UserDefaults.standard.bool(forKey: seenKey) {
-                    tourOpen = true
+                let seen = UserDefaults.standard.bool(forKey: seenKey)
+                    || UserDefaults.standard.bool(forKey: legacySeenKey)
+                guard !seen else { return }
+                firstRun = true
+                // Let the Home feed settle so the spotlights have something
+                // to point at.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { tourOpen = true }
+            }
+            .onChange(of: tourOpen) { was, on in
+                guard was, !on else { return }
+                UserDefaults.standard.set(true, forKey: seenKey)
+                // First run hands straight off to "bring your crew" — the
+                // moment intent is highest. Never on a replay, only once.
+                if firstRun, !UserDefaults.standard.bool(forKey: crewKey) {
+                    UserDefaults.standard.set(true, forKey: crewKey)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { crewOpen = true }
                 }
+                firstRun = false
             }
     }
 }
@@ -5267,13 +5131,11 @@ private struct SessionView: View {
     @State private var profileOpen = false
     /// The app-open Deals interstitial payload, when one is due to show.
     @State private var interstitial: InterstitialPayload? = nil
-    /// The full guided walkthrough overlay (launched from the profile).
-    @State private var walkthroughActive = false
     /// One-time "want deals from nearby bars?" opt-in ask, shown the first
     /// time the user lands on the Deals tab.
     @State private var dealPromptOpen = false
-    /// First-run feature walkthrough — shown once per account, replayable
-    /// from the profile sheet.
+    /// The coach-mark tour (Tour.swift) — runs once for a brand-new account,
+    /// replayable from the profile.
     @State private var tourOpen = false
     /// Which group sheet is open, if any. Driven by GroupBar taps in
     /// each page. Using a scope-tagged value lets one `.sheet` handle
@@ -6485,7 +6347,7 @@ private struct SessionView: View {
                 .presentationBackground(Color.ink)
         }
         .modifier(profileSheets)
-        .modifier(WalkthroughModifier(tab: $tab, active: $walkthroughActive))
+        .modifier(TourModifier(tab: $tab, active: $tourOpen))
         .modifier(BirthdatePromptModifier(auth: auth))
         .sheet(isPresented: $friendsSheetOpen) {
             FriendsView(friends: friends, auth: auth, feed: feed)
@@ -6528,7 +6390,9 @@ private struct SessionView: View {
 
     /// Per-account, so a second account on the same phone still gets the
     /// tour — same keying pattern as the nightline last-seen marker.
-    private var tourSeenKey: String { "sesh.tour.seen.v1.\(profile.id)" }
+    private var tourSeenKey: String { "sesh.tour.seen.v2.\(profile.id)" }
+    /// Anyone who saw the old tour skips the new one — it's for new accounts.
+    private var legacyTourSeenKey: String { "sesh.tour.seen.v1.\(profile.id)" }
 
     /// Bridge the device-local guest store to the shared session roster
     /// as the user enters / leaves a LIVE group, and carry drinks across
@@ -6789,8 +6653,8 @@ private struct SessionView: View {
         ProfileAndTourModifier(
             profileOpen: $profileOpen,
             tourOpen: $tourOpen,
-            walkthroughOpen: $walkthroughActive,
             seenKey: tourSeenKey,
+            legacySeenKey: legacyTourSeenKey,
             profile: profile,
             auth: auth,
             admin: admin,
@@ -6821,8 +6685,7 @@ private struct SessionView: View {
         ProfileSheet(
             profile: profile, auth: auth, admin: admin,
             friends: friends, feed: feed,
-            onReplayTour: { tourOpen = true },
-            onWalkthrough: { walkthroughActive = true }
+            onReplayTour: { tourOpen = true }
         )
     }
 
@@ -6904,6 +6767,7 @@ private struct SessionView: View {
                     Capsule().fill(Color.whiskey)
                         .shadow(color: Color.whiskey.opacity(0.45), radius: 10, y: 2)
                 )
+                .tourAnchor(.drinkPill)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -6923,6 +6787,7 @@ private struct SessionView: View {
         }
         .buttonStyle(PressScaleStyle())
         .accessibilityLabel(running ? "Tonight's live summary — open LIVE" : "Add a drink — open LIVE")
+        .tourAnchor(.bacCard)
     }
 
     /// One-line summary under the strip's BAC figure. Live: drinks · group
@@ -8839,10 +8704,8 @@ private struct ProfileSheet: View {
     @ObservedObject var friends: FriendsService
     /// Timeline service — used here to load the user's own posted seshs.
     @ObservedObject var feed: FeedService
-    /// Re-opens the first-run walkthrough (closes this sheet first).
+    /// Replays the coach-mark tour (closes this sheet first).
     var onReplayTour: (() -> Void)? = nil
-    /// Launches the full guided walkthrough over the live app.
-    var onWalkthrough: (() -> Void)? = nil
 
     /// The user's own posted seshs (Instagram-style grid) + a tapped one.
     @State private var myPosts: [TimelinePost] = []
@@ -8880,13 +8743,11 @@ private struct ProfileSheet: View {
     init(
         profile: Profile, auth: AuthService, admin: AdminService,
         friends: FriendsService, feed: FeedService,
-        onReplayTour: (() -> Void)? = nil,
-        onWalkthrough: (() -> Void)? = nil
+        onReplayTour: (() -> Void)? = nil
     ) {
         self.profile = profile
         self.auth = auth
         self.admin = admin
-        self.onWalkthrough = onWalkthrough
         self.friends = friends
         self.feed = feed
         self.onReplayTour = onReplayTour
@@ -9433,47 +9294,7 @@ private struct ProfileSheet: View {
                         .buttonStyle(PressScaleStyle())
                     }
 
-                    // Full guided walkthrough — steps through every live screen
-                    // and annotates its functions.
-                    if let onWalkthrough {
-                        Button {
-                            dismiss()
-                            onWalkthrough()
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "sparkles")
-                                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                                    .foregroundStyle(Color.whiskey)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text("FULL WALKTHROUGH")
-                                        .font(.system(size: 12, weight: .black, design: .monospaced))
-                                        .tracking(2.0)
-                                        .foregroundStyle(Color.cream)
-                                    Text("A guided tour of every screen and what it does.")
-                                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                                        .foregroundStyle(Color.cream.opacity(0.55))
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                                    .foregroundStyle(Color.bronze)
-                            }
-                            .padding(.vertical, 14)
-                            .padding(.horizontal, 18)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(Color.whiskey.opacity(0.08))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(PressScaleStyle())
-                    }
-
-                    // Replay the first-run tour — for anyone who skipped it
-                    // or wants the 30-second refresher.
+                    // Replay the coach-mark tour — for anyone who skipped it.
                     if let onReplayTour {
                         Button {
                             dismiss()
@@ -9488,7 +9309,7 @@ private struct ProfileSheet: View {
                                         .font(.system(size: 12, weight: .black, design: .monospaced))
                                         .tracking(2.0)
                                         .foregroundStyle(Color.cream)
-                                    Text("A 30-second tour of the four tabs.")
+                                    Text("A guided walk through every screen, with things to try.")
                                         .font(.system(size: 11, weight: .medium, design: .rounded))
                                         .foregroundStyle(Color.cream.opacity(0.55))
                                 }
@@ -14251,6 +14072,7 @@ private struct LiveSeshView: View {
             // scroll view shrinks above the keyboard, so an overlay anchored
             // to it would ride up. This layer stays planted.
             quickAddDock
+                .tourAnchor(.liveDock)
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) {
                     quickDockHeight = $0
                 }
@@ -17534,5 +17356,6 @@ struct BottomTabBar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .tourAnchor(.tab(value))
     }
 }
