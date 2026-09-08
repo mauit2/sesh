@@ -190,20 +190,39 @@ struct BarSearchView: View {
             search.search(query: query, origin: origin)
         }
         .onChange(of: hits) { _, h in
-            camera = .automatic
+            withAnimation(.easeInOut(duration: 0.35)) { camera = .region(Self.fit(h)) }
             Task { await requests.loadCounts(h.compactMap { $0.venue?.id }) }
         }
+        // Full height on purpose: a half sheet would leave this map peeking
+        // out above the detail's own map.
         .sheet(item: $selected) { h in
             BarDetailSheet(hit: h, venues: venues)
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
     }
 
+    /// Everything on screen, but never tighter than a neighbourhood — a lone
+    /// result zoomed to its doorstep tells you nothing about where it is.
+    static func fit(_ hits: [BarHit]) -> MKCoordinateRegion {
+        guard let first = hits.first else { return MKCoordinateRegion(.world) }
+        var minLat = first.coordinate.latitude, maxLat = minLat
+        var minLon = first.coordinate.longitude, maxLon = minLon
+        for h in hits {
+            minLat = min(minLat, h.coordinate.latitude); maxLat = max(maxLat, h.coordinate.latitude)
+            minLon = min(minLon, h.coordinate.longitude); maxLon = max(maxLon, h.coordinate.longitude)
+        }
+        let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2)
+        let minSpan = 0.022   // ≈ 2.4 km north–south
+        let span = MKCoordinateSpan(latitudeDelta: max((maxLat - minLat) * 1.6, minSpan),
+                                    longitudeDelta: max((maxLon - minLon) * 1.6, minSpan * 1.3))
+        return MKCoordinateRegion(center: center, span: span)
+    }
+
     private func focus(_ h: BarHit) {
         withAnimation(.easeInOut(duration: 0.4)) {
-            camera = .region(MKCoordinateRegion(center: h.coordinate, latitudinalMeters: 500, longitudinalMeters: 500))
+            camera = .region(MKCoordinateRegion(center: h.coordinate, latitudinalMeters: 1800, longitudinalMeters: 1800))
         }
     }
 
@@ -263,7 +282,8 @@ struct BarDetailSheet: View {
     init(hit: BarHit, venues: VenueService) {
         self.hit = hit; self.venues = venues
         _venue = State(initialValue: hit.venue)
-        _camera = State(initialValue: .region(MKCoordinateRegion(center: hit.coordinate, latitudinalMeters: 450, longitudinalMeters: 450)))
+        // Wide enough to place the bar in its part of town, not just its block.
+        _camera = State(initialValue: .region(MKCoordinateRegion(center: hit.coordinate, latitudinalMeters: 2200, longitudinalMeters: 2200)))
     }
 
     private var asked: Bool { venue.map { requests.mine.contains($0.id) } ?? false }
@@ -357,46 +377,94 @@ struct BarDetailSheet: View {
 
 // MARK: - Owner side: which bars people want
 
-/// Business desk → Wanted. The pitch, in numbers.
+/// Business desk → Wanted. The pitch, in numbers — grouped by city so a trip
+/// to one town has its list ready, and filterable by name, city or country.
 struct WantedBarsSection: View {
     @State private var rows: [VenueRequestStore.Wanted] = []
     @State private var loaded = false
     @State private var error: String?
+    @State private var filter = ""
+
+    private struct Group: Identifiable {
+        let id: String
+        let city: String
+        let country: String
+        let rows: [VenueRequestStore.Wanted]
+        var asks: Int { rows.reduce(0) { $0 + $1.asks } }
+    }
+
+    private var filtered: [VenueRequestStore.Wanted] {
+        let q = filter.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return rows }
+        return rows.filter {
+            $0.name.lowercased().contains(q)
+                || ($0.city ?? "").lowercased().contains(q)
+                || ($0.country ?? "").lowercased().contains(q)
+        }
+    }
+
+    /// One block per city, most-wanted city first.
+    private var groups: [Group] {
+        var byKey: [String: [VenueRequestStore.Wanted]] = [:]
+        for r in filtered {
+            let key = "\(r.country ?? "")|\(r.city ?? "")"
+            byKey[key, default: []].append(r)
+        }
+        return byKey.map { key, rs in
+            let parts = key.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            return Group(id: key, city: parts.count > 1 && !parts[1].isEmpty ? parts[1] : "Unknown city",
+                         country: parts.first ?? "", rows: rs.sorted { $0.asks > $1.asks })
+        }
+        .sorted { $0.asks == $1.asks ? $0.city < $1.city : $0.asks > $1.asks }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             kicker("BARS PEOPLE ASKED FOR")
             Text("Every tap on “I want this bar on Sejdel”, by bar. Take the number to the bar: this many of their guests asked for them.")
                 .font(.system(size: 12, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
+            if !rows.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.bronze)
+                    TextField("", text: $filter, prompt: Text("Bar, city or country").foregroundStyle(Color.cream.opacity(0.35)))
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .tint(Color.whiskey)
+                        .autocorrectionDisabled()
+                    if !filter.isEmpty {
+                        Button { filter = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(Color.cream.opacity(0.4))
+                        }
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 11)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.06)))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+            }
             if !loaded {
                 ProgressView().tint(Color.whiskey).frame(maxWidth: .infinity).padding(.vertical, 20)
             } else if rows.isEmpty {
                 Text("Nobody has asked for a bar yet.")
                     .font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.5))
+            } else if groups.isEmpty {
+                Text("Nothing matches “\(filter)”.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.5))
             } else {
-                ForEach(rows) { w in
-                    BizCard {
-                        HStack(alignment: .top, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(w.name).font(.system(size: 16, weight: .heavy, design: .rounded)).foregroundStyle(Color.cream)
-                                Text([w.address, w.city, w.country].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
-                                    .font(.system(size: 11, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.5))
-                                if let l = w.lastAt {
-                                    Text("last ask \(RelativeTime.short(l))")
-                                        .font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Color.bronze)
-                                }
-                            }
-                            Spacer(minLength: 0)
-                            VStack(alignment: .trailing, spacing: 2) {
-                                Text("\(w.asks)").font(.system(size: 26, weight: .black, design: .rounded)).foregroundStyle(Color.whiskey)
-                                Text(w.asks == 1 ? "ASK" : "ASKS").font(.system(size: 9, weight: .black, design: .monospaced)).tracking(1.2).foregroundStyle(Color.bronze)
-                                if w.onSejdel {
-                                    Text("ON SEJDEL").font(.system(size: 8, weight: .black, design: .monospaced)).tracking(1).foregroundStyle(Color.whiskey.opacity(0.7))
-                                }
-                            }
-                        }
+                ForEach(groups) { g in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text([g.city, g.country].filter { !$0.isEmpty }.joined(separator: " · ").uppercased())
+                            .font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1.6)
+                            .foregroundStyle(Color.bronze)
+                        Spacer()
+                        Text("\(g.rows.count) \(g.rows.count == 1 ? "BAR" : "BARS") · \(g.asks) \(g.asks == 1 ? "ASK" : "ASKS")")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced)).tracking(1)
+                            .foregroundStyle(Color.cream.opacity(0.45))
                     }
+                    .padding(.top, 6)
+                    ForEach(g.rows) { w in wantedRow(w) }
                 }
             }
             ErrorLine(text: error)
@@ -404,6 +472,31 @@ struct WantedBarsSection: View {
         .task {
             do { rows = try await VenueRequestStore.shared.adminList() } catch { self.error = "Couldn't load." }
             loaded = true
+        }
+    }
+
+    private func wantedRow(_ w: VenueRequestStore.Wanted) -> some View {
+        BizCard {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(w.name).font(.system(size: 16, weight: .heavy, design: .rounded)).foregroundStyle(Color.cream)
+                    if let a = w.address, !a.isEmpty {
+                        Text(a).font(.system(size: 11, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.5))
+                    }
+                    if let l = w.lastAt {
+                        Text("last ask \(RelativeTime.short(l))")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Color.bronze)
+                    }
+                }
+                Spacer(minLength: 0)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(w.asks)").font(.system(size: 26, weight: .black, design: .rounded)).foregroundStyle(Color.whiskey)
+                    Text(w.asks == 1 ? "ASK" : "ASKS").font(.system(size: 9, weight: .black, design: .monospaced)).tracking(1.2).foregroundStyle(Color.bronze)
+                    if w.onSejdel {
+                        Text("ON SEJDEL").font(.system(size: 8, weight: .black, design: .monospaced)).tracking(1).foregroundStyle(Color.whiskey.opacity(0.7))
+                    }
+                }
+            }
         }
     }
 }
