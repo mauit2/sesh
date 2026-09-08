@@ -464,9 +464,43 @@ struct LoadingView: View {
                     .tracking(-1.5)
                     .foregroundStyle(Color.cream)
             }
+            // The one thing worth reading before anything else in here.
+            VStack {
+                Spacer()
+                safetyWarning
+            }
         }
         .preferredColorScheme(.dark)
         .onAppear { pulse = true }
+    }
+
+    /// Red, not whiskey: this is the one place in the app that is not styling
+    /// itself to be enjoyed.
+    private var warningRed: Color { Color(red: 0.902, green: 0.325, blue: 0.267) }
+
+    private var safetyWarning: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 22, weight: .black))
+                Text("NEVER DRINK AND DRIVE")
+                    .font(.system(size: 22, weight: .black, design: .rounded))
+                    .tracking(0.3)
+            }
+            .foregroundStyle(warningRed)
+            Text("Estimates only, never measurements.\nNever use Sejdel to decide if you can drive.")
+                .font(.system(size: 17, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.9))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 18).padding(.vertical, 20)
+        .frame(maxWidth: 380)
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.stout.opacity(0.72)))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .strokeBorder(warningRed.opacity(0.5), lineWidth: 1))
+        .padding(.horizontal, 22)
+        .padding(.bottom, 44)
     }
 }
 

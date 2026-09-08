@@ -3329,6 +3329,8 @@ struct BusinessToolSheet: View {
 /// rates and limits. Admin only (the RPCs refuse everyone else).
 struct BusinessReviewView: View {
     @StateObject private var svc = BusinessAdminService()
+    /// Apple's real prices, shown beside the placeholders so drift is visible.
+    @ObservedObject private var store = BusinessStore.shared
     @State private var tab = 0
     @State private var rejecting: AdminBusinessQueue.Order?
     @State private var reason = ""
@@ -3473,13 +3475,28 @@ struct BusinessReviewView: View {
     // ── packs & limits ──
     private func products(_ q: AdminBusinessQueue) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            kicker("PRODUCTS · DISPLAY PRICE, SEK")
-            Text("Tiers, boosts, cards and pushes. The real price is whatever App Store Connect says — keep these in step so bars see the right number before StoreKit loads.")
-                .font(.system(size: 10, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.5))
+            kicker("PLACEHOLDER PRICES · SEK")
+            Text("These charge nobody. Every price is set in App Store Connect, and that is what a bar actually pays. A number here is only shown in the moment before Apple's own price arrives, so keep it in step — the App Store price is underneath each row once StoreKit has it.")
+                .font(.system(size: 12, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
             ForEach(q.products) { p in
-                NumberRow(label: p.label, key: p.productId, value: p.amountSek, suffix: "kr") { v in Task { await svc.setPrice(p.productId, v) } }
+                VStack(alignment: .leading, spacing: 2) {
+                    NumberRow(label: p.label, key: p.productId, value: p.amountSek, suffix: "kr") { v in Task { await svc.setPrice(p.productId, v) } }
+                    if let real = store.products[p.productId] {
+                        // Compare the decimal, not the string: "2 999,00 kr"
+                        // never contains "2999".
+                        let inStep = real.price == Decimal(p.amountSek)
+                        Text("App Store: \(real.displayPrice)\(inStep ? "" : "  ← DIFFERS")")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(inStep ? Color.cream.opacity(0.45) : Color.whiskey)
+                    } else {
+                        Text("App Store: not loaded")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.cream.opacity(0.3))
+                    }
+                }
             }
+            .task(id: q.products.map(\.productId)) { await store.load(ids: q.products.map(\.productId)) }
             kicker("LIMITS").padding(.top, 8)
             ForEach(q.limits) { l in
                 NumberRow(label: l.label, key: l.key, value: l.value, suffix: "") { v in Task { await svc.setLimit(l.key, v) } }
