@@ -276,6 +276,8 @@ struct QRCheckInSheet: View {
         DataScannerViewController.isSupported && DataScannerViewController.isAvailable
     }
 
+    @State private var businessOpen: BizRef?
+
     var body: some View {
         ZStack {
             Color.ink.ignoresSafeArea()
@@ -356,6 +358,11 @@ struct QRCheckInSheet: View {
             }
         }
         .preferredColorScheme(.dark)
+        .sheet(item: $businessOpen) { ref in
+            BusinessProfileView(businessId: ref.id)
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
     }
 
     /// Accept a raw code or any URL whose last path segment is the code
@@ -363,6 +370,20 @@ struct QRCheckInSheet: View {
     /// work as a plain web link for people without the app).
     private func handle(payload: String) {
         guard !resolving else { return }
+        // A bar's "follow us" QR: https://sejdel.com/b/<username> → its profile.
+        if let r = payload.range(of: "/b/") {
+            let username = String(payload[r.upperBound...]).split(separator: "/").first.map { String($0).lowercased() } ?? ""
+            guard !username.isEmpty else { return }
+            resolving = true
+            errorText = nil
+            Task { @MainActor in
+                struct P: Encodable { let p_username: String }
+                let id: UUID? = try? await supabase.rpc("business_by_username", params: P(p_username: username)).execute().value
+                resolving = false
+                if let id { businessOpen = BizRef(id: id) } else { errorText = "No bar found for that code." }
+            }
+            return
+        }
         let raw = payload.split(separator: "/").last.map(String.init) ?? payload
         let token = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !token.isEmpty else { return }

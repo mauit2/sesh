@@ -103,6 +103,48 @@ enum BizTier {
     }
 }
 
+/// The business tools in the ☰ menu — each opens one slice of the dashboard.
+enum BizTool: String, Identifiable, CaseIterable {
+    case profile, plan, stats, deals, boost, card, push, qr
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .profile: return "Edit business profile"
+        case .plan:    return "Plan"
+        case .stats:   return "Stats"
+        case .deals:   return "Deals"
+        case .boost:   return "Boost a post"
+        case .card:    return "App-open card"
+        case .push:    return "Push notification"
+        case .qr:      return "QR codes"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .profile: return "storefront"
+        case .plan:    return "creditcard"
+        case .stats:   return "chart.bar.fill"
+        case .deals:   return "tag.fill"
+        case .boost:   return "bolt.fill"
+        case .card:    return "rectangle.portrait.on.rectangle.portrait.angled"
+        case .push:    return "bell.badge.fill"
+        case .qr:      return "qrcode"
+        }
+    }
+    var sheetTitle: String {
+        switch self {
+        case .profile: return "Your profile."
+        case .plan:    return "Your plan."
+        case .stats:   return "How it's going."
+        case .deals:   return "Deals on your pin."
+        case .boost:   return "Boost a post."
+        case .card:    return "App-open card."
+        case .push:    return "Push notification."
+        case .qr:      return "QR codes."
+        }
+    }
+}
+
 struct BusinessOverview: Decodable {
     struct Info: Decodable {
         let id: UUID
@@ -1485,8 +1527,11 @@ private struct BusinessRegisterSheet: View {
 struct BusinessDashboard: View {
     let summary: BusinessSummary
     @ObservedObject var svc: BusinessService
+    /// One slice (from the ☰ tools) instead of the whole thing.
+    var tool: BizTool? = nil
     @State private var mintingQR = false
     @State private var qrError: String?
+    @State private var upgradeOpen = false
 
     @ObservedObject private var store = BusinessStore.shared
     @State private var dealOpen = false
@@ -1515,24 +1560,34 @@ struct BusinessDashboard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            statusCard
-            if summary.status == "approved" {
-                if let ov {
-                    if ov.isSubscribed {
-                        tierCard(ov)
-                        statStrip(ov)
-                        profileCard(ov)
-                        postsSection(ov)
-                        dealsSection(ov)
-                        cardSection(ov)
-                        pushSection(ov)
-                        qrSection(ov)
-                        rulesCard(ov)
-                    } else {
-                        subscribeCard(ov)
-                    }
+            if let tool {
+                if summary.status != "approved" {
+                    statusCard
+                } else if let ov {
+                    toolBody(tool, ov)
                 } else {
                     ProgressView().tint(Color.whiskey).frame(maxWidth: .infinity).padding(.vertical, 30)
+                }
+            } else {
+                statusCard
+                if summary.status == "approved" {
+                    if let ov {
+                        if ov.isSubscribed {
+                            tierCard(ov)
+                            statStrip(ov)
+                            profileCard(ov)
+                            postsSection(ov)
+                            dealsSection(ov)
+                            cardSection(ov)
+                            pushSection(ov)
+                            qrSection(ov)
+                            rulesCard(ov)
+                        } else {
+                            subscribeCard(ov)
+                        }
+                    } else {
+                        ProgressView().tint(Color.whiskey).frame(maxWidth: .infinity).padding(.vertical, 30)
+                    }
                 }
             }
         }
@@ -1545,7 +1600,104 @@ struct BusinessDashboard: View {
         }
         .modifier(DashboardSheets(svc: svc, overview: ov, dealOpen: $dealOpen, postOpen: $postOpen,
                                   cardOpen: $cardOpen, pushOpen: $pushOpen, boosting: $boosting, preview: $preview,
+                                  upgradeOpen: $upgradeOpen,
                                   reload: { Task { await svc.loadOverview(summary.id) } }))
+    }
+
+    /// One tool at a time. Anything but the plan needs a subscription first.
+    @ViewBuilder
+    private func toolBody(_ tool: BizTool, _ ov: BusinessOverview) -> some View {
+        if !ov.isSubscribed {
+            subscribeCard(ov)
+        } else {
+            switch tool {
+            case .profile: profileCard(ov)
+            case .plan:    tierCard(ov)
+            case .stats:   statsBody(ov)
+            case .deals:   dealsSection(ov)
+            case .boost:   boostBody(ov)
+            case .card:    cardSection(ov)
+            case .push:    pushSection(ov)
+            case .qr:      qrSection(ov)
+            }
+        }
+    }
+
+    // ── stats ──
+    private func statsBody(_ ov: BusinessOverview) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            statStrip(ov)
+            if !ov.campaigns.isEmpty {
+                kicker("DEALS")
+                ForEach(ov.campaigns) { c in
+                    BizCard {
+                        Text(c.title).font(.system(size: 15, weight: .heavy, design: .rounded)).foregroundStyle(Color.cream)
+                        Text("\(c.weekImpressions) views · \(c.weekTaps) taps this week   ·   \(c.impressions) · \(c.taps) all time")
+                            .font(.system(size: 11, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.6))
+                    }
+                }
+            }
+            let boosted = ov.posts.filter { $0.boost != nil && $0.boost?.status != "pending" }
+            if !boosted.isEmpty {
+                kicker("BOOSTS")
+                ForEach(boosted) { p in
+                    if let b = p.boost {
+                        BizCard {
+                            Text(p.caption ?? "Photo").font(.system(size: 15, weight: .heavy, design: .rounded)).foregroundStyle(Color.cream).lineLimit(1)
+                            Text("\(b.views.formatted()) of \(b.goalViews.formatted()) views · \(b.taps) taps · \(b.status == "done" ? "done" : "running")")
+                                .font(.system(size: 11, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.6))
+                            ProgressView(value: Double(min(b.views, b.goalViews)), total: Double(max(b.goalViews, 1))).tint(Color.whiskey)
+                        }
+                    }
+                }
+            }
+            if ov.campaigns.isEmpty && boosted.isEmpty {
+                Text("Numbers show up here once a deal is on the map or a post is boosted.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.5))
+            }
+        }
+    }
+
+    // ── boost: pick a post ──
+    private func boostBody(_ ov: BusinessOverview) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sponsored in every feed nearby, and a billboard on the Deals map, until it hits the views you buy.")
+                .font(.system(size: 15, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.75))
+                .fixedSize(horizontal: false, vertical: true)
+            if ov.posts.isEmpty {
+                Text("Post something first — it's the post that gets boosted.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.5))
+            }
+            ForEach(ov.posts) { p in
+                BizCard {
+                    HStack(alignment: .top, spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.smoke)
+                            if let u = URL(string: p.imageUrl) {
+                                DownsampledAsyncImage(url: u, targetPoints: 120, fill: true, placeholder: Color.smoke)
+                            }
+                        }
+                        .frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(p.caption ?? "Photo")
+                                .font(.system(size: 14, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream).lineLimit(2)
+                            Text(p.createdAt.formatted(date: .abbreviated, time: .omitted))
+                                .font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Color.cream.opacity(0.4))
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    if let b = p.boost, b.status != "pending" {
+                        Text(b.status == "done" ? "Boost done · \(b.views.formatted()) views" : "Boosted · \(b.views.formatted()) / \(b.goalViews.formatted()) views")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Color.whiskey)
+                    } else {
+                        BizPrimaryButton(title: p.boost?.status == "pending" ? "FINISH BOOST PAYMENT" : "BOOST") {
+                            if ov.isPlus { boosting = p } else { upgradeOpen = true }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Approval state, front and centre.
@@ -1786,13 +1938,9 @@ struct BusinessDashboard: View {
                     }
                     ProgressView(value: Double(min(b.views, b.goalViews)), total: Double(max(b.goalViews, 1))).tint(Color.whiskey)
                 }
-            } else if ov.isPlus {
-                BizSecondaryButton(title: p.boost?.status == "pending" ? "FINISH BOOST PAYMENT" : "BOOST THIS POST",
-                                   icon: "bolt.fill") { boosting = p }
             } else {
-                Text("Boost with Business+ — sponsored in the feed and a billboard on the map.")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Color.cream.opacity(0.45))
-                    .fixedSize(horizontal: false, vertical: true)
+                BizSecondaryButton(title: p.boost?.status == "pending" ? "FINISH BOOST PAYMENT" : "BOOST THIS POST",
+                                   icon: "bolt.fill") { if ov.isPlus { boosting = p } else { upgradeOpen = true } }
             }
             Button {
                 deleting = p.id
@@ -1892,14 +2040,16 @@ struct BusinessDashboard: View {
         return VStack(alignment: .leading, spacing: 10) {
             kicker("APP-OPEN CARD")
             ForEach(ov.cards.prefix(3)) { c in cardRow(c, ov: ov) }
-            if !ov.isPlus {
-                Text("Business+ only.").font(.system(size: 12, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.5))
-            } else if !hasArt {
-                Text("Needs a deal with a photo first.").font(.system(size: 12, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.5))
-            }
+            Text(!ov.isPlus ? "Full screen the moment someone nearby opens the app. A Business+ thing."
+                 : !hasArt ? "Needs a deal with a photo first."
+                 : "Full screen the moment someone nearby opens the app, once per person.")
+                .font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.6))
+                .fixedSize(horizontal: false, vertical: true)
             BizSecondaryButton(title: ov.cardPending ? "CARD IN PROGRESS" : "REQUEST A CARD",
                                icon: "rectangle.portrait.on.rectangle.portrait.angled",
-                               enabled: ov.isPlus && hasArt && !ov.cardPending) { cardOpen = true }
+                               enabled: !ov.isPlus || (hasArt && !ov.cardPending)) {
+                if ov.isPlus { cardOpen = true } else { upgradeOpen = true }
+            }
         }
     }
 
@@ -1935,7 +2085,7 @@ struct BusinessDashboard: View {
         return VStack(alignment: .leading, spacing: 10) {
             kicker("PUSH NOTIFICATION")
             ForEach(ov.pushes.prefix(3)) { p in pushRow(p, ov: ov) }
-            Text(!ov.isPlus ? "Business+ only."
+            Text(!ov.isPlus ? "A notification to your city every time you drop a deal. A Business+ thing."
                  : !hasLive ? "A push points at a live deal — add one first."
                  : cooling ? "One push per bar every \(ov.limit("push_cooldown_days", 7)) days. Next slot opens \((ov.nextPushAt ?? Date()).formatted(date: .abbreviated, time: .shortened))."
                  : "One notification to people in \(ov.business.venueCity ?? "your city") who opted in to bar deals.")
@@ -1943,7 +2093,9 @@ struct BusinessDashboard: View {
                 .foregroundStyle(Color.cream.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
             BizSecondaryButton(title: ov.pushPending ? "PUSH SCHEDULED" : "REQUEST A PUSH", icon: "bell.badge.fill",
-                               enabled: ov.isPlus && hasLive && !ov.pushPending && !cooling) { pushOpen = true }
+                               enabled: !ov.isPlus || (hasLive && !ov.pushPending && !cooling)) {
+                if ov.isPlus { pushOpen = true } else { upgradeOpen = true }
+            }
         }
     }
 
@@ -2037,10 +2189,20 @@ struct BusinessDashboard: View {
     // ── check-in QR ──
     private func qrSection(_ ov: BusinessOverview) -> some View {
         VStack(alignment: .leading, spacing: 10) {
+            if let u = ov.business.username {
+                kicker("FOLLOW QR")
+                BizCard {
+                    BusinessQRCard(payload: "https://sejdel.com/b/\(u)", code: "@\(u)",
+                                   caption: "Scan to open \(ov.business.name) on Sejdel and follow. Put it on the menu, the door, the receipt.",
+                                   shareName: "Follow \(ov.business.name) on Sejdel")
+                }
+            }
             kicker("CHECK-IN QR")
             BizCard {
                 if let t = ov.business.qrToken {
-                    BusinessQRCard(token: t, venueName: ov.business.venueName)
+                    BusinessQRCard(payload: "https://sejdel.com/qr/\(t)", code: t,
+                                   caption: "Print it for the tables. Scanning checks guests in at \(ov.business.venueName); the code under it works if the camera won't.",
+                                   shareName: "\(ov.business.venueName) check-in QR")
                 } else {
                     Text("A QR for the tables. Guests scan it to check in at \(ov.business.venueName) — that's how a night lands here.")
                         .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -2082,10 +2244,18 @@ private struct DashboardSheets: ViewModifier {
     @Binding var pushOpen: Bool
     @Binding var boosting: BusinessOverview.Post?
     @Binding var preview: BizPreview?
+    @Binding var upgradeOpen: Bool
     let reload: () -> Void
 
     func body(content: Content) -> some View {
         content
+            .sheet(isPresented: $upgradeOpen) {
+                if let overview {
+                    BusinessUpgradeSheet(svc: svc, overview: overview)
+                        .presentationDragIndicator(.visible)
+                        .presentationBackground(Color.ink)
+                }
+            }
             .sheet(isPresented: $dealOpen) {
                 if let overview {
                     BusinessDealComposer(svc: svc, overview: overview) { dealOpen = false }
@@ -2139,8 +2309,6 @@ private struct BusinessPostComposer: View {
     @State private var data: Data?
     @State private var ratio: CGFloat = 1
     @State private var caption = ""
-    @State private var hasEvent = false
-    @State private var eventAt = Calendar.current.date(bySettingHour: 20, minute: 0, second: 0, of: Date().addingTimeInterval(86400)) ?? Date()
     @State private var offerId: UUID?
     @State private var saving = false
     @State private var error: String?
@@ -2175,13 +2343,6 @@ private struct BusinessPostComposer: View {
                             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
                     }
                     BizField(label: "CAPTION", text: $caption, placeholder: "Quiz night Thursday. 20:00, free entry.", multiline: true, limit: 300)
-                    BizSwitchRow(title: "It's an event", isOn: $hasEvent)
-                    if hasEvent {
-                        DatePicker("When", selection: $eventAt, in: Date()..., displayedComponents: [.date, .hourAndMinute])
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.cream.opacity(0.7))
-                            .tint(Color.whiskey)
-                    }
                     let live = overview.campaigns.filter(\.live)
                     if !live.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
@@ -2227,7 +2388,7 @@ private struct BusinessPostComposer: View {
             do {
                 try await svc.createPost(business: overview.business.id, images: [data], ratio: ratio,
                                          caption: caption.trimmingCharacters(in: .whitespacesAndNewlines),
-                                         eventAt: hasEvent ? eventAt : nil, offerId: offerId)
+                                         eventAt: nil, offerId: offerId)
                 onDone(); dismiss()
             } catch { self.error = BusinessService.friendly(error) }
             saving = false
@@ -3008,6 +3169,85 @@ struct BusinessPreviewSheet: View {
             catch { note = BusinessService.friendly(error); failed = true }
             busy = false
         }
+    }
+}
+
+// MARK: - Upgrade pop-up & tool sheets
+
+/// What Business+ gets you, with the button. Opens whenever a Business bar
+/// taps a Business+ thing: boost, events, card, push.
+struct BusinessUpgradeSheet: View {
+    @ObservedObject var svc: BusinessService
+    let overview: BusinessOverview
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var store = BusinessStore.shared
+    @State private var busy = false
+    @State private var note: String?
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    SheetHeader(eyebrow: "", title: "Go Business+.", onClose: { dismiss() }, big: true)
+                    PlanCard(plus: true,
+                             price: store.displayPrice(BizTier.plus, fallbackSek: overview.product(BizTier.plus)?.amountSek ?? 0),
+                             cta: "GO BUSINESS+", busy: busy, enabled: !busy) { upgrade() }
+                    if let note {
+                        Text(note).font(.system(size: 13, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream.opacity(0.7))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text("Switches your plan through the App Store. Cancel any time.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.5))
+                    Spacer(minLength: 24)
+                }
+                .padding(20)
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func upgrade() {
+        busy = true; note = nil
+        Task {
+            switch await store.subscribe(business: overview.business.id, productId: BizTier.plus) {
+            case .paid: await svc.loadOverview(overview.business.id); await svc.loadMine(); dismiss()
+            case .cancelled: break
+            case .pending: note = "Waiting for approval from your Apple account."
+            case .failed(let why): note = why
+            }
+            busy = false
+        }
+    }
+}
+
+/// One business tool from the ☰ menu, as a sheet over whatever page is open.
+struct BusinessToolSheet: View {
+    let tool: BizTool
+    @StateObject private var svc = BusinessService()
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    SheetHeader(eyebrow: tool.title.uppercased(), title: tool.sheetTitle, onClose: { dismiss() })
+                    if let b = svc.mine.first {
+                        BusinessDashboard(summary: b, svc: svc, tool: tool)
+                    } else if svc.loaded {
+                        Text("No business account on this profile.")
+                            .font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.5))
+                    } else {
+                        ProgressView().tint(Color.whiskey).frame(maxWidth: .infinity).padding(.vertical, 40)
+                    }
+                    Spacer(minLength: 24)
+                }
+                .padding(20)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .task { await svc.loadMine() }
     }
 }
 

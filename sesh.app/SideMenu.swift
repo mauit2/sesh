@@ -27,6 +27,7 @@ struct SideMenuModifier: ViewModifier {
     @State private var businessDeskOpen = false
     @State private var specialsOpen = false
     @State private var adminPanelOpen = false
+    @State private var tool: BizTool?
     @Environment(\.openURL) private var openURL
 
     /// How far the app slides over — the menu page's usable width.
@@ -39,6 +40,8 @@ struct SideMenuModifier: ViewModifier {
             SideMenu(
                 width: Self.width,
                 profile: profile, isAdmin: admin.isAdmin, isOwner: admin.isOwner,
+                isBusiness: profile.businessId != nil,
+                onTool: { t in close(); tool = t },
                 onProfile: { close(); tab = .profile },
                 onSettings: { close(); settingsOpen = true },
                 onPremium: { close(); paywallOpen = true },
@@ -91,6 +94,11 @@ struct SideMenuModifier: ViewModifier {
             AfterDarkPaywall()
                 .environmentObject(AfterDarkStore.shared)
         }
+        .sheet(item: $tool) { t in
+            BusinessToolSheet(tool: t)
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
         .sheet(isPresented: $businessOpen) {
             BusinessHubView()
                 .presentationDragIndicator(.visible)
@@ -137,6 +145,9 @@ struct SideMenu: View {
     let profile: Profile
     let isAdmin: Bool
     let isOwner: Bool
+    /// The account is a bar: the business tools replace "Sejdel for Business".
+    let isBusiness: Bool
+    let onTool: (BizTool) -> Void
     let onProfile: () -> Void
     let onSettings: () -> Void
     let onPremium: () -> Void
@@ -191,7 +202,21 @@ struct SideMenu: View {
             row("gearshape", "Settings", nil, onSettings)
             row("sparkles", "Sejdel Premium", afterDark.hasSpicy ? "After Dark is on" : nil, onPremium, accent: true)
             row("person.2", "Friends", nil, onFriends)
-            row("storefront", "Sejdel for Business", nil, onBusiness)
+            if isBusiness {
+                rule
+                Text("YOUR BAR")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .tracking(2)
+                    .foregroundStyle(Color.bronze)
+                    .padding(.horizontal, 22)
+                    .padding(.top, 14)
+                    .padding(.bottom, 4)
+                ForEach(BizTool.allCases) { t in
+                    row(t.icon, t.title, nil, { onTool(t) })
+                }
+            } else {
+                row("storefront", "Sejdel for Business", nil, onBusiness)
+            }
 
             if isAdmin {
                 rule

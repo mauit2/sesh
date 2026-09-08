@@ -44,6 +44,65 @@ struct BizSwitchRow: View {
     }
 }
 
+/// "899 kr / month, with everything else in Business+."
+struct PlanCardPrice: View {
+    let price: String
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(price).font(.system(size: 26, weight: .black, design: .rounded)).foregroundStyle(Color.cream)
+            Text("/ month · plus boosts, poster, cards, pushes")
+                .font(.system(size: 13, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream.opacity(0.55))
+        }
+    }
+}
+
+/// One of the bar's own posts, opened from its profile grid.
+struct OwnerPostSheet: View {
+    @ObservedObject var svc: BusinessService
+    let post: BusinessOverview.Post
+    var onDone: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var deleting = false
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let ov = svc.overview {
+                        BusinessPostCard(post: BusinessPost(
+                            id: post.id, businessId: ov.business.id, businessName: ov.business.name, username: ov.business.username,
+                            logoUrl: ov.business.logoUrl, venueId: ov.business.venueId ?? UUID(),
+                            venueName: ov.business.venueName, venueCity: ov.business.venueCity,
+                            imageUrl: post.imageUrl, imageUrls: post.imageUrls, imageRatio: post.imageRatio, caption: post.caption,
+                            eventAt: nil, offerId: post.offerId, createdAt: ISO8601DateFormatter().string(from: post.createdAt)
+                        ))
+                        if let b = post.boost, b.status != "pending" {
+                            Text(b.status == "done" ? "Boost done · \(b.views.formatted()) views · \(b.taps) taps"
+                                 : "Boosted · \(b.views.formatted()) / \(b.goalViews.formatted()) views")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(Color.whiskey)
+                        }
+                        Button {
+                            deleting = true
+                            Task { try? await svc.deletePost(post.id, business: ov.business.id); onDone(); dismiss() }
+                        } label: {
+                            Text(deleting ? "Deleting…" : "Delete post")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.5)).underline()
+                        }
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
+                    }
+                    Spacer(minLength: 24)
+                }
+                .padding(20)
+                .padding(.top, 16)
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
 /// The blue-tick equivalent: every business account is a verified bar.
 struct VerifiedBadge: View {
     var size: CGFloat = 14
@@ -57,17 +116,40 @@ struct VerifiedBadge: View {
 
 // MARK: - Owner: profile tab
 
-/// PROFILE in business mode: the bar's page, then everything it manages.
+/// PROFILE in business mode: the bar like any profile — picture, name,
+/// followers, posts. Everything it manages lives in the ☰ tools.
 struct BusinessOwnerProfilePage: View {
     @ObservedObject var svc: BusinessService
     let profile: Profile
+    @State private var selected: BusinessOverview.Post?
+    @State private var planOpen = false
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 18) {
                 if let b = svc.mine.first {
                     header(b)
-                    BusinessDashboard(summary: b, svc: svc)
+                    if b.status != "approved" {
+                        BusinessDashboard(summary: b, svc: svc, tool: .plan)
+                    } else if b.tier == "none" {
+                        Button { planOpen = true } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Not on the map yet.")
+                                    .font(.system(size: 20, weight: .heavy, design: .rounded)).foregroundStyle(Color.whiskey)
+                                Text("Pick a plan to get your pin, your profile and your posts going.")
+                                    .font(.system(size: 15, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.75))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(18)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.whiskey.opacity(0.09)))
+                            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    } else {
+                        posts
+                    }
                 } else if svc.loaded {
                     Text("Your business account has ended. Claim a bar again from the menu to start over.")
                         .font(.system(size: 14, weight: .medium, design: .rounded))
@@ -81,8 +163,67 @@ struct BusinessOwnerProfilePage: View {
             .padding(.top, 8)
             .padding(.bottom, 120)
         }
-        .task { await svc.loadMine() }
+        .task {
+            await svc.loadMine()
+            if let b = svc.mine.first { await svc.loadOverview(b.id) }
+        }
         .refreshable { await svc.loadMine(); if let b = svc.mine.first { await svc.loadOverview(b.id) } }
+        .sheet(isPresented: $planOpen) {
+            BusinessToolSheet(tool: .plan)
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+        .sheet(item: $selected) { p in
+            OwnerPostSheet(svc: svc, post: p) { selected = nil }
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+    }
+
+    /// The Instagram grid: 3:4 tiles, newest first.
+    @ViewBuilder
+    private var posts: some View {
+        let list = svc.overview?.posts ?? []
+        if list.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.system(size: 26, design: .rounded))
+                    .foregroundStyle(Color.bronze)
+                Text("Nothing posted yet. The POST tab is right there.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.5))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 40)
+        } else {
+            LazyVGrid(columns: cols, spacing: 3) {
+                ForEach(list) { p in
+                    Button { selected = p } label: {
+                        Color.cream.opacity(0.06)
+                            .overlay { if let u = URL(string: p.imageUrl) { DownsampledAsyncImage(url: u, targetPoints: 160) } }
+                            .aspectRatio(3.0 / 4.0, contentMode: .fit)
+                            .frame(maxWidth: .infinity)
+                            .clipped()
+                            .overlay(alignment: .topTrailing) {
+                                if (p.imageUrls?.count ?? 1) > 1 {
+                                    Image(systemName: "square.on.square.fill")
+                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .foregroundStyle(Color.cream)
+                                        .padding(6)
+                                }
+                                if let b = p.boost, b.status == "live" {
+                                    Image(systemName: "bolt.fill")
+                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .foregroundStyle(Color.whiskey)
+                                        .padding(6)
+                                }
+                            }
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
+            }
+            .padding(.horizontal, -6)
+        }
     }
 
     private func header(_ b: BusinessSummary) -> some View {
@@ -128,38 +269,30 @@ struct BusinessEventsPage: View {
 
     private var ov: BusinessOverview? { svc.overview }
 
+    @State private var upgradeOpen = false
+
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Events")
-                    .font(.system(size: 30, weight: .heavy, design: .rounded))
-                    .foregroundStyle(Color.cream)
-                Text("DJ nights, quiz nights, the special one. Set the date, time and a picture — every follower gets it.")
-                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.cream.opacity(0.7))
-                    .fixedSize(horizontal: false, vertical: true)
                 if let ov {
                     if ov.isPlus {
+                        Text("Your nights, in every follower's pocket.")
+                            .font(.system(size: 30, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Set the date, the time and a picture. Every follower gets it as an upcoming event and a push.")
+                            .font(.system(size: 16, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.75))
+                            .fixedSize(horizontal: false, vertical: true)
                         BizPrimaryButton(title: "NEW EVENT") { composerOpen = true }
                         ForEach(ov.events) { e in row(e, business: ov.business.id) }
                         if ov.events.isEmpty {
-                            Text("Nothing on the calendar yet.")
+                            Text("Nothing on the calendar yet. The first one takes a minute.")
                                 .font(.system(size: 13, weight: .medium, design: .rounded))
                                 .foregroundStyle(Color.cream.opacity(0.5))
                         }
                     } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Events are Business+.")
-                                .font(.system(size: 20, weight: .heavy, design: .rounded))
-                                .foregroundStyle(Color.whiskey)
-                            Text("Upgrade on your profile page to put your nights in front of every follower.")
-                                .font(.system(size: 15, weight: .medium, design: .rounded))
-                                .foregroundStyle(Color.cream.opacity(0.7))
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(18)
-                        .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.whiskey.opacity(0.09)))
-                        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1))
+                        pitch(ov)
                     }
                 } else {
                     ProgressView().tint(Color.whiskey).frame(maxWidth: .infinity).padding(.vertical, 40)
@@ -178,6 +311,82 @@ struct BusinessEventsPage: View {
                 BusinessEventComposer(svc: svc, overview: ov) { composerOpen = false }
                     .presentationBackground(Color.ink)
             }
+        }
+        .sheet(isPresented: $upgradeOpen) {
+            if let ov {
+                BusinessUpgradeSheet(svc: svc, overview: ov)
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(Color.ink)
+            }
+        }
+    }
+
+    /// The Business+ showcase: what an event does, shown as one, with the
+    /// button under it.
+    private func pitch(_ ov: BusinessOverview) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Fill the room.")
+                .font(.system(size: 34, weight: .heavy, design: .rounded))
+                .foregroundStyle(Color.cream)
+            Text("One event, and every follower has your night in their pocket.")
+                .font(.system(size: 19, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+            // A taste of it: the event card followers get.
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 10) {
+                    BusinessLogo(url: nil, name: ov.business.name, size: 34)
+                    HStack(spacing: 5) {
+                        Text(ov.business.name).font(.system(size: 14, weight: .bold, design: .rounded)).foregroundStyle(Color.cream).lineLimit(1)
+                        VerifiedBadge(size: 12)
+                    }
+                    Spacer()
+                }
+                .padding(12)
+                Color.clear
+                    .aspectRatio(1.6, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .overlay {
+                        ZStack {
+                            LinearGradient(colors: [Color.whiskey.opacity(0.9), Color.bronze.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                            VStack(spacing: 4) {
+                                Text("DJ NIGHT").font(.system(size: 34, weight: .black, design: .rounded)).foregroundStyle(Color.ink)
+                                Text("FRIDAY · 22:00").font(.system(size: 13, weight: .black, design: .monospaced)).tracking(2).foregroundStyle(Color.ink.opacity(0.8))
+                            }
+                        }
+                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("DJ night · free entry before 23").font(.system(size: 17, weight: .heavy, design: .rounded)).foregroundStyle(Color.cream)
+                    Text("Fri 22:00 · \(ov.business.venueCity ?? "your city")").font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(Color.whiskey)
+                }
+                .padding(14)
+            }
+            .background(Color.cream.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1))
+
+            VStack(alignment: .leading, spacing: 12) {
+                perk("calendar.badge.plus", "In their calendar. Lands in every follower's upcoming events.")
+                perk("bell.badge.fill", "In their pocket. A push to every follower the moment you post it.")
+                perk("person.crop.circle.badge.checkmark", "On your profile. Anyone who finds you sees what's coming.")
+                perk("camera.fill", "Takes a minute. A picture, a title, a date and time.")
+            }
+            PlanCardPrice(price: BusinessStore.shared.displayPrice(BizTier.plus, fallbackSek: ov.product(BizTier.plus)?.amountSek ?? 0))
+            BizPrimaryButton(title: "GO BUSINESS+") { upgradeOpen = true }
+        }
+    }
+
+    private func perk(_ icon: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.whiskey)
+                .frame(width: 26)
+            Text(text)
+                .font(.system(size: 16, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.9))
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -368,8 +577,6 @@ struct BusinessPostPage: View {
     @State private var ratio: CGFloat = 1
     @State private var cameraOpen = false
     @State private var caption = ""
-    @State private var hasEvent = false
-    @State private var eventAt = Calendar.current.date(bySettingHour: 20, minute: 0, second: 0, of: Date().addingTimeInterval(86400)) ?? Date()
     @State private var offerId: UUID?
     @State private var saving = false
     @State private var error: String?
@@ -393,13 +600,6 @@ struct BusinessPostPage: View {
                 }
                 pictureArea
                 captionField
-                BizSwitchRow(title: "It's an event", isOn: $hasEvent)
-                if hasEvent {
-                    DatePicker("When", selection: $eventAt, in: Date()..., displayedComponents: [.date, .hourAndMinute])
-                        .font(.system(size: 15, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.8))
-                        .tint(Color.whiskey)
-                }
                 if let ov {
                     let live = ov.campaigns.filter(\.live)
                     if !live.isEmpty {
@@ -551,8 +751,8 @@ struct BusinessPostPage: View {
             do {
                 try await svc.createPost(business: ov.business.id, images: images, ratio: ratio,
                                          caption: caption.trimmingCharacters(in: .whitespacesAndNewlines),
-                                         eventAt: hasEvent ? eventAt : nil, offerId: offerId)
-                images = []; caption = ""; hasEvent = false; offerId = nil; page = 0
+                                         eventAt: nil, offerId: offerId)
+                images = []; caption = ""; offerId = nil; page = 0
                 onPosted()
             } catch { self.error = BusinessService.friendly(error) }
             saving = false
@@ -562,15 +762,17 @@ struct BusinessPostPage: View {
 
 // MARK: - Owner: check-in QR
 
-/// The table QR (same code the admin desk prints): guests scan it to check
-/// in at the bar. Minted once, reused forever.
+/// A QR the bar prints: the table check-in code (same payload the admin
+/// desk prints) or the "follow us" link to its profile.
 struct BusinessQRCard: View {
-    let token: String
-    let venueName: String
+    let payload: String
+    let code: String
+    let caption: String
+    let shareName: String
 
     var body: some View {
         VStack(spacing: 12) {
-            if let img = Self.image(for: token) {
+            if let img = Self.image(payload: payload) {
                 Image(uiImage: img)
                     .interpolation(.none)
                     .resizable()
@@ -579,17 +781,17 @@ struct BusinessQRCard: View {
                     .padding(12)
                     .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.cream))
             }
-            Text(token)
+            Text(code)
                 .font(.system(size: 14, weight: .black, design: .monospaced))
                 .tracking(3)
                 .foregroundStyle(Color.cream)
-            Text("Print it for the tables. Scanning checks guests in at \(venueName); the code under it works if the camera won't.")
+            Text(caption)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(0.55))
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            if let img = Self.image(for: token) {
-                ShareLink(item: Image(uiImage: img), preview: SharePreview("\(venueName) check-in QR", image: Image(uiImage: img))) {
+            if let img = Self.image(payload: payload) {
+                ShareLink(item: Image(uiImage: img), preview: SharePreview(shareName, image: Image(uiImage: img))) {
                     Label("SHARE / PRINT", systemImage: "square.and.arrow.up")
                         .font(.system(size: 11, weight: .black, design: .monospaced)).tracking(1.4)
                         .foregroundStyle(Color.whiskey)
@@ -602,10 +804,9 @@ struct BusinessQRCard: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// Same payload the admin desk prints, so one scanner path serves both.
-    static func image(for token: String) -> UIImage? {
+    static func image(payload: String) -> UIImage? {
         let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data("https://sejdel.com/qr/\(token)".utf8)
+        filter.message = Data(payload.utf8)
         filter.correctionLevel = "Q"
         guard let output = filter.outputImage else { return nil }
         let scaled = output.transformed(by: CGAffineTransform(scaleX: 12, y: 12))
