@@ -21,8 +21,11 @@ final class VenueRequestStore: ObservableObject {
 
     func loadMine() async {
         guard !loadedMine else { return }
-        if let ids: [UUID] = try? await supabase.rpc("venue_requests_mine").execute().value {
-            mine = Set(ids); loadedMine = true
+        // Decoded as strings first: a uuid[] over PostgREST did not decode
+        // straight into [UUID], and a silently empty set showed "1 ASKED"
+        // where it should have said "you asked".
+        if let raw: [String] = try? await supabase.rpc("venue_requests_mine").execute().value {
+            mine = Set(raw.compactMap(UUID.init(uuidString:))); loadedMine = true
         }
     }
 

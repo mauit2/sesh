@@ -9,3 +9,7 @@
 -- venue_requests_mine() → uuid[]             the caller's asks
 -- venue_request_counts(uuid[]) → {id: n}     counts for the bars on screen
 -- admin_venue_requests() → [...]             owner: name, city, asks, last_at, on_sejdel (private.is_app_admin)
+--
+-- 2026-09-08 later (venue_requests_mine_jsonb): venue_requests_mine now returns
+-- jsonb (a JSON array of ids) instead of uuid[] — the client never decoded the
+-- uuid[] shape, so "you asked" never showed after a relaunch.
