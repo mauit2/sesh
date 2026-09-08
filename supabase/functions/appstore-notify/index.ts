@@ -92,14 +92,21 @@ async function appleGet(
   path: string,
 ): Promise<{ body: Record<string, unknown>; sandbox: boolean } | null> {
   const token = await appleBearer();
+  const refused: number[] = [];
   for (const host of HOSTS) {
     const res = await fetch(host.url + path, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) return { body: await res.json(), sandbox: host.sandbox };
-    if (res.status === 404) continue;
+    // 404: this environment has never seen it. 401: this environment will not
+    // talk to us yet — production stays shut until the products are live
+    // there, so a sandbox purchase must still be allowed through.
+    if (res.status === 404 || res.status === 401) { refused.push(res.status); continue; }
     const text = await res.text();
     throw new Error(`apple_${res.status}: ${text.slice(0, 300)}`);
+  }
+  if (refused.length > 0 && refused.every((s) => s === 401)) {
+    throw new Error("apple_401_all_environments");
   }
   return null;
 }

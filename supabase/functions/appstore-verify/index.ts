@@ -10,6 +10,12 @@
 // don't need to: the payload came back on an authenticated connection to
 // Apple's own server, so it is Apple's word by construction.
 //
+// Two maintenance actions ride along, both behind the same shared secret:
+//   {"action":"selftest"}          — are the three Apple secrets right?
+//   {"action":"test_notification"} — ask Apple to post a TEST notification,
+//                                     the same thing the App Store Connect
+//                                     button does.
+//
 // Deployed with verify_jwt = false. The caller proves itself with the shared
 // secret in x-sejdel-secret, which Postgres reads out of private.app_config.
 
@@ -92,14 +98,21 @@ async function appleGet(
   path: string,
 ): Promise<{ body: Record<string, unknown>; sandbox: boolean } | null> {
   const token = await appleBearer();
+  const refused: number[] = [];
   for (const host of HOSTS) {
     const res = await fetch(host.url + path, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) return { body: await res.json(), sandbox: host.sandbox };
-    if (res.status === 404) continue; // Try the other environment.
+    // 404: this environment has never seen it. 401: this environment will not
+    // talk to us yet — production stays shut until the products are live
+    // there, so a sandbox purchase must still be allowed through.
+    if (res.status === 404 || res.status === 401) { refused.push(res.status); continue; }
     const text = await res.text();
     throw new Error(`apple_${res.status}: ${text.slice(0, 300)}`);
+  }
+  if (refused.length > 0 && refused.every((s) => s === 401)) {
+    throw new Error("apple_401_all_environments");
   }
   return null;
 }
@@ -125,6 +138,51 @@ function flatten(
   };
 }
 
+/// Shape checks only — never the key material itself.
+async function selftest(): Promise<Record<string, unknown>> {
+  const kid = Deno.env.get("APPLE_IAP_KEY_ID") ?? "";
+  const iss = Deno.env.get("APPLE_IAP_ISSUER_ID") ?? "";
+  const pem = Deno.env.get("APPLE_IAP_PRIVATE_KEY") ?? "";
+  const out: Record<string, unknown> = {
+    key_id: kid ? `${kid.length} chars, ${/^[A-Z0-9]{10}$/i.test(kid) ? "looks right" : "EXPECTED 10 alphanumeric"}` : "MISSING",
+    issuer_id: iss
+      ? `${iss.length} chars, ${/^[0-9a-f-]{36}$/i.test(iss) ? "looks like a uuid" : "EXPECTED a 36-char uuid"}`
+      : "MISSING",
+    private_key: pem
+      ? (pem.includes("BEGIN PRIVATE KEY") ? "has PEM header" : "MISSING the -----BEGIN PRIVATE KEY----- line")
+      : "MISSING",
+    bundle_id: BUNDLE_ID,
+  };
+  try {
+    await signingKey();
+    out.key_parses = true;
+  } catch (e) {
+    out.key_parses = false;
+    out.key_error = String(e).slice(0, 200);
+    return out;
+  }
+  // A lookup of a transaction that cannot exist: 404 means our credentials are
+  // accepted, 401 means Apple rejected the token.
+  try {
+    const token = await appleBearer();
+    const probes: Record<string, unknown> = {};
+    for (const host of HOSTS) {
+      const res = await fetch(`${host.url}/inApps/v1/transactions/1`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      probes[host.sandbox ? "sandbox" : "production"] = {
+        status: res.status,
+        meaning: res.status === 404 ? "credentials accepted" : res.status === 401 ? "REJECTED" : "unexpected",
+        body: (await res.text()).slice(0, 200),
+      };
+    }
+    out.apple = probes;
+  } catch (e) {
+    out.apple_error = String(e).slice(0, 200);
+  }
+  return out;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
@@ -133,13 +191,40 @@ Deno.serve(async (req: Request) => {
     return json({ error: "forbidden" }, 403);
   }
 
-  let transactionId = "";
+  let body: Record<string, unknown>;
   try {
-    const body = await req.json();
-    transactionId = String(body.transaction_id ?? "").trim();
+    body = await req.json();
   } catch {
     return json({ error: "bad_request" }, 400);
   }
+
+  const action = String(body.action ?? "");
+
+  if (action === "selftest") {
+    return json(await selftest(), 200);
+  }
+
+  if (action === "test_notification") {
+    try {
+      const token = await appleBearer();
+      const asked: Record<string, unknown> = {};
+      for (const host of HOSTS) {
+        const res = await fetch(`${host.url}/inApps/v1/notifications/test`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        asked[host.sandbox ? "sandbox" : "production"] = {
+          status: res.status,
+          body: (await res.text()).slice(0, 300),
+        };
+      }
+      return json({ ok: true, asked }, 200);
+    } catch (e) {
+      return json({ ok: false, reason: String(e).slice(0, 300) }, 200);
+    }
+  }
+
+  const transactionId = String(body.transaction_id ?? "").trim();
   if (!/^[0-9]{1,30}$/.test(transactionId)) {
     return json({ ok: false, reason: "bad_transaction_id" }, 200);
   }
