@@ -1543,6 +1543,8 @@ struct BusinessDashboard: View {
     @State private var mintingQR = false
     @State private var qrError: String?
     @State private var upgradeOpen = false
+    /// What the upgrade sheet leads with — the guest list tools open it on the list.
+    @State private var upgradeFocus: UpgradeFocus?
 
     @ObservedObject private var store = BusinessStore.shared
     @State private var dealOpen = false
@@ -1611,7 +1613,7 @@ struct BusinessDashboard: View {
         }
         .modifier(DashboardSheets(svc: svc, overview: ov, dealOpen: $dealOpen, postOpen: $postOpen,
                                   cardOpen: $cardOpen, pushOpen: $pushOpen, boosting: $boosting, preview: $preview,
-                                  upgradeOpen: $upgradeOpen,
+                                  upgradeOpen: $upgradeOpen, upgradeFocus: $upgradeFocus,
                                   reload: { Task { await svc.loadOverview(summary.id) } }))
     }
 
@@ -1626,7 +1628,8 @@ struct BusinessDashboard: View {
             case .plan:    planBody(ov)
             case .stats:   statsBody(ov)
             case .list:    GuestListBody(business: ov.business.id, barName: ov.business.name, isPlus: ov.isPlus,
-                                         listDays: ov.business.listDays ?? [1, 2, 3, 4, 5, 6, 7], onUpgrade: { upgradeOpen = true })
+                                         listDays: ov.business.listDays ?? [1, 2, 3, 4, 5, 6, 7],
+                                         onUpgrade: { upgradeFocus = .list; upgradeOpen = true })
             case .deals:   dealsSection(ov)
             case .boost:   boostBody(ov)
             case .card:    cardSection(ov)
@@ -2274,13 +2277,14 @@ private struct DashboardSheets: ViewModifier {
     @Binding var boosting: BusinessOverview.Post?
     @Binding var preview: BizPreview?
     @Binding var upgradeOpen: Bool
+    @Binding var upgradeFocus: UpgradeFocus?
     let reload: () -> Void
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: $upgradeOpen) {
+            .sheet(isPresented: $upgradeOpen, onDismiss: { upgradeFocus = nil }) {
                 if let overview {
-                    BusinessUpgradeSheet(svc: svc, overview: overview)
+                    BusinessUpgradeSheet(svc: svc, overview: overview, focus: upgradeFocus)
                         .presentationDragIndicator(.visible)
                         .presentationBackground(Color.ink)
                 }
@@ -3205,23 +3209,31 @@ struct BusinessPreviewSheet: View {
 
 /// What Business+ gets you, with the button. Opens whenever a Business bar
 /// taps a Business+ thing: boost, events, card, push.
+/// What a Business+ pitch leads with when it's opened from one feature.
+enum UpgradeFocus { case list }
+
 struct BusinessUpgradeSheet: View {
     @ObservedObject var svc: BusinessService
     let overview: BusinessOverview
+    var focus: UpgradeFocus? = nil
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var store = BusinessStore.shared
     @State private var busy = false
     @State private var note: String?
+
+    private var price: String { store.displayPrice(BizTier.plus, fallbackSek: overview.product(BizTier.plus)?.amountSek ?? 0) }
 
     var body: some View {
         ZStack {
             Color.ink.ignoresSafeArea()
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
-                    SheetHeader(eyebrow: "", title: "Go Business+", onClose: { dismiss() }, big: true)
-                    PlanCard(plus: true,
-                             price: store.displayPrice(BizTier.plus, fallbackSek: overview.product(BizTier.plus)?.amountSek ?? 0),
-                             cta: "GO BUSINESS+", busy: busy, enabled: !busy) { upgrade() }
+                    SheetHeader(eyebrow: "", title: focus == .list ? "The list on autopilot" : "Go Business+", onClose: { dismiss() }, big: true)
+                    if focus == .list {
+                        listLead
+                        kicker("ALSO IN BUSINESS+")
+                    }
+                    PlanCard(plus: true, price: price, cta: "GO BUSINESS+", busy: busy, enabled: !busy) { upgrade() }
                     if let note {
                         Text(note).font(.system(size: 13, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream.opacity(0.7))
                             .fixedSize(horizontal: false, vertical: true)
@@ -3234,6 +3246,37 @@ struct BusinessUpgradeSheet: View {
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    /// The guest-list pitch: what Business+ does for the door, price, and the button.
+    private var listLead: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            perk("star.fill", "Favourites walk in.", "Your regulars are on the list the moment they ask. No approving, no waiting.")
+            perk("hand.raised.fill", "Blocked stay out.", "Anyone you block is told the list is full, every time. They never know.")
+            perk("calendar.badge.clock", "Nights you choose.", "Take the list only on the nights you're open — that one's on every plan.")
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(price).font(.system(size: 26, weight: .black, design: .rounded)).foregroundStyle(Color.cream)
+                Text("/ month").font(.system(size: 14, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream.opacity(0.55))
+            }
+            BizPrimaryButton(title: "GO BUSINESS+", enabled: !busy, busy: busy) { upgrade() }
+        }
+        .padding(18)
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.whiskey.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.whiskey.opacity(0.45), lineWidth: 1))
+    }
+
+    private func perk(_ icon: String, _ title: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.whiskey)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 19, weight: .heavy, design: .rounded)).foregroundStyle(Color.cream)
+                Text(text).font(.system(size: 15, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.7))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private func upgrade() {

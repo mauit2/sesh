@@ -573,10 +573,11 @@ struct GuestListBody: View {
             if !loaded {
                 ProgressView().tint(Color.whiskey).frame(maxWidth: .infinity).padding(.vertical, 30)
             } else if let night {
+                manageButtons
                 nightPicker
                 listSection(night)
-                manageButtons
             } else {
+                manageButtons
                 BizCard {
                     Text("No one on the list yet.")
                         .font(.system(size: 19, weight: .heavy, design: .rounded))
@@ -586,7 +587,6 @@ struct GuestListBody: View {
                         .foregroundStyle(Color.cream.opacity(0.65))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                manageButtons
             }
             ErrorLine(text: error)
             if loaded { daysCard }
@@ -612,20 +612,18 @@ struct GuestListBody: View {
         return rows.sorted { $0.createdAt > $1.createdAt }.filter { seen.insert($0.userId).inserted }
     }
 
-    // ── favourites & blocked (Business+) ──
+    // ── favourites & blocked (Business+; the basic plan gets the pitch on tap) ──
     private var manageButtons: some View {
         VStack(spacing: 8) {
             let favs = flags.filter { $0.flag == "favorite" }.count
             let blocked = flags.filter { $0.flag == "blocked" }.count
-            BizSecondaryButton(title: isPlus ? "MANAGE FAVOURITES · \(favs)" : "FAVOURITES · BUSINESS+", icon: "star.fill") {
+            BizSecondaryButton(title: isPlus ? "FAVOURITES · \(favs)" : "FAVOURITES", icon: "star.fill") {
                 if isPlus { manage = .favorite } else { onUpgrade() }
             }
-            BizSecondaryButton(title: isPlus ? "MANAGE BLOCKED · \(blocked)" : "BLOCKED · BUSINESS+", icon: "hand.raised.fill") {
+            BizSecondaryButton(title: isPlus ? "BLOCKED · \(blocked)" : "BLOCKED", icon: "hand.raised.fill") {
                 if isPlus { manage = .blocked } else { onUpgrade() }
             }
-            Text(isPlus
-                 ? "Favourites are on the list the moment they ask. Blocked names are told the list is full."
-                 : "Business+ bars star their regulars — approved the moment they ask — and block the names they don't want at the door.")
+            Text("Favourites are on the list the moment they ask. Blocked names are told the list is full.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.cream.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
