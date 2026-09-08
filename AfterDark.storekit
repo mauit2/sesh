@@ -1,82 +1,251 @@
 {
-  "identifier" : "C0FFEE00-AFD0-4E57-9D4A-000000000001",
-  "nonRenewingSubscriptions" : [
-
-  ],
-  "products" : [
-
-  ],
-  "settings" : {
-    "_failTransactionsEnabled" : false,
-    "_locale" : "sv_SE",
-    "_storefront" : "SWE",
-    "_storeKitErrors" : [
-
-    ]
-  },
-  "subscriptionGroups" : [
+  "identifier": "C0FFEE00-AFD0-4E57-9D4A-000000000001",
+  "nonRenewingSubscriptions": [],
+  "products": [
     {
-      "id" : "AD9E1B20-0000-4000-8000-000000000010",
-      "localizations" : [
-
-      ],
-      "name" : "After Dark",
-      "subscriptions" : [
+      "displayPrice": "749.00",
+      "familyShareable": false,
+      "internalID": "B1Z00000-0000-4000-8000-000000000105",
+      "localizations": [
         {
-          "adHocOffers" : [
-
-          ],
-          "codeOffers" : [
-
-          ],
-          "displayPrice" : "9.00",
-          "familyShareable" : false,
-          "groupNumber" : 1,
-          "internalID" : "AD9E1B20-0000-4000-8000-000000000013",
-          "introductoryOffer" : null,
-          "localizations" : [
+          "description": "App-open card to 250 people",
+          "displayName": "Business Card 250",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "sejdel.biz.card.250",
+      "referenceName": "Business Card 250",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "1499.00",
+      "familyShareable": false,
+      "internalID": "B1Z00000-0000-4000-8000-000000000106",
+      "localizations": [
+        {
+          "description": "App-open card to 500 people",
+          "displayName": "Business Card 500",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "sejdel.biz.card.500",
+      "referenceName": "Business Card 500",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "2999.00",
+      "familyShareable": false,
+      "internalID": "B1Z00000-0000-4000-8000-000000000107",
+      "localizations": [
+        {
+          "description": "App-open card to 1,000 people",
+          "displayName": "Business Card 1000",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "sejdel.biz.card.1000",
+      "referenceName": "Business Card 1000",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "499.00",
+      "familyShareable": false,
+      "internalID": "B1Z00000-0000-4000-8000-000000000108",
+      "localizations": [
+        {
+          "description": "One push to 250 people",
+          "displayName": "Business Push 250",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "sejdel.biz.push.250",
+      "referenceName": "Business Push 250",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "999.00",
+      "familyShareable": false,
+      "internalID": "B1Z00000-0000-4000-8000-000000000109",
+      "localizations": [
+        {
+          "description": "One push to 500 people",
+          "displayName": "Business Push 500",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "sejdel.biz.push.500",
+      "referenceName": "Business Push 500",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "1999.00",
+      "familyShareable": false,
+      "internalID": "B1Z00000-0000-4000-8000-000000000110",
+      "localizations": [
+        {
+          "description": "One push to 1,000 people",
+          "displayName": "Business Push 1000",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "sejdel.biz.push.1000",
+      "referenceName": "Business Push 1000",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "499.00",
+      "familyShareable": false,
+      "internalID": "B1Z00000-0000-4000-8000-000000000201",
+      "localizations": [
+        {
+          "description": "Sponsored post + billboard until 1,000 views",
+          "displayName": "Boost 1,000 views",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "sejdel.biz.boost.1000",
+      "referenceName": "Boost 1,000 views",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "999.00",
+      "familyShareable": false,
+      "internalID": "B1Z00000-0000-4000-8000-000000000202",
+      "localizations": [
+        {
+          "description": "Sponsored post + billboard until 2,500 views",
+          "displayName": "Boost 2,500 views",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "sejdel.biz.boost.2500",
+      "referenceName": "Boost 2,500 views",
+      "type": "Consumable"
+    },
+    {
+      "displayPrice": "1799.00",
+      "familyShareable": false,
+      "internalID": "B1Z00000-0000-4000-8000-000000000203",
+      "localizations": [
+        {
+          "description": "Sponsored post + billboard until 5,000 views",
+          "displayName": "Boost 5,000 views",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "sejdel.biz.boost.5000",
+      "referenceName": "Boost 5,000 views",
+      "type": "Consumable"
+    }
+  ],
+  "settings": {
+    "_failTransactionsEnabled": false,
+    "_locale": "sv_SE",
+    "_storefront": "SWE",
+    "_storeKitErrors": []
+  },
+  "subscriptionGroups": [
+    {
+      "id": "AD9E1B20-0000-4000-8000-000000000010",
+      "localizations": [],
+      "name": "After Dark",
+      "subscriptions": [
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "9.00",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "AD9E1B20-0000-4000-8000-000000000013",
+          "introductoryOffer": null,
+          "localizations": [
             {
-              "description" : "Spicy decks in every game",
-              "displayName" : "After Dark Weekly",
-              "locale" : "en_US"
+              "description": "Spicy decks in every game",
+              "displayName": "After Dark Weekly",
+              "locale": "en_US"
             }
           ],
-          "productID" : "sejdel.afterdark.weekly",
-          "recurringSubscriptionPeriod" : "P1W",
-          "referenceName" : "After Dark Weekly",
-          "subscriptionGroupID" : "AD9E1B20-0000-4000-8000-000000000010",
-          "type" : "RecurringSubscription"
+          "productID": "sejdel.afterdark.weekly",
+          "recurringSubscriptionPeriod": "P1W",
+          "referenceName": "After Dark Weekly",
+          "subscriptionGroupID": "AD9E1B20-0000-4000-8000-000000000010",
+          "type": "RecurringSubscription"
         },
         {
-          "adHocOffers" : [
-
-          ],
-          "codeOffers" : [
-
-          ],
-          "displayPrice" : "399.00",
-          "familyShareable" : false,
-          "groupNumber" : 2,
-          "internalID" : "AD9E1B20-0000-4000-8000-000000000012",
-          "introductoryOffer" : null,
-          "localizations" : [
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "399.00",
+          "familyShareable": false,
+          "groupNumber": 2,
+          "internalID": "AD9E1B20-0000-4000-8000-000000000012",
+          "introductoryOffer": null,
+          "localizations": [
             {
-              "description" : "Spicy decks in every game, all year",
-              "displayName" : "After Dark Yearly",
-              "locale" : "en_US"
+              "description": "Spicy decks in every game, all year",
+              "displayName": "After Dark Yearly",
+              "locale": "en_US"
             }
           ],
-          "productID" : "sejdel.afterdark.yearly",
-          "recurringSubscriptionPeriod" : "P1Y",
-          "referenceName" : "After Dark Yearly",
-          "subscriptionGroupID" : "AD9E1B20-0000-4000-8000-000000000010",
-          "type" : "RecurringSubscription"
+          "productID": "sejdel.afterdark.yearly",
+          "recurringSubscriptionPeriod": "P1Y",
+          "referenceName": "After Dark Yearly",
+          "subscriptionGroupID": "AD9E1B20-0000-4000-8000-000000000010",
+          "type": "RecurringSubscription"
+        }
+      ]
+    },
+    {
+      "id": "B1Z5UB00-0000-4000-8000-000000000020",
+      "localizations": [],
+      "name": "Sejdel Business",
+      "subscriptions": [
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "299.00",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "B1Z5UB00-0000-4000-8000-000000000021",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "Your bar on the Deals map, a profile to follow, posts",
+              "displayName": "Sejdel Business",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "sejdel.biz.business.monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Sejdel Business",
+          "subscriptionGroupID": "B1Z5UB00-0000-4000-8000-000000000020",
+          "type": "RecurringSubscription"
+        },
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "899.00",
+          "familyShareable": false,
+          "groupNumber": 2,
+          "internalID": "B1Z5UB00-0000-4000-8000-000000000022",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "Poster on the map, boosts, cards and pushes",
+              "displayName": "Sejdel Business+",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "sejdel.biz.plus.monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Sejdel Business+",
+          "subscriptionGroupID": "B1Z5UB00-0000-4000-8000-000000000020",
+          "type": "RecurringSubscription"
         }
       ]
     }
   ],
-  "version" : {
-    "major" : 3,
-    "minor" : 0
+  "version": {
+    "major": 3,
+    "minor": 0
   }
 }

@@ -1,0 +1,36 @@
+-- 113_business_portal.sql — Sejdel for Business
+--
+-- Applied 6 Sep 2026 via the Supabase MCP (migration name business_portal).
+-- This file is the record copy. Self-serve, regulated advertising for bars:
+-- a business claims its venue and is approved by an admin; it then buys
+-- placements that ride the existing campaign surfaces (venue_offers → pin /
+-- poster / billboard), an app-open card (business_cards → InterstitialView)
+-- and a push (business_pushes → private.notify_push). Nothing a business
+-- creates is visible until an admin approves the order AND marks it paid.
+-- Every cap lives in Postgres, not in the app:
+--   • billboards: N on screen per city (hourly capacity), bought by the hour
+--   • cards: one live per business, capped audience, ≤1 per person per 24 h
+--   • pushes: one per business per cooldown, capped audience, opted-in users
+--     within the city radius only, ≤2 business pushes per person per week,
+--     quiet hours in the venue's own time zone
+-- Rates (business_rates) and limits (business_limits) are tables so they can
+-- be tuned from the admin panel without a release.
+--
+-- Objects created:
+--   tables    businesses, business_rates, business_limits, business_cards,
+--             business_card_deliveries, business_pushes, business_push_receipts,
+--             business_orders; venue_offers.business_id; profiles.sponsored_cards_opt_out
+--   private   biz_rate, biz_limit, is_app_admin, business_for_owner,
+--             business_order_sync, run_business_pushes (pg_cron every minute)
+--   public    business_register, business_mine, business_overview,
+--             business_create_campaign, business_request_card,
+--             business_request_push, business_cancel_order,
+--             admin_business_queue, admin_business_set_status,
+--             admin_order_decide, admin_set_business_rate,
+--             admin_set_business_limit, claim_sponsored_card,
+--             sponsored_card_tapped, set_sponsored_cards_opt_out
+--   storage   campaign_art_business_insert (business/<id>/… in campaign-art)
+--
+-- The full SQL is in the Supabase migration history (supabase_migrations.
+-- schema_migrations, version tagged business_portal); regenerate any function
+-- body with pg_get_functiondef(oid) if you need to diff it.

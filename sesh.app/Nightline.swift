@@ -1487,7 +1487,45 @@ struct TimelineFeedView: View {
     /// Injected card rendered between the stories row and the posts —
     /// HOME uses it for the tonight strip so it scrolls with the feed.
     var header: AnyView? = nil
+    /// Fly the Deals map to a bar (venue id) — from a bar's post or profile.
+    var onShowVenueOnMap: (UUID) -> Void = { _ in }
+    @State private var openBusiness: BizRef?
+    /// Sponsored posts (BillboardFeedCard), by slot ordinal — nil when there's
+    /// nothing left to show in that slot. The first sits high, after the
+    /// first or second post (drawn once per appearance, so it isn't always
+    /// the same spot), and a long feed gets another every five posts. A
+    /// friend's night always leads; under the empty state it stands alone.
+    var sponsored: (Int) -> AnyView? = { _ in nil }
     @StateObject private var moderation = ModerationService()
+    @State private var firstSponsoredAfter = Int.random(in: 0...1)
+
+    /// Friends' nights and followed bars' posts, newest first, as one feed.
+    private enum FeedItem: Identifiable {
+        case night(TimelinePost)
+        case bar(BusinessPost)
+        var id: String {
+            switch self {
+            case .night(let p): return "n-" + p.id.uuidString
+            case .bar(let p):   return "b-" + p.id.uuidString
+            }
+        }
+        var date: Date {
+            switch self {
+            case .night(let p): return BusinessJSON.parseDate(p.createdAt) ?? .distantPast
+            case .bar(let p):   return p.createdDate
+            }
+        }
+    }
+    private var items: [FeedItem] {
+        (feed.posts.map(FeedItem.night) + feed.businessPosts.map(FeedItem.bar)).sorted { $0.date > $1.date }
+    }
+
+    /// Which sponsored slot follows item `i`, if any.
+    private func sponsoredSlot(after i: Int) -> Int? {
+        let first = min(firstSponsoredAfter, items.count - 1)
+        guard i >= first, (i - first) % 5 == 0 else { return nil }
+        return (i - first) / 5
+    }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -1510,18 +1548,26 @@ struct TimelineFeedView: View {
                     header.padding(.horizontal, 16)
                 }
 
-                if feed.posts.isEmpty {
+                if items.isEmpty {
                     // Until the first load completes, sketch the layout with
                     // ghost posts (Instagram-style) instead of a spinner —
                     // the user sees what's coming before it does. The empty
                     // state only ever shows once we KNOW the feed is empty.
                     if feed.loadedOnce && !feed.loading {
                         emptyState
+                        if let s = sponsored(0) { s.padding(.horizontal, 16) }
                     } else {
                         ghostPosts
                     }
                 } else {
-                    ForEach(feed.posts) { post in
+                    ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                        switch item {
+                        case .bar(let post):
+                            BusinessPostCard(post: post,
+                                             onOpenBusiness: { openBusiness = BizRef(id: post.businessId) },
+                                             onShowOnMap: { onShowVenueOnMap(post.venueId) })
+                                .padding(.horizontal, 16)
+                        case .night(let post):
                         PostCard(post: post,
                                  onOpenPost: { onOpenPost(post) },
                                  onOpenAuthor: { onOpenAuthor(post) },
@@ -1549,6 +1595,10 @@ struct TimelineFeedView: View {
                                     }
                                 } label: { Label("Block \(post.authorName)", systemImage: "hand.raised") }
                             }
+                        }
+                        if let slot = sponsoredSlot(after: i), let s = sponsored(slot) {
+                            s.padding(.horizontal, 16)
+                        }
                     }
                     // The feed ends with an invitation to grow it — more
                     // friends means more nights landing here.
@@ -1584,6 +1634,12 @@ struct TimelineFeedView: View {
         // nights show up. Stable post/photo ids keep this from resetting the
         // carousels, and downsampled images keep it cheap.
         .onAppear { feed.start(); Task { await feed.refresh() } }
+        // A bar's profile, opened from one of its posts.
+        .sheet(item: $openBusiness) { ref in
+            BusinessProfileView(businessId: ref.id, onShowOnMap: onShowVenueOnMap)
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
     }
 
     /// Skeleton feed shown during the first load — two ghost post cards
@@ -1691,6 +1747,23 @@ private func nightPhotos(_ recap: NightRecap) -> [NightPhoto] {
     }
 }
 
+/// Width / height of images the feed has already loaded, so a post can size
+/// its photo box to the photo (Instagram ratios) instead of a fixed height.
+/// Reflows once, the first time a photo arrives; remembered for the session.
+@MainActor
+final class ImageRatioCache: ObservableObject {
+    static let shared = ImageRatioCache()
+    @Published private(set) var ratios: [String: CGFloat] = [:]
+
+    func ratio(for url: URL?) -> CGFloat? { url.flatMap { ratios[$0.absoluteString] } }
+
+    func note(_ url: URL, size: CGSize) {
+        let key = url.absoluteString
+        guard ratios[key] == nil, size.height > 0 else { return }
+        ratios[key] = size.width / size.height
+    }
+}
+
 /// Small in-memory cache of already-downsampled images (keyed by URL+size).
 private enum RemoteImageCache {
     static let shared: NSCache<NSString, UIImage> = {
@@ -1739,7 +1812,9 @@ struct DownsampledAsyncImage: View {
 
         // 1) hot in-memory → 2) persistent on-disk (survives relaunches).
         if let cached = RemoteImageCache.shared.object(forKey: memKey) {
-            image = cached; return
+            image = cached
+            ImageRatioCache.shared.note(url, size: cached.size)
+            return
         }
         if let disk = SeshImageCache.image(for: cacheKey) {
             RemoteImageCache.shared.setObject(disk, forKey: memKey, cost: Self.cost(disk))
@@ -1799,6 +1874,10 @@ private struct PostCard: View {
 
     private var barCount: Int { post.recap.stops.filter { $0.kind == .bar }.count }
     private var photos: [NightPhoto] { nightPhotos(post.recap) }
+    @ObservedObject private var ratios = ImageRatioCache.shared
+    /// The carousel takes the first photo's ratio, clamped to Instagram's
+    /// range (4:5 … 1.91:1); square until it's known.
+    private var photoRatio: CGFloat { CampaignArt.clampFeed(ratios.ratio(for: photos.first?.url) ?? 1) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1826,11 +1905,15 @@ private struct PostCard: View {
 
             // Swipeable photo carousel — each photo tagged with its stop.
             if !photos.isEmpty {
+                Color.clear
+                    .aspectRatio(photoRatio, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .overlay {
                 TabView {
                     ForEach(photos) { photo in
                         ZStack(alignment: .bottomLeading) {
                             DownsampledAsyncImage(url: photo.url, targetPoints: 420)
-                            .frame(maxWidth: .infinity).frame(height: 260).clipped()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
                             .overlay(LinearGradient(colors: [.clear, Color.ink.opacity(0.5)],
                                                     startPoint: .center, endPoint: .bottom))
 
@@ -1851,7 +1934,8 @@ private struct PostCard: View {
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: photos.count > 1 ? .automatic : .never))
-                .frame(height: 260)
+                    }
+                    .clipped()
             }
 
             // Like + comment bar.
@@ -1947,8 +2031,8 @@ struct PostThumb: View {
                     }
                 }
             }
-            // Force a strict square cell so the grid is uniform (Instagram-style).
-            .aspectRatio(1, contentMode: .fit)
+            // Instagram's current grid: 3:4 tiles, uniform.
+            .aspectRatio(3.0 / 4.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .clipped()
             .overlay(Rectangle().strokeBorder(Color.ink, lineWidth: 1))
@@ -1960,6 +2044,12 @@ struct PostThumb: View {
 struct ProfileFeedView: View {
     let user: ProfileRef
     @ObservedObject var feed: FeedService
+    /// Your own recaps, so a post opened from your profile can share its
+    /// story sticker.
+    var history: RecapHistoryStore? = nil
+    /// The PROFILE tab hosts this for the signed-in user: no close button,
+    /// no sheet-style top gap.
+    var embedded = false
     @Environment(\.dismiss) private var dismiss
 
     @State private var posts: [TimelinePost] = []
@@ -1970,7 +2060,9 @@ struct ProfileFeedView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Color.ink.ignoresSafeArea()
+            // As a tab page the shared atmosphere paints behind it; only the
+            // sheet needs its own ground.
+            if !embedded { Color.ink.ignoresSafeArea() }
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 16) {
                     VStack(spacing: 8) {
@@ -1987,7 +2079,7 @@ struct ProfileFeedView: View {
                             .tracking(1.6).foregroundStyle(Color.bronze)
                             .padding(.top, 2)
                     }
-                    .padding(.top, 40)
+                    .padding(.top, embedded ? 8 : 40)
 
                     if loading {
                         ProgressView().tint(Color.whiskey).padding(.top, 60)
@@ -2016,25 +2108,33 @@ struct ProfileFeedView: View {
                 .padding(.bottom, 40)
             }
 
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.cream.opacity(0.85))
-                    .padding(12).background(Circle().fill(Color.cream.opacity(0.08)))
+            if !embedded {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.85))
+                        .padding(12).background(Circle().fill(Color.cream.opacity(0.08)))
+                }
+                .padding(.top, 16).padding(.trailing, 20)
+                .buttonStyle(PressScaleStyle())
             }
-            .padding(.top, 16).padding(.trailing, 20)
-            .buttonStyle(PressScaleStyle())
         }
         .preferredColorScheme(.dark)
         .task {
             posts = await feed.userPosts(user.id)
             loading = false
         }
+        // Your own page stays current: a night posted or deleted shows up in
+        // the friends feed too, so follow that.
+        .onChange(of: feed.posts.map(\.id)) { _, _ in
+            guard embedded else { return }
+            Task { posts = await feed.userPosts(user.id) }
+        }
         .fullScreenCover(item: $selectedPost, onDismiss: {
             // A delete or BAC toggle in the detail may have changed things.
             Task { posts = await feed.userPosts(user.id) }
         }) { p in
-            PostDetailView(post: p, feed: feed) { selectedPost = nil }
+            PostDetailView(post: p, feed: feed, history: history, canShareStory: embedded) { selectedPost = nil }
         }
     }
 }

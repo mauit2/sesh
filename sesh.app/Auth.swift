@@ -417,6 +417,14 @@ final class AuthService: ObservableObject {
         throw (lastError as? AuthError) ?? AuthError.profileLoadFailed
     }
 
+    /// Re-read the signed-in profile (a business takeover or revert changed
+    /// its name, handle and mode) without touching the session.
+    func reloadProfile() async {
+        guard case .signedIn(let current) = state,
+              let fresh = try? await loadProfile(userId: current.id) else { return }
+        state = .signedIn(fresh)
+    }
+
     private func loadProfile(userId: UUID) async throws -> Profile {
         let profile: Profile = try await supabase
             .from("profiles")

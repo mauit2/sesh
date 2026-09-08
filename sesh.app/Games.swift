@@ -101,7 +101,15 @@ final class AfterDarkStore: ObservableObject {
     init() {
         updatesTask = Task { [weak self] in
             for await update in Transaction.updates {
-                if case .verified(let txn) = update { await txn.finish() }
+                if case .verified(let txn) = update {
+                    // Business packs (consumables) are recorded against their
+                    // order before they're finished — never swallow one here.
+                    if txn.productID.hasPrefix("sejdel.biz.") {
+                        await BusinessStore.shared.recover(txn, jws: update.jwsRepresentation)
+                    } else {
+                        await txn.finish()
+                    }
+                }
                 await self?.refreshEntitlement()
             }
         }

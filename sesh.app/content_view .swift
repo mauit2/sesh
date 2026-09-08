@@ -363,6 +363,9 @@ struct PostComment: Identifiable, Decodable {
 @MainActor
 final class FeedService: ObservableObject {
     @Published private(set) var posts: [TimelinePost] = []
+    /// Posts from the bars you follow (BusinessProfile.swift), merged into
+    /// the Home feed by date.
+    @Published private(set) var businessPosts: [BusinessPost] = []
     @Published var loading = false
     /// True once the FIRST refresh has completed — before that the feed
     /// shows skeleton posts, never the "no posts yet" empty state (which
@@ -482,6 +485,7 @@ final class FeedService: ObservableObject {
         loading = true
         defer { loading = false; loadedOnce = true }
         struct P: Encodable { let p_limit: Int }
+        async let bars: [BusinessPost] = (try? supabase.rpc("business_feed", params: P(p_limit: 40)).execute().value) ?? []
         do {
             let rows: [FeedRow] = try await supabase
                 .rpc("friends_feed", params: P(p_limit: 40))
@@ -490,6 +494,7 @@ final class FeedService: ObservableObject {
         } catch {
             // Leave the last good feed in place on a transient failure.
         }
+        businessPosts = await bars
     }
 
     /// One user's full post archive (no time window) — for profile grids.
@@ -4587,6 +4592,8 @@ enum TopTab: Hashable {
 private struct ModeTopBar: View {
     @Binding var tab: TopTab
     let profile: Profile
+    /// The ☰ where the section title used to sit — opens the side menu.
+    let onTapMenu: () -> Void
     /// True when there's something happening in LIVE that the user should
     /// notice from the PLAN side (live timeline running, group has live
     /// drinks, etc.). Drives the pulsing dot on the LIVE segment.
@@ -4752,39 +4759,43 @@ private struct ModeTopBar: View {
             .overlay(Capsule().strokeBorder(Color.cream.opacity(0.2), lineWidth: 1))
     }
 
-    /// Top-left content. On LIVE it's the sesh status (dot + label + elapsed),
-    /// replacing the old in-page header; elsewhere it's the section name.
+    /// Top-left content: the ☰ that opens the side menu on every screen (the
+    /// section titles are gone), plus, on LIVE once a sesh has started, the
+    /// sesh status (dot + label + elapsed) that replaced the in-page header.
     @ViewBuilder
     private var sectionLeading: some View {
-        // Show the live status only once a sesh has actually started; before
-        // that the LIVE tab just reads "Live" like PLAN / NIGHTLINE / DEALS.
-        if tab == .live, liveStarted != nil {
-            TimelineView(.periodic(from: .now, by: 30)) { ctx in
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 7) {
-                        SonarDot()
-                        Text(liveInGroup ? "LIVE GROUP" : "LIVE SESH")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .tracking(2.4)
-                            .foregroundStyle(Color.whiskey)
-                        if liveInGroup, liveMemberCount > 0 {
-                            Text("· \(liveMemberCount)")
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(Color.cream.opacity(0.55))
+        HStack(spacing: 12) {
+            Button(action: onTapMenu) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleStyle())
+            .accessibilityLabel("Menu")
+            if tab == .live, liveStarted != nil {
+                TimelineView(.periodic(from: .now, by: 30)) { ctx in
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 7) {
+                            SonarDot()
+                            Text(liveInGroup ? "LIVE GROUP" : "LIVE SESH")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .tracking(2.4)
+                                .foregroundStyle(Color.whiskey)
+                            if liveInGroup, liveMemberCount > 0 {
+                                Text("· \(liveMemberCount)")
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(Color.cream.opacity(0.55))
+                            }
                         }
+                        Text(liveStarted.map { Self.elapsed(from: $0, to: ctx.date) } ?? "Ready when you are")
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.cream.opacity(0.55))
+                            .lineLimit(1)
                     }
-                    Text(liveStarted.map { Self.elapsed(from: $0, to: ctx.date) } ?? "Ready when you are")
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundStyle(Color.cream.opacity(0.55))
-                        .lineLimit(1)
                 }
             }
-        } else {
-            Text(tab.title)
-                .font(.system(size: 23, weight: .heavy, design: .rounded))
-                .italic()
-                .tracking(-0.6)
-                .foregroundStyle(Color.cream)
         }
     }
 
@@ -4927,6 +4938,10 @@ private struct ProfileAndTourModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            // A business takeover or revert renames the account under us.
+            .onReceive(NotificationCenter.default.publisher(for: .sejdelReloadProfile)) { _ in
+                Task { await auth.reloadProfile() }
+            }
             .sheet(isPresented: $profileOpen) {
                 ProfileSheet(
                     profile: profile, auth: auth, admin: admin,
@@ -5124,10 +5139,15 @@ private struct SessionView: View {
     /// of truth for "where am I tonight?" and "what specials apply?".
     @StateObject private var location = LocationService()
     @StateObject private var venues = VenueService()
+    /// Business mode (BusinessMode.swift): the owner's pages share one service.
+    @StateObject private var bizSvc = BusinessService()
+    private var businessMode: Bool { profile.businessId != nil }
 
     @State private var localOrder: [OrderItem] = []
     @State private var hours: Double = 1
     @State private var menuOpen = false
+    /// The ☰ side menu (SideMenu.swift).
+    @State private var drawerOpen = false
     @State private var profileOpen = false
     /// The app-open Deals interstitial payload, when one is due to show.
     @State private var interstitial: InterstitialPayload? = nil
@@ -5942,10 +5962,10 @@ private struct SessionView: View {
                         // DMs is NOT a swipe page — it overlays from the
                         // top-right button, Instagram-style.
                         timelinePage.tag(TopTab.timeline)
-                        livePage.tag(TopTab.live)
-                        planPage.tag(TopTab.plan)
+                        Group { if businessMode { bizEventsPage } else { livePage } }.tag(TopTab.live)
+                        Group { if businessMode { bizPostPage } else { planPage } }.tag(TopTab.plan)
                         offersPage.tag(TopTab.offers)
-                        profilePage.tag(TopTab.profile)
+                        Group { if businessMode { bizProfilePage } else { profilePage } }.tag(TopTab.profile)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     // A paged TabView is a scroll view underneath, so it competes
@@ -6347,7 +6367,9 @@ private struct SessionView: View {
                 .presentationBackground(Color.ink)
         }
         .modifier(profileSheets)
-        .modifier(TourModifier(tab: $tab, active: $tourOpen))
+        // One chain link for both: a second `.modifier` here pushed body past
+        // the type-checker's budget.
+        .modifier(TourModifier(tab: $tab, active: $tourOpen).concat(sideMenu))
         .modifier(BirthdatePromptModifier(auth: auth))
         .sheet(isPresented: $friendsSheetOpen) {
             FriendsView(friends: friends, auth: auth, feed: feed)
@@ -6470,6 +6492,20 @@ private struct SessionView: View {
         try? await Task.sleep(nanoseconds: 1_800_000_000)
         maybeShowInterstitial()
         if let loc = location.location { DealsPush.reportLocation(loc) }
+        await maybeShowSponsoredCard()
+    }
+
+    /// A paid app-open card from a bar in this city (migration 113). The
+    /// server picks one — never the same card twice, at most one a day, only
+    /// within the city radius, never for someone who opted out — and reserves
+    /// the slot. Shown through the same card as the free promo.
+    private func maybeShowSponsoredCard() async {
+        guard !tourOpen, !DealsInterstitial.shownThisLaunch, interstitial == nil,
+              let loc = location.location else { return }
+        guard let hit = await SponsoredCards.claim(near: loc) else { return }
+        guard !DealsInterstitial.shownThisLaunch, interstitial == nil else { return }
+        DealsInterstitial.shownThisLaunch = true
+        interstitial = InterstitialPayload(offer: hit.offer, venue: hit.venue, cardId: hit.cardId)
     }
 
 
@@ -6477,7 +6513,7 @@ private struct SessionView: View {
     /// the keyboard slides over it on every tab; text fields stay visible
     /// through normal scrolling.
     private var pinnedTabBar: some View {
-        BottomTabBar(tab: $tab, liveActive: liveActive,
+        BottomTabBar(tab: $tab, businessMode: businessMode, liveActive: liveActive,
                      friendsLive: friendsPulse.pulses.contains { $0.live },
                      newOnNightline: liveStories.hasUnseenNightline,
                      unseenCount: liveStories.unseenNightlineCount,
@@ -6523,6 +6559,7 @@ private struct SessionView: View {
     }
 
     private func seeInterstitialDeal(_ payload: InterstitialPayload) {
+        if let card = payload.cardId { SponsoredCards.tapped(card) }
         CampaignStats.tap(payload.offer.id)
         DealsInterstitial.markSeen(payload.offer.id)
         venues.pendingFocusVenueId = payload.venue.id
@@ -6551,12 +6588,20 @@ private struct SessionView: View {
         }
     }
 
+    /// The ☰ drawer + the sheets it opens (SideMenu.swift). Built here, not
+    /// inline in body, for the same type-checker reason as `topBar`.
+    private var sideMenu: SideMenuModifier {
+        SideMenuModifier(isOpen: $drawerOpen, tab: $tab, friendsOpen: $friendsSheetOpen,
+                         settingsOpen: $profileOpen, tourOpen: $tourOpen, profile: profile, admin: admin)
+    }
+
     /// Extracted from body — the 16-argument ModeTopBar call inside the
     /// main chain was the straw that broke the type-checker's back.
     private var topBar: some View {
         ModeTopBar(
             tab: $tab,
             profile: profile,
+            onTapMenu: { withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { drawerOpen = true } },
             liveActive: liveActive,
             inboxCount: invites.pending.count + friends.incoming.count + friends.unseenActivityCount,
             onTapInbox: { invitesSheetOpen = true; friends.markActivitySeen() },
@@ -6680,14 +6725,22 @@ private struct SessionView: View {
         }
     }
 
-    /// PROFILE — the far-right tab. Hosts the same view as the old profile
-    /// sheet; its internal `dismiss()` calls are harmless no-ops here (save
-    /// keeps you on the page, sign-out/delete tear down SessionView anyway).
+    // ── business mode pages (BusinessMode.swift) ──
+    private var bizEventsPage: some View { BusinessEventsPage(svc: bizSvc) }
+    private var bizPostPage: some View {
+        BusinessPostPage(svc: bizSvc) {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = .profile }
+        }
+    }
+    private var bizProfilePage: some View { BusinessOwnerProfilePage(svc: bizSvc, profile: profile) }
+
+    /// PROFILE — X-style: your picture and name on top, your posted nights
+    /// below. The settings form moved behind the ☰ menu (ProfileSheet, via
+    /// `profileOpen`).
     private var profilePage: some View {
-        ProfileSheet(
-            profile: profile, auth: auth, admin: admin,
-            friends: friends, feed: feed,
-            onReplayTour: { tourOpen = true }
+        ProfileFeedView(
+            user: ProfileRef(id: profile.id, name: profile.name, username: profile.username, avatar: profile.avatarURL),
+            feed: feed, history: recapHistory, embedded: true
         )
     }
 
@@ -6837,8 +6890,31 @@ private struct SessionView: View {
             },
             onOpenPulse: { openPulse = $0 },
             onAddFriends: { friendsSheetOpen = true },
-            header: AnyView(homeLiveStrip)
+            header: AnyView(homeLiveStrip),
+            onShowVenueOnMap: { id in
+                venues.pendingFocusVenueId = id
+                tab = .offers
+            },
+            sponsored: { sponsoredDeals(slot: $0) }
         )
+    }
+
+    /// Where the feed's sponsored rotation begins this session — random, so
+    /// no bar owns the opening frame across launches.
+    @State private var sponsoredOffset = Int.random(in: 0..<1_000)
+
+    /// The Instagram-style sponsored post: the city's live billboard deals in
+    /// a rotating, swipeable slot. Slot `k` opens on the k-th deal after this
+    /// session's offset, and there are never more slots than deals — one
+    /// deal is shown once, not repeated down the feed. Tapping a deal lands
+    /// on the bar and its deal on the Deals map, the app-open card's route.
+    private func sponsoredDeals(slot: Int) -> AnyView? {
+        let entries = venues.billboardEntries(near: location.location)
+        guard slot < entries.count else { return nil }
+        return AnyView(BillboardFeedCard(entries: entries, startAt: sponsoredOffset + slot) { _, venue in
+            venues.pendingFocusVenueId = venue.id
+            tab = .offers
+        })
     }
 
     /// My BAC at the instant a story is posted — group math when in a live
@@ -6928,6 +7004,8 @@ private struct SessionView: View {
                 }
 
                 eventsSection
+                // Upcoming nights at the bars you follow (BusinessMode.swift).
+                BarEventsSection()
             }
             .padding(.horizontal, 24)
             .padding(.top, 6)
@@ -8700,6 +8778,11 @@ private struct ProfileSheet: View {
     @State private var deleteConfirmOpen = false
     @State private var deleteError: String?
     @State private var friendsOpen = false
+    @State private var businessOpen = false
+    @State private var businessReviewOpen = false
+    /// Sponsored app-open cards from bars (migration 113). On by default;
+    /// the opt-out is mirrored server-side so the claim RPC never picks you.
+    @AppStorage(SponsoredCards.optOutKey) private var sponsoredCardsOff = false
 
     /// Friends roster + incoming requests — shared with SessionView so the
     /// bell badge and inbox stay in sync (SessionView owns the polling).
@@ -8851,6 +8934,7 @@ private struct ProfileSheet: View {
 
                     VStack(spacing: 10) {
                         LoungeField(label: "NAME", text: $name, placeholder: "Your name")
+                        BusinessAccountNote(profile: profile)
                         LoungePickerField(label: "BIRTHDATE") {
                             HStack(spacing: 10) {
                                 DatePicker("", selection: $birthdate,
@@ -9006,6 +9090,20 @@ private struct ProfileSheet: View {
                                     .foregroundStyle(Color.cream.opacity(0.55))
                                     .fixedSize(horizontal: false, vertical: true)
                                     .padding(.horizontal, 4)
+                                Toggle(isOn: Binding(get: { !sponsoredCardsOff }, set: { sponsoredCardsOff = !$0 })) {
+                                    Text("Sponsored cards from bars")
+                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(Color.cream)
+                                }
+                                .toggleStyle(SwitchToggleStyle(tint: .whiskey))
+                                .padding(.top, 6)
+                                Text(sponsoredCardsOff
+                                     ? "No app-open cards from bars."
+                                     : "At most one card a day, only from bars in your city, always marked sponsored.")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.55))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.horizontal, 4)
                             }
                         }
                     }
@@ -9013,6 +9111,9 @@ private struct ProfileSheet: View {
                         // Mirror the preference to the server (audience list).
                         DealsPush.setOptIn(on)
                         DealsPush.markPrompted()
+                    }
+                    .onChange(of: sponsoredCardsOff) { _, off in
+                        SponsoredCards.setOptOut(off)
                     }
                     .onChange(of: bacUnitMode) { _ in
                         // Push the new unit out to the home-screen widget and
@@ -9257,6 +9358,41 @@ private struct ProfileSheet: View {
                             )
                         }
                         .buttonStyle(PressScaleStyle())
+                        // Business desk — verify bars, approve + mark orders
+                        // paid, tune rates. The regulation seat.
+                        Button {
+                            businessReviewOpen = true
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "building.2.fill")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.whiskey)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("BUSINESS DESK")
+                                        .font(.system(size: 12, weight: .black, design: .monospaced))
+                                        .tracking(2.0)
+                                        .foregroundStyle(Color.cream)
+                                    Text("Verify bars · approve and pay orders · rates")
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.55))
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.bronze)
+                            }
+                            .padding(.vertical, 14)
+                            .padding(.horizontal, 18)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(Color.whiskey.opacity(0.08))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(PressScaleStyle())
                     }
 
                     // Support contact — opens the mail composer pre-addressed
@@ -9297,6 +9433,9 @@ private struct ProfileSheet: View {
                     }
 
                     // Replay the coach-mark tour — for anyone who skipped it.
+                    // Grouped with the business row so the stack's child count
+                    // stays put.
+                    Group {
                     if let onReplayTour {
                         Button {
                             dismiss()
@@ -9332,6 +9471,42 @@ private struct ProfileSheet: View {
                             )
                         }
                         .buttonStyle(PressScaleStyle())
+                    }
+
+                    // Sejdel for Business — claim your bar, buy placements.
+                    Button {
+                        businessOpen = true
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "storefront.fill")
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.whiskey)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("SEJDEL FOR BUSINESS")
+                                    .font(.system(size: 12, weight: .black, design: .monospaced))
+                                    .tracking(2.0)
+                                    .foregroundStyle(Color.cream)
+                                Text("Own a bar? Get on the Deals map, send a card or a push.")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.55))
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.bronze)
+                        }
+                        .padding(.vertical, 14)
+                        .padding(.horizontal, 18)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color.whiskey.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(Color.whiskey.opacity(0.3), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(PressScaleStyle())
                     }
 
                     Button {
@@ -9427,6 +9602,16 @@ private struct ProfileSheet: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
+        .sheet(isPresented: $businessOpen) {
+            BusinessHubView()
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+        .sheet(isPresented: $businessReviewOpen) {
+            BusinessReviewView()
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
         .sheet(isPresented: $friendsOpen) {
             FriendsView(friends: friends, auth: auth, feed: feed)
                 .presentationBackground(Color.ink)
@@ -9459,7 +9644,7 @@ private struct ProfileSheet: View {
 /// demotable roster; plain admins just see their status. All actions are
 /// server-gated to the owner, so the UI here is a convenience, not the
 /// security boundary.
-private struct AdminPanelView: View {
+struct AdminPanelView: View {
     @ObservedObject var admin: AdminService
     @Environment(\.dismiss) private var dismiss
 
@@ -17256,6 +17441,22 @@ final class DismissTapDelegate: NSObject, UIGestureRecognizerDelegate {
     }
     func gestureRecognizer(_ g: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+
+    /// Stay out of the way unless there is a keyboard to drop, and never take
+    /// a touch that starts on a control. Even recognising simultaneously and
+    /// without cancelling touches, a window-level tap recogniser stopped a
+    /// UISwitch (SwiftUI's Toggle) from completing its tap — the knob only
+    /// moved when dragged. That was the "Include my BAC" switch in the post
+    /// composer, and every other toggle in the app.
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard let window = g.view, window.sejdelFirstResponder() != nil else { return false }
+        var view: UIView? = touch.view
+        while let v = view, v !== window {
+            if v is UIControl { return false }
+            view = v.superview
+        }
+        return true
+    }
 }
 
 private extension UIView {
@@ -17273,6 +17474,8 @@ private extension UIView {
 /// plus the new DEALS tab. Four equal items, icon + label, whiskey when active.
 struct BottomTabBar: View {
     @Binding var tab: TopTab
+    /// The account is a bar: LIVE → EVENTS, EVENTS → POST.
+    var businessMode = false
     let liveActive: Bool
     /// At least one friend is currently in a live sesh — green dot on
     /// NIGHTLINE so the user knows the TONIGHT strip has something to show.
@@ -17298,9 +17501,14 @@ struct BottomTabBar: View {
                  pulseColor: Color(red: 0.51, green: 0.72, blue: 0.48),
                  buzzing: newOnNightline && !reduceMotion,
                  badgeCount: unseenCount)
-            item(.live,     icon: "dot.radiowaves.left.and.right", label: "LIVE", pulse: liveActive)
-            item(.plan,     icon: "calendar",                      label: "EVENTS",
-                 badgeCount: eventInvites)
+            if businessMode {
+                item(.live,     icon: "party.popper.fill",             label: "EVENTS")
+                item(.plan,     icon: "plus.app.fill",                 label: "POST")
+            } else {
+                item(.live,     icon: "dot.radiowaves.left.and.right", label: "LIVE", pulse: liveActive)
+                item(.plan,     icon: "calendar",                      label: "EVENTS",
+                     badgeCount: eventInvites)
+            }
             item(.offers,   icon: "map.fill",                      label: "MAPS")
             profileItem
         }

@@ -318,6 +318,11 @@ final class VenueService: ObservableObject {
     /// map to fly to + open a specific venue when it next appears. The map
     /// consumes and clears it.
     @Published var pendingFocusVenueId: UUID? = nil
+    /// Bars with an active subscription, by venue — they're on the Deals map
+    /// even without a deal, and their venue card gets an account header.
+    @Published private(set) var businessByVenue: [UUID: BusinessPublicProfile] = [:]
+    /// Paid boosts still running: billboards on the map + the sponsored slot.
+    @Published private(set) var boosts: [LiveBoost] = []
     /// Crowdsourced beer prices per venue (migrations 061–063): all reported
     /// serving sizes for each venue, for the price map.
     @Published private(set) var beerPricesByVenue: [UUID: [VenueBeerPrice]] = [:]
@@ -842,10 +847,31 @@ final class VenueService: ObservableObject {
         }
     }
 
-    /// Venues that currently have at least one VISIBLE offer — the pins shown
-    /// on the deals map.
+    /// Venues that currently have at least one VISIBLE offer, or a subscribed
+    /// bar behind them — the pins shown on the deals map.
     var venuesWithOffers: [Venue] {
-        venues.filter { (offersByVenue[$0.id] ?? []).contains { $0.isVisibleNow() } }
+        venues.filter { v in
+            businessByVenue[v.id] != nil || (offersByVenue[v.id] ?? []).contains { $0.isVisibleNow() }
+        }
+    }
+
+    /// The bar account behind a venue, if it's subscribed.
+    func business(for venue: Venue) -> BusinessPublicProfile? { businessByVenue[venue.id] }
+
+    /// Art for the map pin: a poster deal's photo, else a Business+ bar's own.
+    func pinArt(for venue: Venue) -> URL? {
+        posterOffer(for: venue)?.imageURL ?? businessByVenue[venue.id]?.posterURL
+    }
+
+    /// The subscribed bars and the live boosts, loaded with the catalog.
+    private func loadBusinessLayer() async {
+        async let profiles: [BusinessPublicProfile] = (try? supabase.rpc("business_profiles_public").execute().value) ?? []
+        async let live: [LiveBoost] = (try? supabase.rpc("boosts_live").execute().value) ?? []
+        let (p, b) = await (profiles, live)
+        businessByVenue = Dictionary(p.map { ($0.venueId, $0) }, uniquingKeysWith: { a, _ in a })
+        boosts = b
+        catalogStamp += 1
+        await BusinessFollowStore.shared.load()
     }
 
     /// A venue's artwork-carrying campaign, if any (poster or billboard
@@ -879,12 +905,20 @@ final class VenueService: ObservableObject {
     /// restricted to the user's city. Uses the dedicated billboard image,
     /// falling back to the poster image.
     func billboardEntries(near location: CLLocation?) -> [(offer: VenueOffer, venue: Venue)] {
-        venues.compactMap { v in
+        let curated: [(offer: VenueOffer, venue: Venue)] = venues.compactMap { v in
             guard isNearby(v, to: location) else { return nil }
             return offersByVenue[v.id]?
                 .first { $0.placement == "billboard" && $0.isVisibleNow() && ($0.billboardImageURL ?? $0.imageURL) != nil }
                 .map { ($0, v) }
         }
+        // Boosted posts run beside the curated billboards until they hit
+        // their view goal.
+        let byId = Dictionary(venues.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let boosted: [(offer: VenueOffer, venue: Venue)] = boosts.compactMap { b in
+            guard let v = byId[b.venueId], isNearby(v, to: location) else { return nil }
+            return (b.asOffer, v)
+        }
+        return curated + boosted
     }
 
     /// One eligible app-open interstitial for the user, or nil: an offer
@@ -1009,6 +1043,11 @@ final class VenueService: ObservableObject {
     /// user found via Apple Maps keeps its secret menu even when the
     /// DB is empty or offline.
     func refresh() async {
+        await refreshCatalog()
+        await loadBusinessLayer()
+    }
+
+    private func refreshCatalog() async {
         // Block the UI only when there is nothing to draw. With the disk cache
         // (or a previous fetch) on screen, a refresh is invisible upkeep — the
         // spinner over live pins was most of the perceived slowness.
@@ -1554,14 +1593,32 @@ private struct OffersMapView: View {
     /// The searchable price list sheet.
     @State private var priceListOpen = false
 
-    /// Fly the camera to a venue and open its card. The center is nudged SOUTH
-    /// so the pin sits in the top half, visible ABOVE the medium sheet.
+    /// How much of the screen the venue card takes at its resting detent.
+    /// The Deals card shows the account header, the poster and the deal
+    /// without a swipe; the price card is shorter.
+    private var cardFraction: CGFloat { mapMode == .deals ? 0.7 : 0.58 }
+
+    /// Fly the camera to a venue (list / deep link) and open its card, at a
+    /// city-block zoom.
     private func focus(_ venue: Venue) {
+        open(venue, span: MKCoordinateSpan(latitudeDelta: 0.0144, longitudeDelta: 0.0144), duration: 0.5)
+    }
+
+    /// Tapping a pin keeps the zoom and slides the map so the pin — poster or
+    /// dot — sits centred in the strip of map left above the card.
+    private func select(_ venue: Venue) {
+        open(venue, span: visibleRegion?.span ?? MKCoordinateSpan(latitudeDelta: 0.0144, longitudeDelta: 0.0144), duration: 0.4)
+    }
+
+    private func open(_ venue: Venue, span: MKCoordinateSpan, duration: Double) {
         let c = venues.coordinate(for: venue)
-        let shifted = CLLocationCoordinate2D(latitude: c.latitude - 0.005, longitude: c.longitude)
-        withAnimation(.easeInOut(duration: 0.5)) {
-            camera = .region(MKCoordinateRegion(center: shifted,
-                                                latitudinalMeters: 1600, longitudinalMeters: 1600))
+        // The card covers the bottom `cardFraction` of the screen; the middle of
+        // what's left is (1 - f) / 2 from the top, so the map centre goes that
+        // far south of the pin.
+        let shift = span.latitudeDelta * (0.5 - (1 - cardFraction) / 2)
+        let shifted = CLLocationCoordinate2D(latitude: c.latitude - shift, longitude: c.longitude)
+        withAnimation(.easeInOut(duration: duration)) {
+            camera = .region(MKCoordinateRegion(center: shifted, span: span))
         }
         selectedVenue = venue
     }
@@ -1682,7 +1739,7 @@ private struct OffersMapView: View {
                 ?? venues.cheapestAnyPrice(for: v)
             models.append(MapPinModel(
                 venue: v,
-                offerArt: venues.posterOffer(for: v)?.imageURL,
+                offerArt: venues.pinArt(for: v),
                 offerCount: venues.offers(for: v).count,
                 price: price,
                 anchors: price.map { p in
@@ -1812,7 +1869,7 @@ private struct OffersMapView: View {
                     Annotation(model.venue.name, coordinate: venues.coordinate(for: model.venue)) {
                         ModePin(model: model, mode: mapMode,
                                 selected: selectedVenue?.id == model.venue.id) {
-                            selectedVenue = model.venue
+                            select(model.venue)
                         }
                     }
                 }
@@ -1934,7 +1991,7 @@ private struct OffersMapView: View {
                     )
                 }
             }
-            .presentationDetents([.fraction(0.58), .large])
+            .presentationDetents([.fraction(cardFraction), .large])
             .presentationDragIndicator(.visible)
             .presentationBackground(Color.ink)
         }
@@ -2650,11 +2707,13 @@ private struct OffersMapView: View {
 private struct VenueOfferCard: View {
     let venue: Venue
     @ObservedObject var venues: VenueService
+    @State private var profileOpen: BizRef?
 
     var body: some View {
         // No close button: the top-of-sheet spot is contested by the
         // ScrollView pan + the sheet's drag gesture, so a tap there never
         // lands. Dismissal is swipe-down or a tap on the dimmed map above.
+        let business = venues.business(for: venue)
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -2667,11 +2726,22 @@ private struct VenueOfferCard: View {
                             .foregroundStyle(Color.cream.opacity(0.55))
                     }
                 }
+                // A subscribed bar is an account: follow it, open its profile.
+                if let business {
+                    BusinessHeaderRow(business: business) { profileOpen = BizRef(id: business.id) }
+                }
                 if let poster = venues.posterOffer(for: venue) {
                     PosterBanner(offer: poster)
+                } else if let url = business?.posterURL {
+                    BusinessPosterBanner(url: url)
                 }
                 ForEach(venues.offers(for: venue)) { offer in
                     OfferRow(offer: offer)
+                }
+                if let business, venues.offers(for: venue).isEmpty {
+                    Text("No deal right now — follow \(business.name) for what's on.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.5))
                 }
             }
             .padding(.horizontal, 18)
@@ -2679,6 +2749,11 @@ private struct VenueOfferCard: View {
             .padding(.bottom, 24)
         }
         .background(Color.ink)
+        .sheet(item: $profileOpen) { ref in
+            BusinessProfileView(businessId: ref.id)
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
     }
 }
 
@@ -2766,7 +2841,7 @@ private struct DealsListSheet: View {
         let offers = venues.offers(for: v)
         HStack(spacing: 12) {
             Group {
-                if let art = venues.posterOffer(for: v)?.imageURL {
+                if let art = venues.pinArt(for: v) {
                     DownsampledAsyncImage(url: art, targetPoints: 52)
                 } else {
                     Color.whiskey.opacity(0.15)
@@ -2813,7 +2888,7 @@ private struct DealsListSheet: View {
 }
 
 /// Whiskey map pin; grows + shows a count badge when a venue has >1 offer.
-private struct OfferPin: View {
+struct OfferPin: View {
     let count: Int
     let selected: Bool
 
@@ -2841,6 +2916,42 @@ private struct OfferPin: View {
 }
 
 // MARK: - Paid placements (migration 053)
+
+/// Set by the business preview sheet (Business.swift). While it's in the
+/// environment the paid views render the bar's unsaved artwork in place of
+/// the offer's URLs, and nothing counts as an impression — a bar looking at
+/// its own campaign isn't reach it paid for.
+struct CampaignPreviewContext {
+    var poster: UIImage? = nil
+    var billboard: UIImage? = nil
+}
+
+private struct CampaignPreviewKey: EnvironmentKey {
+    static let defaultValue: CampaignPreviewContext? = nil
+}
+
+extension EnvironmentValues {
+    var campaignPreview: CampaignPreviewContext? {
+        get { self[CampaignPreviewKey.self] }
+        set { self[CampaignPreviewKey.self] = newValue }
+    }
+}
+
+/// Campaign artwork: the preview's local image when there is one, else the
+/// offer's URL. Fills its box; the caller clips.
+struct CampaignArtImage: View {
+    let url: URL?
+    let local: UIImage?
+    let targetPoints: CGFloat
+
+    var body: some View {
+        if let local {
+            Image(uiImage: local).resizable().scaledToFill()
+        } else if let url {
+            DownsampledAsyncImage(url: url, targetPoints: targetPoints)
+        }
+    }
+}
 
 /// Fire-and-forget impression/tap counters for paid creative. Impressions
 /// dedupe per campaign per app session so scroll jitter can't inflate the
@@ -2939,6 +3050,9 @@ enum DealsPush {
 struct InterstitialPayload: Identifiable {
     let offer: VenueOffer
     let venue: Venue
+    /// Set when this is a paid business card (migration 113) — taps are
+    /// reported back so the bar sees what it got.
+    var cardId: UUID? = nil
     var id: UUID { offer.id }
 }
 
@@ -2953,19 +3067,26 @@ struct InterstitialView: View {
     let venue: Venue
     let onClose: () -> Void
     let onSeeDeal: () -> Void
+    /// Just the card, no backdrop and no impression — the business preview.
+    var embedded = false
+    @Environment(\.campaignPreview) private var preview
 
     var body: some View {
-        ZStack {
-            // Dimmed backdrop — tap anywhere outside the card to dismiss.
-            Color.black.opacity(0.7)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { onClose() }
-
+        if embedded {
             card
-                .padding(.horizontal, 22)
+        } else {
+            ZStack {
+                // Dimmed backdrop — tap anywhere outside the card to dismiss.
+                Color.black.opacity(0.7)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { onClose() }
+
+                card
+                    .padding(.horizontal, 22)
+            }
+            .onAppear { if preview == nil { CampaignStats.impression(offer.id) } }
         }
-        .onAppear { CampaignStats.impression(offer.id) }
     }
 
     private var card: some View {
@@ -2978,9 +3099,7 @@ struct InterstitialView: View {
                 .overlay {
                     ZStack {
                         Color.smoke
-                        if let url = offer.imageURL {
-                            DownsampledAsyncImage(url: url, targetPoints: 700, fill: true, placeholder: Color.smoke)
-                        }
+                        CampaignArtImage(url: offer.imageURL, local: preview?.poster, targetPoints: 700)
                     }
                 }
                 .clipped()
@@ -3068,9 +3187,10 @@ struct InterstitialView: View {
 /// Poster-tier map pin: the bar's artwork in a rounded 4:3 frame — big enough
 /// to stand out on the map, and the SAME ratio as the expanded poster card so
 /// the image doesn't reflow when you tap it.
-private struct PosterPin: View {
-    let url: URL
+struct PosterPin: View {
+    let url: URL?
     let selected: Bool
+    @Environment(\.campaignPreview) private var preview
 
     /// Poster pins are large + prominent (the paid difference). 4:3.
     private var width: CGFloat { selected ? 108 : 92 }
@@ -3079,7 +3199,7 @@ private struct PosterPin: View {
     var body: some View {
         ZStack {
             Color.smoke
-            DownsampledAsyncImage(url: url, targetPoints: 220)  // fill the 4:3 pin
+            CampaignArtImage(url: url, local: preview?.poster, targetPoints: 220)  // fill the 4:3 pin
         }
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -3096,8 +3216,9 @@ private struct PosterPin: View {
 /// Poster creative at the top of a venue's offer card: artwork with a
 /// bottom gradient carrying the campaign title/description. Marked
 /// "Sponsored" — paid placement is never disguised as editorial content.
-private struct PosterBanner: View {
+struct PosterBanner: View {
     let offer: VenueOffer
+    @Environment(\.campaignPreview) private var preview
 
     var body: some View {
         // Color.clear drives the 4:3 box size (same ratio as the map pin);
@@ -3109,9 +3230,7 @@ private struct PosterBanner: View {
             .overlay {
                 ZStack(alignment: .bottomLeading) {
                     Color.smoke
-                    if let url = offer.imageURL {
-                        DownsampledAsyncImage(url: url, targetPoints: 360)
-                    }
+                    CampaignArtImage(url: offer.imageURL, local: preview?.poster, targetPoints: 360)
                     LinearGradient(colors: [.clear, Color.ink.opacity(0.85)],
                                    startPoint: .center, endPoint: .bottom)
                     VStack(alignment: .leading, spacing: 2) {
@@ -3138,19 +3257,42 @@ private struct PosterBanner: View {
                     .background(Capsule().fill(Color.ink.opacity(0.65)))
                     .padding(8)
             }
-            .onAppear { CampaignStats.impression(offer.id) }
+            .onAppear { if preview == nil { CampaignStats.impression(offer.id) } }
     }
 }
 
 /// Billboard tier: full-width rotating hero cards over the Deals map — a
 /// strict 3:1 image banner with an info + CTA bar beneath it.
+/// Shared rules for every surface that rotates billboards: who gets the
+/// opening frame, and what counts as a view.
+enum BillboardRotation {
+    /// A different opening slot every time. The old carousel always began
+    /// with the first bar in catalog order, which handed one bar the most
+    /// seen frame of every session.
+    static func start(_ count: Int) -> Int { count > 1 ? Int.random(in: 0..<count) : 0 }
+
+    /// The deal at `i` is the one on screen — that's a view (once per
+    /// session per deal; CampaignStats dedupes). Views are never counted on a
+    /// tap, and never for a page that was only pre-built off screen.
+    static func glanced(_ entries: [(offer: VenueOffer, venue: Venue)], at i: Int) {
+        guard entries.indices.contains(i) else { return }
+        CampaignStats.impression(entries[i].offer.id)
+    }
+}
+
 private struct BillboardCarousel: View {
     let entries: [(offer: VenueOffer, venue: Venue)]
     let onOpen: (Venue) -> Void
 
-    @State private var index = 0
+    @State private var index: Int
     /// Auto-advance between bars roughly every 3 seconds.
     private let rotate = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
+
+    init(entries: [(offer: VenueOffer, venue: Venue)], onOpen: @escaping (Venue) -> Void) {
+        self.entries = entries
+        self.onOpen = onOpen
+        _index = State(initialValue: BillboardRotation.start(entries.count))
+    }
 
     var body: some View {
         TabView(selection: $index) {
@@ -3176,13 +3318,202 @@ private struct BillboardCarousel: View {
         .onChange(of: entries.count) { _, n in
             if index >= n { index = 0 }
         }
+        .onAppear { BillboardRotation.glanced(entries, at: index) }
+        .onChange(of: index) { _, i in BillboardRotation.glanced(entries, at: i) }
     }
 }
 
-private struct BillboardCard: View {
+/// The sponsored post in the Home feed: one slot, dressed exactly like a
+/// friend's post — author row, photo, action strip, caption — with the bar
+/// as the author and "Sponsored" where the time would be, so it reads as a
+/// post and not a banner. It rotates through the city's live billboard deals
+/// (so the map's carousel isn't the only place a billboard is seen and a
+/// city can carry more of them), can be swiped, and a tap lands on the bar
+/// and its deal on the Deals map. A view is counted when a deal is actually
+/// on screen — the slot at least half visible and that deal the selected
+/// page — once per session, never on a tap.
+struct BillboardFeedCard: View {
+    let entries: [(offer: VenueOffer, venue: Venue)]
+    let onOpen: (VenueOffer, Venue) -> Void
+
+    @State private var index: Int
+    @State private var visible = false
+    /// A touch slower than the map carousel — this sits among posts.
+    private let rotate = Timer.publish(every: 4, on: .main, in: .common).autoconnect()
+
+    /// `startAt` pins the opening deal (the feed gives each slot its own);
+    /// nil draws one at random.
+    init(entries: [(offer: VenueOffer, venue: Venue)], startAt: Int? = nil,
+         onOpen: @escaping (VenueOffer, Venue) -> Void) {
+        self.entries = entries
+        self.onOpen = onOpen
+        let start = startAt.map { entries.isEmpty ? 0 : $0 % entries.count } ?? BillboardRotation.start(entries.count)
+        _index = State(initialValue: start)
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if entries.count == 1 {
+                post(entries[0])
+            } else {
+                // Paging needs a fixed height; the caption is capped (one-line
+                // title, two-line description, one meta line) so every page fits.
+                TabView(selection: $index) {
+                    ForEach(Array(entries.enumerated()), id: \.element.offer.id) { i, entry in
+                        post(entry)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                            .tag(i)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .frame(height: 520)
+                HStack(spacing: 5) {
+                    ForEach(0..<entries.count, id: \.self) { i in
+                        Circle()
+                            .fill(i == index ? Color.whiskey : Color.cream.opacity(0.2))
+                            .frame(width: 5, height: 5)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .onScrollVisibilityChange(threshold: 0.5) { shown in
+            visible = shown
+            if shown { BillboardRotation.glanced(entries, at: index) }
+        }
+        .onChange(of: index) { _, i in
+            if visible { BillboardRotation.glanced(entries, at: i) }
+        }
+        .onReceive(rotate) { _ in
+            guard visible, entries.count > 1 else { return }
+            withAnimation(.easeInOut(duration: 0.6)) {
+                index = (index + 1) % entries.count
+            }
+        }
+        .onChange(of: entries.count) { _, n in
+            if index >= n { index = 0 }
+        }
+    }
+
+    /// One deal as a post: author row, the poster at its own ratio, the
+    /// caption, and one proper button. Mirrors PostCard's rhythm and chrome
+    /// so it sits naturally between friends' nights.
+    private func post(_ entry: (offer: VenueOffer, venue: Venue)) -> some View {
+        let offer = entry.offer, venue = entry.venue
+        let open = {
+            CampaignStats.tap(offer.id)
+            onOpen(offer, venue)
+        }
+        // "Valid Wednesdays · 21:00–23:00" — whatever the deal restricts.
+        let meta = [offer.validDaysLabel, offer.windowLabel].compactMap { $0 }.joined(separator: " · ")
+        return VStack(alignment: .leading, spacing: 0) {
+            // Author row — the bar; "Sponsored" where a post shows its handle,
+            // the city where a post shows its time.
+            Button(action: open) {
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle().fill(Color.whiskey)
+                        if let url = offer.imageURL {
+                            DownsampledAsyncImage(url: url, targetPoints: 72)
+                        } else {
+                            Image(systemName: "wineglass.fill")
+                                .font(.system(size: 15, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.ink)
+                        }
+                    }
+                    .frame(width: 36, height: 36)
+                    .clipShape(Circle())
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(venue.name)
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .lineLimit(1)
+                        Text("Sponsored")
+                            .font(.system(size: 11, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.5))
+                    }
+                    Spacer()
+                    if let city = venue.city {
+                        Text(city)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.bronze)
+                    }
+                }
+                .padding(14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleStyle())
+
+            // The photo at its own ratio (a boosted post's, else the poster's 4:3).
+            Button(action: open) {
+                Color.clear
+                    .aspectRatio(offer.imageRatio ?? CampaignArt.posterRatio, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .overlay {
+                        ZStack {
+                            Color.smoke
+                            CampaignArtImage(url: offer.imageURL ?? offer.billboardImageURL, local: nil, targetPoints: 420)
+                        }
+                    }
+                    .clipped()
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleStyle())
+
+            VStack(alignment: .leading, spacing: 12) {
+                Button(action: open) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(offer.title)
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                            .lineLimit(1)
+                        if let d = offer.description, !d.isEmpty {
+                            Text(d)
+                                .font(.system(size: 13, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.7))
+                                .lineLimit(2)
+                        }
+                        if !meta.isEmpty {
+                            Text(meta)
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.5))
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Button(action: open) {
+                    HStack(spacing: 8) {
+                        Text("SEE DEAL")
+                            .font(.system(size: 12, weight: .black, design: .monospaced))
+                            .tracking(1.5)
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                    }
+                    .foregroundStyle(Color.ink)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.whiskey))
+                }
+                .buttonStyle(PressScaleStyle())
+            }
+            .padding(14)
+        }
+        .background(Color.cream.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+    }
+}
+
+struct BillboardCard: View {
     let offer: VenueOffer
     let venue: Venue
     let onTap: () -> Void
+    @Environment(\.campaignPreview) private var preview
 
     var body: some View {
         Button(action: onTap) {
@@ -3195,9 +3526,8 @@ private struct BillboardCard: View {
                     .overlay {
                         ZStack {
                             Color.smoke
-                            if let url = offer.billboardImageURL ?? offer.imageURL {
-                                DownsampledAsyncImage(url: url, targetPoints: 400)
-                            }
+                            CampaignArtImage(url: offer.billboardImageURL ?? offer.imageURL,
+                                             local: preview?.billboard ?? preview?.poster, targetPoints: 400)
                         }
                     }
                     .clipped()
@@ -3268,14 +3598,15 @@ private struct BillboardCard: View {
             .shadow(color: .black.opacity(0.5), radius: 16, y: 6)
         }
         .buttonStyle(PressScaleStyle())
-        .onAppear { CampaignStats.impression(offer.id) }
+        // No impression here: the carousel and the feed slot count a view
+        // only when this card is the one actually on screen.
     }
 }
 
 /// One offer inside the venue card, with a tap-to-reveal "show at the bar"
 /// redeem state. No server validation in Phase A — the live clock just lets
 /// staff see it's genuine and not a screenshot.
-private struct OfferRow: View {
+struct OfferRow: View {
     let offer: VenueOffer
     @State private var revealed = false
 

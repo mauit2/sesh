@@ -13,6 +13,14 @@ import CoreLocation
 enum CampaignArt {
     static let posterRatio: CGFloat = 4.0 / 3.0   // poster: pin + card
     static let billboardRatio: CGFloat = 3.0 / 1.0 // billboard: wide banner
+    /// Feed images follow Instagram: never taller than 4:5, never wider than
+    /// 1.91:1. Ratios are width / height.
+    static let minFeedRatio: CGFloat = 4.0 / 5.0
+    static let maxFeedRatio: CGFloat = 1.91
+    static func clampFeed(_ ratio: CGFloat) -> CGFloat {
+        guard ratio.isFinite, ratio > 0 else { return 1 }
+        return min(maxFeedRatio, max(minFeedRatio, ratio))
+    }
 }
 
 // MARK: - Settings keys
@@ -49,9 +57,13 @@ struct Profile: Codable, Equatable, Hashable {
     /// ISO date "yyyy-MM-dd". Nil until the user sets it (migration 069);
     /// when present, `age` is derived from it rather than edited directly.
     var birthdate: String?
+    /// Set while this account IS a bar (migration 119): the profile carries
+    /// the bar's name and handle, and the app runs in business mode.
+    var businessId: UUID? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, name, age, sex, username, birthdate
+        case businessId = "business_id"
         case weightKg = "weight_kg"
         case avatarURL = "avatar_url"
     }
@@ -67,6 +79,7 @@ struct Profile: Codable, Equatable, Hashable {
         avatarURL = try c.decodeIfPresent(String.self, forKey: .avatarURL)
         username = try c.decodeIfPresent(String.self, forKey: .username)
         birthdate = try c.decodeIfPresent(String.self, forKey: .birthdate)
+        businessId = try c.decodeIfPresent(UUID.self, forKey: .businessId)
     }
 
     /// Explicit memberwise init (the custom decoder init suppresses the
@@ -807,6 +820,9 @@ struct VenueOffer: Codable, Identifiable, Equatable, Hashable {
     /// valid days + time window (a day-of reminder) instead of marketing the
     /// whole starts_at..ends_at window.
     var showOnValidOnly: Bool = false
+    /// Width / height of the image when known (boosted posts carry theirs).
+    /// Not stored — set client-side only.
+    var imageRatio: CGFloat? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
