@@ -205,7 +205,18 @@ final class ListRequestStore: ObservableObject {
 
     /// nil clears the flag.
     func setFlag(business: UUID, user: UUID, flag: String?) async throws {
-        struct P: Encodable { let p_business: String; let p_user: String; let p_flag: String? }
+        struct P: Encodable {
+            let p_business: String; let p_user: String; let p_flag: String?
+            enum CodingKeys: String, CodingKey { case p_business, p_user, p_flag }
+            // A nil flag must go over as an explicit null: a dropped key makes
+            // PostgREST look for a two-argument function that doesn't exist.
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(p_business, forKey: .p_business)
+                try c.encode(p_user, forKey: .p_user)
+                try c.encode(p_flag, forKey: .p_flag)
+            }
+        }
         _ = try await supabase.rpc("list_guest_flag", params: P(p_business: business.uuidString.lowercased(), p_user: user.uuidString.lowercased(), p_flag: flag)).execute()
     }
 
@@ -929,8 +940,26 @@ struct GuestFlagSheet: View {
     @State private var loaded = false
     @State private var busy: UUID?
     @State private var error: String?
+    @State private var query = ""
+    @State private var hits: [Hit] = []
+    @State private var searching = false
+    @FocusState private var searchFocused: Bool
+
+    /// A username-search hit (the add-friend search, reused).
+    struct Hit: Decodable, Identifiable {
+        let id: UUID
+        let name: String
+        let username: String?
+        let avatarUrl: String?
+        enum CodingKeys: String, CodingKey { case id, name, username; case avatarUrl = "avatar_url" }
+    }
 
     private var isFav: Bool { flag == "favorite" }
+    private var trimmedQuery: String {
+        var q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        while q.hasPrefix("@") { q.removeFirst() }
+        return q
+    }
     private var mine: [ListGuestFlag] { flags.filter { $0.flag == flag } }
     private var candidates: [ListRequest] {
         let flagged = Set(flags.map(\.userId))
@@ -961,6 +990,55 @@ struct GuestFlagSheet: View {
                                 .padding(12).background(Circle().fill(Color.cream.opacity(0.08)))
                         }
                         .buttonStyle(PressScaleStyle())
+                    }
+
+                    // Anyone on Sejdel, by @username — not only people who've asked.
+                    VStack(alignment: .leading, spacing: 8) {
+                        kicker("FIND SOMEONE")
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.bronze)
+                            TextField("", text: $query, prompt: Text("Search @username").foregroundStyle(Color.cream.opacity(0.35)))
+                                .font(.system(size: 15, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                                .tint(Color.whiskey)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                                .focused($searchFocused)
+                            if searching { ProgressView().tint(Color.whiskey) }
+                            else if !query.isEmpty {
+                                Button { query = ""; hits = [] } label: {
+                                    Image(systemName: "xmark.circle.fill").foregroundStyle(Color.cream.opacity(0.4))
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 11)
+                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.cream.opacity(0.06)))
+                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+                        if !trimmedQuery.isEmpty {
+                            BizCard {
+                                if hits.isEmpty && !searching {
+                                    Text("No one on Sejdel matches @\(trimmedQuery).")
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.cream.opacity(0.55))
+                                } else {
+                                    VStack(spacing: 0) {
+                                        ForEach(Array(hits.enumerated()), id: \.element.id) { i, h in
+                                            let current = flags.first { $0.userId == h.id }?.flag
+                                            person(name: h.name, instagram: nil, username: h.username) {
+                                                if current == flag {
+                                                    actionButton("CLEAR", filled: false, id: h.id) { set(h.id, nil) }
+                                                } else {
+                                                    actionButton(isFav ? "STAR" : "BLOCK", filled: true, id: h.id) { set(h.id, flag) }
+                                                }
+                                            }
+                                            if i < hits.count - 1 { Divider().overlay(Color.cream.opacity(0.08)) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     kicker(isFav ? "YOUR FAVOURITES · \(mine.count)" : "BLOCKED · \(mine.count)")
@@ -1007,7 +1085,24 @@ struct GuestFlagSheet: View {
             }
         }
         .preferredColorScheme(.dark)
+        .scrollDismissesKeyboard(.interactively)
         .task { await load() }
+        .task(id: trimmedQuery) { await search() }
+    }
+
+    /// Prefix search on @username, a beat after typing stops.
+    private func search() async {
+        let q = trimmedQuery
+        guard !q.isEmpty else { hits = []; searching = false; return }
+        searching = true
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        guard !Task.isCancelled else { return }
+        struct P: Encodable { let p_query: String }
+        let me = supabase.auth.currentUser?.id
+        let found: [Hit] = (try? await supabase.rpc("search_usernames", params: P(p_query: q)).execute().value) ?? []
+        guard !Task.isCancelled else { return }
+        hits = found.filter { $0.id != me }
+        searching = false
     }
 
     private func person(name: String, instagram: String?, username: String?, @ViewBuilder trailing: () -> some View) -> some View {
