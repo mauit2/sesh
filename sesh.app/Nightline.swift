@@ -2039,11 +2039,11 @@ struct PostThumb: View {
                     }
                 }
             }
-            // Instagram's current grid: 3:4 tiles, uniform.
+            // Instagram's current grid: 3:4 tiles, uniform — rounded like the
+            // bars' grid so the two profiles read as one app.
             .aspectRatio(3.0 / 4.0, contentMode: .fit)
             .frame(maxWidth: .infinity)
-            .clipped()
-            .overlay(Rectangle().strokeBorder(Color.ink, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -2064,7 +2064,7 @@ struct ProfileFeedView: View {
     @State private var loading = true
     @State private var selectedPost: TimelinePost?
 
-    private let cols = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -2103,7 +2103,7 @@ struct ProfileFeedView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.top, 60)
                     } else {
-                        LazyVGrid(columns: cols, spacing: 3) {
+                        LazyVGrid(columns: cols, spacing: 6) {
                             ForEach(posts) { p in
                                 Button { selectedPost = p } label: { PostThumb(post: p) }
                                     .buttonStyle(PressScaleStyle())

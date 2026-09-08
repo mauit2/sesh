@@ -8868,7 +8868,7 @@ private struct ProfileSheet: View {
     /// Apple Health opt-in state (drink calories + sesh vitals).
     @ObservedObject private var health = HealthService.shared
 
-    private let postCols = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
+    private let postCols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)
 
     init(
         profile: Profile, auth: AuthService, admin: AdminService,
@@ -8906,7 +8906,7 @@ private struct ProfileSheet: View {
                     .font(.system(size: 12, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.5))
             } else {
-                LazyVGrid(columns: postCols, spacing: 3) {
+                LazyVGrid(columns: postCols, spacing: 6) {
                     ForEach(myPosts) { p in
                         Button { selectedPost = p } label: { PostThumb(post: p) }
                             .buttonStyle(PressScaleStyle())
