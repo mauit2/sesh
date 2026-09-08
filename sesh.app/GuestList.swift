@@ -1,7 +1,9 @@
 // The guest list. DM a bar, tap "Get on the list", and the bar gets a
 // request card in the chat — full name, +N, Instagram, which night. Approved
-// names land on the bar's list (☰ → Guest list), ready to share as text or
-// export as CSV for the door. Migration 123.
+// names land on the bar's list (☰ → Guest list), one night at a time, ready
+// to share as text or export as CSV for the door. Bars pick the weekdays
+// they take the list; Business+ bars auto-approve regulars and block names.
+// Migrations 123–124.
 
 import SwiftUI
 import Combine
@@ -27,7 +29,7 @@ final class ChatDeepLink: ObservableObject {
     }
 }
 
-// MARK: - Model
+// MARK: - Models
 
 struct ListRequest: Decodable, Identifiable, Equatable {
     let id: UUID
@@ -44,9 +46,11 @@ struct ListRequest: Decodable, Identifiable, Equatable {
     let userName: String?
     let userUsername: String?
     let userAvatar: String?
+    /// "favorite" | "blocked" — the bar's standing note on this guest (Business+).
+    let flag: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, instagram, night, status
+        case id, instagram, night, status, flag
         case businessId = "business_id"
         case userId = "user_id"
         case fullName = "full_name"
@@ -67,6 +71,23 @@ struct ListRequest: Decodable, Identifiable, Equatable {
     var headline: String { plusCount > 0 ? "\(fullName) +\(plusCount)" : fullName }
 }
 
+struct ListGuestFlag: Decodable, Identifiable, Equatable {
+    let userId: UUID
+    let flag: String
+    let name: String
+    let username: String?
+    let avatarUrl: String?
+    let lastName: String?
+    let instagram: String?
+    var id: UUID { userId }
+    enum CodingKeys: String, CodingKey {
+        case flag, name, username, instagram
+        case userId = "user_id"
+        case avatarUrl = "avatar_url"
+        case lastName = "last_name"
+    }
+}
+
 enum ListNight {
     static let key: DateFormatter = {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; return f
@@ -79,11 +100,48 @@ enum ListNight {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_GB"); f.dateFormat = "EEE d MMM"
         return f.string(from: d)
     }
-    /// "TONIGHT" / "WED 9"
+    /// "TONIGHT" / "TOMORROW" / "WED 9"
     static func chip(_ d: Date) -> String {
         if Calendar.current.isDateInToday(d) { return "TONIGHT" }
+        if Calendar.current.isDateInTomorrow(d) { return "TOMORROW" }
         let f = DateFormatter(); f.locale = Locale(identifier: "en_GB"); f.dateFormat = "EEE d"
         return f.string(from: d).uppercased()
+    }
+    /// "Tonight" / "Tomorrow" / "Fri 11 Sep" — how a night reads right now.
+    static func relative(_ s: String) -> String {
+        guard let d = parse(s) else { return s }
+        if Calendar.current.isDateInToday(d) { return "Tonight" }
+        if Calendar.current.isDateInTomorrow(d) { return "Tomorrow" }
+        return label(s)
+    }
+    static func chip(_ s: String) -> String { parse(s).map(chip) ?? s }
+    /// ISO weekday, 1 = Monday … 7 = Sunday.
+    static func isoWeekday(_ d: Date) -> Int { (Calendar.current.component(.weekday, from: d) + 5) % 7 + 1 }
+    static let weekdayNames = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+    /// The nights a bar takes the list, from today, up to `count` of them.
+    static func upcoming(days allowed: [Int], count: Int = 7, horizon: Int = 21) -> [Date] {
+        let today = Calendar.current.startOfDay(for: Date())
+        return (0..<horizon).compactMap { Calendar.current.date(byAdding: .day, value: $0, to: today) }
+            .filter { allowed.contains(isoWeekday($0)) }
+            .prefix(count).map { $0 }
+    }
+}
+
+/// Instagram's glyph — the camera outline — since there's no SF Symbol for it.
+struct InstagramGlyph: View {
+    var size: CGFloat = 14
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
+                .strokeBorder(lineWidth: size * 0.12)
+            Circle()
+                .strokeBorder(lineWidth: size * 0.12)
+                .frame(width: size * 0.5, height: size * 0.5)
+            Circle()
+                .frame(width: size * 0.13, height: size * 0.13)
+                .offset(x: size * 0.24, y: -size * 0.24)
+        }
+        .frame(width: size, height: size)
     }
 }
 
@@ -103,6 +161,17 @@ final class ListRequestStore: ObservableObject {
             .eq("id", value: id.uuidString.lowercased()).execute().value, let r = rows.first {
             byId[r.id] = r
         }
+    }
+
+    /// Which weekdays the bar takes the list — from its public profile.
+    func listDays(business: UUID) async -> [Int] {
+        struct P: Encodable { let p_business: String }
+        struct Payload: Decodable {
+            struct B: Decodable { let listDays: [Int]?; enum CodingKeys: String, CodingKey { case listDays = "list_days" } }
+            let business: B
+        }
+        let p: Payload? = try? await supabase.rpc("business_profile", params: P(p_business: business.uuidString.lowercased())).execute().value
+        return p?.business.listDays ?? [1, 2, 3, 4, 5, 6, 7]
     }
 
     func send(business: UUID, fullName: String, instagram: String, plus: Int, night: Date) async throws -> UUID {
@@ -129,20 +198,38 @@ final class ListRequestStore: ObservableObject {
         return rows
     }
 
+    func setListDays(business: UUID, days: [Int]) async throws {
+        struct P: Encodable { let p_business: String; let p_days: [Int] }
+        _ = try await supabase.rpc("business_set_list_days", params: P(p_business: business.uuidString.lowercased(), p_days: days.sorted())).execute()
+    }
+
+    /// nil clears the flag.
+    func setFlag(business: UUID, user: UUID, flag: String?) async throws {
+        struct P: Encodable { let p_business: String; let p_user: String; let p_flag: String? }
+        _ = try await supabase.rpc("list_guest_flag", params: P(p_business: business.uuidString.lowercased(), p_user: user.uuidString.lowercased(), p_flag: flag)).execute()
+    }
+
+    func flags(for business: UUID) async throws -> [ListGuestFlag] {
+        struct P: Encodable { let p_business: String }
+        return try await supabase.rpc("list_guest_flags_for", params: P(p_business: business.uuidString.lowercased())).execute().value
+    }
+
     enum ListError: Error { case code(String) }
 
     static func friendly(_ error: Error) -> String {
         let s = String(describing: error)
         func has(_ c: String) -> Bool { s.contains(c) }
         if has("already_requested") { return "You've already asked for that night — the bar hasn't answered yet." }
+        if has("closed_night")      { return "The bar doesn't take the list that night." }
         if has("not_on_sejdel")     { return "This bar isn't on Sejdel right now." }
         if has("name_required")     { return "Add your full name." }
         if has("instagram_required") { return "Add your Instagram handle." }
         if has("bad_night")         { return "Pick a night from tonight on." }
         if has("bad_party")         { return "Up to +50." }
         if has("own_bar")           { return "That's your own bar." }
-        if has("not_yours")         { return "Only the bar can decide this." }
-        return "Couldn't send that. Try again."
+        if has("not_yours")         { return "Only the bar can do this." }
+        if has("plus_required")     { return "That's a Business+ feature." }
+        return "Couldn't do that. Try again."
     }
 }
 
@@ -158,7 +245,9 @@ struct ListRequestSheet: View {
     @State private var fullName: String
     @State private var instagram: String
     @State private var plus = 0
-    @State private var night = Calendar.current.startOfDay(for: Date())
+    @State private var night: Date?
+    @State private var nights: [Date] = []
+    @State private var nightsLoaded = false
     @State private var busy = false
     @State private var error: String?
     @FocusState private var focus: Field?
@@ -170,11 +259,6 @@ struct ListRequestSheet: View {
         self.business = business; self.barName = barName; self.profile = profile; self.onSent = onSent
         _fullName = State(initialValue: UserDefaults.standard.string(forKey: Self.nameKey) ?? profile.name)
         _instagram = State(initialValue: UserDefaults.standard.string(forKey: Self.instagramKey) ?? "")
-    }
-
-    private var nights: [Date] {
-        let today = Calendar.current.startOfDay(for: Date())
-        return (0..<7).compactMap { Calendar.current.date(byAdding: .day, value: $0, to: today) }
     }
 
     var body: some View {
@@ -226,19 +310,25 @@ struct ListRequestSheet: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         kicker("WHICH NIGHT")
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(nights, id: \.self) { d in
-                                    let on = Calendar.current.isDate(d, inSameDayAs: night)
-                                    Button { night = d } label: {
-                                        Text(ListNight.chip(d))
-                                            .font(.system(size: 12, weight: .black, design: .monospaced))
-                                            .tracking(1.2)
-                                            .foregroundStyle(on ? Color.ink : Color.cream.opacity(0.8))
-                                            .padding(.horizontal, 14).padding(.vertical, 10)
-                                            .background(Capsule().fill(on ? Color.whiskey : Color.cream.opacity(0.07)))
+                        if nightsLoaded && nights.isEmpty {
+                            Text("\(barName) isn't taking the list right now.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.6))
+                        } else {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(nights, id: \.self) { d in
+                                        let on = night.map { Calendar.current.isDate(d, inSameDayAs: $0) } ?? false
+                                        Button { night = d } label: {
+                                            Text(ListNight.chip(d))
+                                                .font(.system(size: 12, weight: .black, design: .monospaced))
+                                                .tracking(1.2)
+                                                .foregroundStyle(on ? Color.ink : Color.cream.opacity(0.8))
+                                                .padding(.horizontal, 14).padding(.vertical, 10)
+                                                .background(Capsule().fill(on ? Color.whiskey : Color.cream.opacity(0.07)))
+                                        }
+                                        .buttonStyle(PressScaleStyle())
                                     }
-                                    .buttonStyle(PressScaleStyle())
                                 }
                             }
                         }
@@ -256,10 +346,18 @@ struct ListRequestSheet: View {
             .scrollDismissesKeyboard(.interactively)
         }
         .preferredColorScheme(.dark)
+        .task {
+            let days = await ListRequestStore.shared.listDays(business: business)
+            nights = ListNight.upcoming(days: days)
+            night = nights.first
+            nightsLoaded = true
+        }
     }
 
     private var canSend: Bool {
-        fullName.trimmingCharacters(in: .whitespaces).count >= 2 && !instagram.trimmingCharacters(in: .whitespaces).isEmpty
+        fullName.trimmingCharacters(in: .whitespaces).count >= 2
+            && !instagram.trimmingCharacters(in: .whitespaces).isEmpty
+            && night != nil
     }
 
     private func field(_ label: String, _ prompt: String, text: Binding<String>, field: Field,
@@ -291,7 +389,7 @@ struct ListRequestSheet: View {
     }
 
     private func send() {
-        guard canSend else { return }
+        guard canSend, let night else { return }
         busy = true; error = nil; focus = nil
         Task {
             do {
@@ -328,28 +426,24 @@ struct ListRequestBubble: View {
             if let r = store.byId[requestId] {
                 HStack(spacing: 6) {
                     Image(systemName: "ticket.fill")
-                    Text("GET ON THE LIST · \(r.nightLabel.uppercased())")
+                    Text("GET ON THE LIST")
                 }
                 .font(.system(size: 10, weight: .black, design: .monospaced))
                 .tracking(1.4)
                 .foregroundStyle(Color.whiskey)
+                // The night, big — it's the first thing the door needs.
+                // "TONIGHT" / "TOMORROW" when it's that close, else the date.
+                Text(ListNight.relative(r.night).uppercased())
+                    .font(.system(size: 16, weight: .black, design: .monospaced))
+                    .tracking(1.6)
+                    .foregroundStyle(Color.whiskey)
                 Text(r.headline)
                     .font(.system(size: 18, weight: .heavy, design: .rounded))
                     .foregroundStyle(Color.cream)
                 Text(r.plusCount == 0 ? "Just them" : "\(r.total) in total")
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.6))
-                Link(destination: r.instagramURL) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "camera.circle.fill")
-                        Text("@\(r.instagram)")
-                        Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold))
-                    }
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.cream)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Capsule().fill(Color.cream.opacity(0.08)))
-                }
+                InstagramLink(handle: r.instagram, url: r.instagramURL)
                 if decider && r.pending {
                     HStack(spacing: 10) {
                         decisionButton("APPROVE", filled: true) { decide(r, true) }
@@ -397,6 +491,26 @@ struct ListRequestBubble: View {
     }
 }
 
+/// "@handle ↗" with the Instagram glyph — opens the profile.
+struct InstagramLink: View {
+    let handle: String
+    let url: URL
+    var compact = false
+    var body: some View {
+        Link(destination: url) {
+            HStack(spacing: 6) {
+                InstagramGlyph(size: compact ? 12 : 14)
+                Text("@\(handle)")
+                Image(systemName: "arrow.up.right").font(.system(size: compact ? 9 : 10, weight: .bold))
+            }
+            .font(.system(size: compact ? 12 : 13, weight: .bold, design: .rounded))
+            .foregroundStyle(Color.cream)
+            .padding(.horizontal, compact ? 10 : 12).padding(.vertical, compact ? 6 : 8)
+            .background(Capsule().fill(Color.cream.opacity(0.08)))
+        }
+    }
+}
+
 struct ListStatusPill: View {
     let status: String
     var body: some View {
@@ -416,83 +530,181 @@ struct ListStatusPill: View {
 
 // MARK: - Bar side: the list
 
-/// ☰ → Guest list. Every night that has requests, pending ones first so they
-/// can be decided here too; approved names go out as text or CSV.
+/// ☰ → Guest list. Pick a night, flip between who's on the list and who's
+/// waiting, download that night's list. Below: the weekdays you take the
+/// list, and (Business+) regulars and blocked names.
 struct GuestListBody: View {
     let business: UUID
     let barName: String
+    let isPlus: Bool
+    let listDays: [Int]
+    var onUpgrade: () -> Void = {}
     @ObservedObject private var store = ListRequestStore.shared
     @State private var rows: [ListRequest] = []
+    @State private var flags: [ListGuestFlag] = []
     @State private var loaded = false
     @State private var error: String?
     @State private var busy: UUID?
-    @State private var copied: String?
-    @State private var csvFiles: [String: URL] = [:]
+    @State private var copied = false
+    @State private var selectedNight: String?
+    @State private var showPending = false
+    @State private var days: [Int] = []
+    @State private var savingDays = false
+    @State private var shareFile: ShareFile?
 
+    private struct ShareFile: Identifiable { let id = UUID(); let url: URL }
+
+    /// Nights with requests, from today on.
     private var nights: [String] {
+        let today = ListNight.string(Date())
         var seen: [String] = []
-        for r in rows where !seen.contains(r.night) { seen.append(r.night) }
+        for r in rows where r.night >= today && !seen.contains(r.night) { seen.append(r.night) }
         return seen
+    }
+    private var night: String? { selectedNight.flatMap { nights.contains($0) ? $0 : nil } ?? nights.first }
+    private func rows(_ night: String, approved: Bool) -> [ListRequest] {
+        rows.filter { $0.night == night && (approved ? $0.approved : $0.pending) }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             if !loaded {
                 ProgressView().tint(Color.whiskey).frame(maxWidth: .infinity).padding(.vertical, 30)
-            } else if rows.isEmpty {
+            } else if let night {
+                nightPicker
+                listSection(night)
+            } else {
                 BizCard {
                     Text("No one on the list yet.")
                         .font(.system(size: 19, weight: .heavy, design: .rounded))
                         .foregroundStyle(Color.cream)
-                    Text("Guests ask from your chat — the 🎟 Get on the list button. Say yes there or here, and the names line up below, ready to share with the door.")
+                    Text("Guests ask from your chat — the 🎟 Get on the list button. Say yes there or here, and the names line up, one night at a time, ready to share with the door.")
                         .font(.system(size: 14, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.65))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            } else {
-                ForEach(nights, id: \.self) { night in nightSection(night) }
             }
             ErrorLine(text: error)
+            if loaded {
+                daysCard
+                regularsCard
+            }
         }
-        .task { await load() }
+        .task {
+            days = listDays
+            await load()
+        }
+        .sheet(item: $shareFile) { f in
+            ShareLinkSheet(items: [f.url]).presentationDetents([.medium, .large])
+        }
     }
 
-    private func nightSection(_ night: String) -> some View {
-        let all = rows.filter { $0.night == night }
-        let approved = all.filter(\.approved)
-        let heads = approved.reduce(0) { $0 + $1.total }
-        return VStack(alignment: .leading, spacing: 10) {
-            kicker("\(ListNight.label(night).uppercased()) · \(approved.count) ON THE LIST · \(heads) HEADS")
-            BizCard {
-                VStack(spacing: 0) {
-                    ForEach(Array(all.enumerated()), id: \.element.id) { i, r in
-                        row(r)
-                        if i < all.count - 1 { Divider().overlay(Color.cream.opacity(0.08)) }
+    // ── which night ──
+    private var nightPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            kicker("UPCOMING NIGHTS")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(nights, id: \.self) { n in
+                        let on = n == night
+                        let pending = rows(n, approved: false).count
+                        Button { selectedNight = n } label: {
+                            HStack(spacing: 6) {
+                                Text(ListNight.chip(n))
+                                if pending > 0 {
+                                    Text("\(pending)")
+                                        .font(.system(size: 10, weight: .black, design: .monospaced))
+                                        .foregroundStyle(on ? Color.whiskey : Color.ink)
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(Capsule().fill(on ? Color.ink : Color.whiskey))
+                                }
+                            }
+                            .font(.system(size: 12, weight: .black, design: .monospaced))
+                            .tracking(1.2)
+                            .foregroundStyle(on ? Color.ink : Color.cream.opacity(0.8))
+                            .padding(.horizontal, 14).padding(.vertical, 10)
+                            .background(Capsule().fill(on ? Color.whiskey : Color.cream.opacity(0.07)))
+                        }
+                        .buttonStyle(PressScaleStyle())
                     }
                 }
-                if !approved.isEmpty {
+            }
+        }
+    }
+
+    // ── the list for that night ──
+    private func listSection(_ night: String) -> some View {
+        let approved = rows(night, approved: true)
+        let pending = rows(night, approved: false)
+        let heads = approved.reduce(0) { $0 + $1.total }
+        let shown = showPending ? pending : approved
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                toggle("ON THE LIST", count: approved.count, on: !showPending) { showPending = false }
+                toggle("PENDING", count: pending.count, on: showPending) { showPending = true }
+            }
+            BizCard {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(ListNight.relative(night))
+                        .font(.system(size: 22, weight: .black, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    Spacer()
+                    let date = ListNight.relative(night) == ListNight.label(night) ? "" : "\(ListNight.label(night)) · "
+                    Text(date + (showPending ? "\(pending.count) waiting" : "\(approved.count) on the list · \(heads) heads"))
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(1)
+                        .foregroundStyle(Color.bronze)
+                }
+                if shown.isEmpty {
+                    Text(showPending ? "Nobody waiting." : "Nobody approved yet — check PENDING.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.55))
+                        .padding(.vertical, 6)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(shown.enumerated()), id: \.element.id) { i, r in
+                            row(r)
+                            if i < shown.count - 1 { Divider().overlay(Color.cream.opacity(0.08)) }
+                        }
+                    }
+                }
+                if !showPending && !approved.isEmpty {
+                    kicker("DOWNLOAD THE LIST · \(ListNight.label(night).uppercased())")
                     HStack(spacing: 10) {
                         ShareLink(item: GuestListExport.text(bar: barName, night: night, rows: approved)) {
                             exportLabel("SHARE", "square.and.arrow.up")
                         }
-                        if let url = csvFiles[night] {
-                            ShareLink(item: url, preview: SharePreview(url.lastPathComponent)) {
-                                exportLabel("CSV", "tablecells")
-                            }
-                        }
+                        Button {
+                            if let url = GuestListExport.csvFile(bar: barName, night: night, rows: approved) { shareFile = ShareFile(url: url) }
+                        } label: { exportLabel("CSV", "tablecells") }
+                            .buttonStyle(PressScaleStyle())
                         Button {
                             UIPasteboard.general.string = GuestListExport.text(bar: barName, night: night, rows: approved)
-                            copied = night
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { if copied == night { copied = nil } }
-                        } label: {
-                            exportLabel(copied == night ? "COPIED" : "COPY", "doc.on.doc")
-                        }
-                        .buttonStyle(PressScaleStyle())
+                            copied = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }
+                        } label: { exportLabel(copied ? "COPIED" : "COPY", "doc.on.doc") }
+                            .buttonStyle(PressScaleStyle())
                     }
-                    .padding(.top, 4)
                 }
             }
         }
+    }
+
+    private func toggle(_ title: String, count: Int, on: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text(title)
+                Text("\(count)")
+                    .foregroundStyle(on ? Color.ink.opacity(0.6) : Color.bronze)
+            }
+            .font(.system(size: 11, weight: .black, design: .monospaced))
+            .tracking(1.4)
+            .foregroundStyle(on ? Color.ink : Color.cream.opacity(0.75))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(on ? Color.cream : Color.cream.opacity(0.07)))
+        }
+        .buttonStyle(PressScaleStyle())
     }
 
     private func exportLabel(_ title: String, _ icon: String) -> some View {
@@ -510,18 +722,23 @@ struct GuestListBody: View {
     private func row(_ r: ListRequest) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(r.headline)
-                        .font(.system(size: 16, weight: .heavy, design: .rounded))
-                        .foregroundStyle(Color.cream)
-                    HStack(spacing: 8) {
-                        Text("\(r.total) in total")
-                        Link(destination: r.instagramURL) {
-                            Text("@\(r.instagram) ↗").underline()
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Text(r.headline)
+                            .font(.system(size: 16, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color.cream)
+                        if r.flag == "favorite" {
+                            Image(systemName: "star.fill").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.whiskey)
+                        } else if r.flag == "blocked" {
+                            Image(systemName: "hand.raised.fill").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.cream.opacity(0.5))
                         }
                     }
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.cream.opacity(0.6))
+                    HStack(spacing: 8) {
+                        Text("\(r.total) in total")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.6))
+                        InstagramLink(handle: r.instagram, url: r.instagramURL, compact: true)
+                    }
                     if let u = r.userUsername {
                         Text("on Sejdel as @\(u)")
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -529,7 +746,7 @@ struct GuestListBody: View {
                     }
                 }
                 Spacer(minLength: 0)
-                if !r.pending { ListStatusPill(status: r.status) }
+                flagMenu(r)
             }
             if r.pending {
                 HStack(spacing: 8) {
@@ -539,6 +756,38 @@ struct GuestListBody: View {
             }
         }
         .padding(.vertical, 10)
+    }
+
+    /// Star a regular, block a name — Business+; the basic plan sees the pitch.
+    private func flagMenu(_ r: ListRequest) -> some View {
+        Menu {
+            if isPlus {
+                if r.flag != "favorite" {
+                    Button { setFlag(r.userId, "favorite") } label: { Label("Auto-approve from now on", systemImage: "star.fill") }
+                }
+                if r.flag != "blocked" {
+                    Button(role: .destructive) { setFlag(r.userId, "blocked") } label: { Label("Block", systemImage: "hand.raised.fill") }
+                }
+                if r.flag != nil {
+                    Button { setFlag(r.userId, nil) } label: { Label("Clear", systemImage: "xmark.circle") }
+                }
+                if r.approved {
+                    Button(role: .destructive) { decide(r, false) } label: { Label("Take off the list", systemImage: "minus.circle") }
+                }
+            } else {
+                Button { onUpgrade() } label: { Label("Auto-approve regulars · Business+", systemImage: "star.fill") }
+                Button { onUpgrade() } label: { Label("Block names · Business+", systemImage: "hand.raised.fill") }
+                if r.approved {
+                    Button(role: .destructive) { decide(r, false) } label: { Label("Take off the list", systemImage: "minus.circle") }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.7))
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(Color.cream.opacity(0.07)))
+        }
     }
 
     private func smallDecision(_ title: String, filled: Bool, _ r: ListRequest, _ action: @escaping () -> Void) -> some View {
@@ -555,6 +804,117 @@ struct GuestListBody: View {
         .disabled(busy != nil)
     }
 
+    // ── the weekdays you take the list ──
+    private var daysCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            kicker("NIGHTS YOU TAKE THE LIST")
+            BizCard {
+                Text("Guests can only ask for these nights.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.6))
+                HStack(spacing: 6) {
+                    ForEach(1...7, id: \.self) { d in
+                        let on = days.contains(d)
+                        Button { toggleDay(d) } label: {
+                            Text(ListNight.weekdayNames[d - 1])
+                                .font(.system(size: 10, weight: .black, design: .monospaced))
+                                .tracking(0.8)
+                                .foregroundStyle(on ? Color.ink : Color.cream.opacity(0.7))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(on ? Color.whiskey : Color.cream.opacity(0.07)))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                        .disabled(savingDays)
+                    }
+                }
+                if days.isEmpty {
+                    Text("No nights picked — nobody can ask.")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.whiskey)
+                }
+            }
+        }
+    }
+
+    private func toggleDay(_ d: Int) {
+        var next = days
+        if let i = next.firstIndex(of: d) { next.remove(at: i) } else { next.append(d) }
+        next.sort()
+        let previous = days
+        days = next
+        savingDays = true
+        Task {
+            do { try await store.setListDays(business: business, days: next) }
+            catch { days = previous; self.error = ListRequestStore.friendly(error) }
+            savingDays = false
+        }
+    }
+
+    // ── regulars & blocked (Business+) ──
+    private var regularsCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            kicker("REGULARS & BLOCKED")
+            BizCard {
+                if isPlus {
+                    Text("Star a guest and they're on the list the moment they ask. Block one and they're told the list is full. Both from the ⋯ on any name.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.6))
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !flags.isEmpty {
+                        VStack(spacing: 0) {
+                            ForEach(Array(flags.enumerated()), id: \.element.id) { i, f in
+                                HStack(spacing: 10) {
+                                    Image(systemName: f.flag == "favorite" ? "star.fill" : "hand.raised.fill")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(f.flag == "favorite" ? Color.whiskey : Color.cream.opacity(0.5))
+                                        .frame(width: 22)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(f.lastName ?? f.name)
+                                            .font(.system(size: 15, weight: .heavy, design: .rounded))
+                                            .foregroundStyle(Color.cream)
+                                        Text([f.instagram.map { "@\($0)" }, f.username.map { "on Sejdel as @\($0)" }].compactMap { $0 }.joined(separator: " · "))
+                                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                            .foregroundStyle(Color.bronze)
+                                    }
+                                    Spacer(minLength: 0)
+                                    Button { setFlag(f.userId, nil) } label: {
+                                        Text("CLEAR")
+                                            .font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1.2)
+                                            .foregroundStyle(Color.cream.opacity(0.7))
+                                            .padding(.horizontal, 10).padding(.vertical, 7)
+                                            .background(Capsule().fill(Color.cream.opacity(0.08)))
+                                    }
+                                    .buttonStyle(PressScaleStyle())
+                                }
+                                .padding(.vertical, 9)
+                                if i < flags.count - 1 { Divider().overlay(Color.cream.opacity(0.08)) }
+                            }
+                        }
+                    }
+                } else {
+                    Text("The list on autopilot.")
+                        .font(.system(size: 19, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                    Text("Business+ bars star their regulars — approved the moment they ask — and block the names they don't want at the door.")
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.65))
+                        .fixedSize(horizontal: false, vertical: true)
+                    BizPrimaryButton(title: "GO BUSINESS+") { onUpgrade() }
+                }
+            }
+        }
+    }
+
+    private func setFlag(_ user: UUID, _ flag: String?) {
+        guard isPlus else { onUpgrade(); return }
+        error = nil
+        Task {
+            do { try await store.setFlag(business: business, user: user, flag: flag); await load() }
+            catch { self.error = ListRequestStore.friendly(error) }
+        }
+    }
+
     private func decide(_ r: ListRequest, _ approve: Bool) {
         busy = r.id; error = nil
         Task {
@@ -567,12 +927,10 @@ struct GuestListBody: View {
     private func load() async {
         do {
             rows = try await store.list(for: business)
-            var files: [String: URL] = [:]
-            for night in nights {
-                let approved = rows.filter { $0.night == night && $0.approved }
-                if !approved.isEmpty, let url = GuestListExport.csvFile(bar: barName, night: night, rows: approved) { files[night] = url }
-            }
-            csvFiles = files
+            if isPlus { flags = (try? await store.flags(for: business)) ?? [] }
+            if selectedNight == nil { selectedNight = nights.first }
+            // Nothing approved yet for the first night: open on the waiting ones.
+            if let n = night, rows(n, approved: true).isEmpty, !rows(n, approved: false).isEmpty { showPending = true }
         } catch {
             self.error = ListRequestStore.friendly(error)
         }
@@ -581,7 +939,7 @@ struct GuestListBody: View {
 }
 
 /// Plain text for Notes and Messages; CSV for Excel, Numbers and the door
-/// systems that import spreadsheets.
+/// systems that import spreadsheets. Always the whole night.
 enum GuestListExport {
     static func text(bar: String, night: String, rows: [ListRequest]) -> String {
         var lines = ["\(bar) · The list · \(ListNight.label(night))", ""]

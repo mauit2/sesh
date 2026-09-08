@@ -173,6 +173,8 @@ struct BusinessOverview: Decodable {
         let priorUsername: String?
         /// The table check-in QR, once minted (subscribed bars only).
         let qrToken: String?
+        /// ISO weekdays (1 = Mon … 7 = Sun) the bar takes the guest list.
+        let listDays: [Int]?
     }
     struct Event: Decodable, Identifiable {
         let id: UUID
@@ -1193,6 +1195,7 @@ private struct PlanCard: View {
             ("photo.fill", "Poster, not a pin. Your photo on the map — impossible to miss."),
             ("bolt.fill", "Boost a post. Sponsored in every feed nearby, and a billboard on the map."),
             ("party.popper.fill", "Events. Your nights in every follower's calendar, with a push."),
+            ("star.fill", "The list on autopilot. Regulars auto-approved, blocked names kept out."),
             ("bell.badge.fill", "Push it. A notification to your city every time you drop a deal."),
             ("square.stack.3d.up.fill", "Several deals live at once, on your profile and your poster."),
             ("rectangle.portrait.on.rectangle.portrait.angled.fill", "App-open card. Full screen the moment someone nearby opens the app."),
@@ -1622,7 +1625,8 @@ struct BusinessDashboard: View {
             case .profile: profileCard(ov)
             case .plan:    planBody(ov)
             case .stats:   statsBody(ov)
-            case .list:    GuestListBody(business: ov.business.id, barName: ov.business.name)
+            case .list:    GuestListBody(business: ov.business.id, barName: ov.business.name, isPlus: ov.isPlus,
+                                         listDays: ov.business.listDays ?? [1, 2, 3, 4, 5, 6, 7], onUpgrade: { upgradeOpen = true })
             case .deals:   dealsSection(ov)
             case .boost:   boostBody(ov)
             case .card:    cardSection(ov)
