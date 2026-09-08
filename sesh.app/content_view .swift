@@ -2194,6 +2194,12 @@ private struct FriendsView: View {
     @ObservedObject var auth: AuthService
     /// Timeline service — so tapping a friend opens their posted nights.
     @ObservedObject var feed: FeedService
+    /// The bar catalog, for the BARS side of the search.
+    @ObservedObject var venues: VenueService
+    /// Where the user is, so bar results sort by distance. nil is fine.
+    var origin: CLLocation? = nil
+    private enum SearchMode: String, CaseIterable { case people = "PEOPLE", bars = "BARS" }
+    @State private var mode: SearchMode = .people
     @Environment(\.dismiss) private var dismiss
     @StateObject private var moderation = ModerationService()
 
@@ -2218,11 +2224,16 @@ private struct FriendsView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 22) {
                     header
-                    usernameCard
-                    addFriendSection
-                    if !results.isEmpty { resultsSection }
-                    if !friends.incoming.isEmpty { requestsSection }
-                    friendsSection
+                    modeToggle
+                    if mode == .bars {
+                        BarSearchView(venues: venues, origin: origin)
+                    } else {
+                        usernameCard
+                        addFriendSection
+                        if !results.isEmpty { resultsSection }
+                        if !friends.incoming.isEmpty { requestsSection }
+                        friendsSection
+                    }
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 52)
@@ -2283,12 +2294,35 @@ private struct FriendsView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("YOUR CREW")
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .tracking(2.4).foregroundStyle(Color.bronze)
-            Text("Friends")
+            Text("Search")
                 .font(.system(size: 32, weight: .black, design: .rounded))
                 .italic().tracking(-1).foregroundStyle(Color.cream)
+            Text("Search for a username or a bar.")
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.6))
+        }
+    }
+
+    /// PEOPLE or BARS — the two things you can look for here.
+    private var modeToggle: some View {
+        HStack(spacing: 8) {
+            ForEach(SearchMode.allCases, id: \.self) { m in
+                let on = mode == m
+                Button { withAnimation(.easeInOut(duration: 0.15)) { mode = m } } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: m == .people ? "person.2.fill" : "wineglass.fill")
+                            .font(.system(size: 11, weight: .bold))
+                        Text(m.rawValue)
+                    }
+                    .font(.system(size: 11, weight: .black, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(on ? Color.ink : Color.cream.opacity(0.75))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(on ? Color.cream : Color.cream.opacity(0.07)))
+                }
+                .buttonStyle(PressScaleStyle())
+            }
         }
     }
 
@@ -4670,21 +4704,21 @@ private struct ModeTopBar: View {
             .buttonStyle(PressScaleStyle())
             .accessibilityLabel("Drinking games")
             .tourAnchor(.games)
-            // Friends — set your @username, search + add friends, invite
-            // them to a sesh. Always present.
+            // Search — a username or a bar. Friends live behind it too (add,
+            // requests, roster), but the glass says what it's for.
             Button(action: onTapFriends) {
                 ZStack {
                     Circle()
                         .fill(Color.cream.opacity(0.05))
                         .frame(width: 32, height: 32)
-                    Image(systemName: "person.2.fill")
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.8))
                 }
                 .overlay(Circle().strokeBorder(Color.cream.opacity(0.12), lineWidth: 1))
             }
             .buttonStyle(PressScaleStyle())
-            .accessibilityLabel("Friends")
+            .accessibilityLabel("Search")
             .tourAnchor(.friends)
             // Notification-center bell — always present, sitting next to the
             // friends icon. Shows a count badge only when there's something
@@ -4937,6 +4971,8 @@ private struct ProfileAndTourModifier: ViewModifier {
     @ObservedObject var admin: AdminService
     @ObservedObject var friends: FriendsService
     @ObservedObject var feed: FeedService
+    @ObservedObject var venues: VenueService
+    var origin: CLLocation? = nil
 
     func body(content: Content) -> some View {
         content
@@ -4947,6 +4983,7 @@ private struct ProfileAndTourModifier: ViewModifier {
             .sheet(isPresented: $profileOpen) {
                 ProfileSheet(
                     profile: profile, auth: auth, admin: admin,
+                    venues: venues, origin: origin,
                     friends: friends, feed: feed,
                     onReplayTour: { profileOpen = false; tourOpen = true }
                 )
@@ -6374,7 +6411,7 @@ private struct SessionView: View {
         .modifier(TourModifier(tab: $tab, active: $tourOpen).concat(sideMenu))
         .modifier(BirthdatePromptModifier(auth: auth))
         .sheet(isPresented: $friendsSheetOpen) {
-            FriendsView(friends: friends, auth: auth, feed: feed)
+            FriendsView(friends: friends, auth: auth, feed: feed, venues: venues, origin: location.location)
                 .presentationBackground(Color.ink)
         }
         .fullScreenCover(isPresented: $gamesOpen) {
@@ -6708,7 +6745,9 @@ private struct SessionView: View {
             auth: auth,
             admin: admin,
             friends: friends,
-            feed: feed
+            feed: feed,
+            venues: venues,
+            origin: location.location
         )
     }
 
@@ -8763,6 +8802,9 @@ private struct ProfileSheet: View {
     let profile: Profile
     @ObservedObject var auth: AuthService
     @ObservedObject var admin: AdminService
+    /// For the search sheet's BARS side.
+    @ObservedObject var venues: VenueService
+    var origin: CLLocation? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var name: String
@@ -8830,12 +8872,15 @@ private struct ProfileSheet: View {
 
     init(
         profile: Profile, auth: AuthService, admin: AdminService,
+        venues: VenueService, origin: CLLocation? = nil,
         friends: FriendsService, feed: FeedService,
         onReplayTour: (() -> Void)? = nil
     ) {
         self.profile = profile
         self.auth = auth
         self.admin = admin
+        self.venues = venues
+        self.origin = origin
         self.friends = friends
         self.feed = feed
         self.onReplayTour = onReplayTour
@@ -9616,7 +9661,7 @@ private struct ProfileSheet: View {
                 .presentationBackground(Color.ink)
         }
         .sheet(isPresented: $friendsOpen) {
-            FriendsView(friends: friends, auth: auth, feed: feed)
+            FriendsView(friends: friends, auth: auth, feed: feed, venues: venues, origin: origin)
                 .presentationBackground(Color.ink)
         }
         // Replay a saved night — closing button is a plain DONE.
@@ -10080,11 +10125,13 @@ final class OffersAdminService: ObservableObject {
 
     func delete(_ id: UUID) async {
         struct P: Encodable { let p_offer_id: String }
+        lastError = nil
         do {
             _ = try await supabase.rpc("admin_delete_offer", params: P(p_offer_id: id.uuidString.lowercased())).execute()
             await load()
         } catch {
-            // no-op
+            // Say so — a silent failure is how this went unnoticed.
+            lastError = "Couldn't delete: \(error.localizedDescription)"
         }
     }
 }
@@ -10484,6 +10531,8 @@ private struct CampaignComposer: View {
     @State private var interstitial: Bool
     @State private var showOnValidOnly: Bool
     @State private var saving = false
+    @State private var deleting = false
+    @State private var confirmDelete = false
 
     private let kinds = ["price", "happy_hour", "free_entry", "bundle", "event"]
     private let dayLabels = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
@@ -10857,6 +10906,35 @@ private struct CampaignComposer: View {
             .buttonStyle(PressScaleStyle())
             .disabled(!canSave)
             .padding(.top, 4)
+
+            // Ending a campaign for good. The service had the call all along;
+            // nothing in the editor ever offered it.
+            if let existing = editing {
+                Button { confirmDelete = true } label: {
+                    Text(deleting ? "Deleting…" : "Delete campaign")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color(red: 0.85, green: 0.40, blue: 0.34))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color(red: 0.85, green: 0.40, blue: 0.34).opacity(0.1)))
+                }
+                .buttonStyle(PressScaleStyle())
+                .disabled(deleting || saving)
+                .confirmationDialog("Delete “\(existing.title)”?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                    Button("Delete campaign", role: .destructive) {
+                        deleting = true
+                        Task {
+                            await svc.delete(existing.id)
+                            deleting = false
+                            if svc.lastError == nil { onDone(); dismiss() }
+                        }
+                    }
+                    Button("Keep it", role: .cancel) {}
+                } message: {
+                    Text("It disappears from the map and the carousel right away. This cannot be undone.")
+                }
+            }
 
             if let err = svc.lastError {
                 Text(err)

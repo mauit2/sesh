@@ -1,0 +1,11 @@
+-- 126: "I want this bar on Sejdel." The search sheet finds any bar (Apple Maps
+-- plus our own catalog). One that is on Sejdel opens its profile; one that
+-- isn't can be asked for. The owner's Business desk lists the asked-for bars
+-- with counts — the pitch to those bars.
+-- Applied 2026-09-08 as venue_requests.
+--
+-- venue_requests(venue_id, user_id)          one ask per person per bar
+-- venue_request_set(venue, on) → count       ask / take it back (refuses bars already on Sejdel)
+-- venue_requests_mine() → uuid[]             the caller's asks
+-- venue_request_counts(uuid[]) → {id: n}     counts for the bars on screen
+-- admin_venue_requests() → [...]             owner: name, city, asks, last_at, on_sejdel (private.is_app_admin)

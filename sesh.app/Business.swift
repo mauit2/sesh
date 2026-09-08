@@ -3350,13 +3350,15 @@ struct BusinessReviewView: View {
                         Text("Bars").tag(0)
                         Text("Orders").tag(1)
                         Text("Packs").tag(2)
+                        Text("Wanted").tag(3)
                     }
                     .pickerStyle(.segmented)
                     if let q = svc.queue {
                         switch tab {
                         case 0: businesses(q)
                         case 1: orders(q)
-                        default: products(q)
+                        case 2: products(q)
+                        default: WantedBarsSection()
                         }
                     } else {
                         ProgressView().tint(Color.whiskey).frame(maxWidth: .infinity).padding(.vertical, 30)
