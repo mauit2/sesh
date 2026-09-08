@@ -551,8 +551,10 @@ struct GuestListBody: View {
     @State private var days: [Int] = []
     @State private var savingDays = false
     @State private var shareFile: ShareFile?
+    @State private var manage: ManageFlag?
 
     private struct ShareFile: Identifiable { let id = UUID(); let url: URL }
+    enum ManageFlag: String, Identifiable { case favorite, blocked; var id: String { rawValue } }
 
     /// Nights with requests, from today on.
     private var nights: [String] {
@@ -573,6 +575,7 @@ struct GuestListBody: View {
             } else if let night {
                 nightPicker
                 listSection(night)
+                manageButtons
             } else {
                 BizCard {
                     Text("No one on the list yet.")
@@ -583,12 +586,10 @@ struct GuestListBody: View {
                         .foregroundStyle(Color.cream.opacity(0.65))
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                manageButtons
             }
             ErrorLine(text: error)
-            if loaded {
-                daysCard
-                regularsCard
-            }
+            if loaded { daysCard }
         }
         .task {
             days = listDays
@@ -596,6 +597,39 @@ struct GuestListBody: View {
         }
         .sheet(item: $shareFile) { f in
             ShareLinkSheet(items: [f.url]).presentationDetents([.medium, .large])
+        }
+        .sheet(item: $manage) { m in
+            GuestFlagSheet(business: business, flag: m.rawValue, recent: recentGuests, onChanged: { Task { await load() } })
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+    }
+
+    /// Everyone who has asked recently, once each, newest first — the pool to
+    /// star or block from.
+    private var recentGuests: [ListRequest] {
+        var seen: Set<UUID> = []
+        return rows.sorted { $0.createdAt > $1.createdAt }.filter { seen.insert($0.userId).inserted }
+    }
+
+    // ── favourites & blocked (Business+) ──
+    private var manageButtons: some View {
+        VStack(spacing: 8) {
+            let favs = flags.filter { $0.flag == "favorite" }.count
+            let blocked = flags.filter { $0.flag == "blocked" }.count
+            BizSecondaryButton(title: isPlus ? "MANAGE FAVOURITES · \(favs)" : "FAVOURITES · BUSINESS+", icon: "star.fill") {
+                if isPlus { manage = .favorite } else { onUpgrade() }
+            }
+            BizSecondaryButton(title: isPlus ? "MANAGE BLOCKED · \(blocked)" : "BLOCKED · BUSINESS+", icon: "hand.raised.fill") {
+                if isPlus { manage = .blocked } else { onUpgrade() }
+            }
+            Text(isPlus
+                 ? "Favourites are on the list the moment they ask. Blocked names are told the list is full."
+                 : "Business+ bars star their regulars — approved the moment they ask — and block the names they don't want at the door.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.cream.opacity(0.5))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -655,21 +689,8 @@ struct GuestListBody: View {
                         .tracking(1)
                         .foregroundStyle(Color.bronze)
                 }
-                if shown.isEmpty {
-                    Text(showPending ? "Nobody waiting." : "Nobody approved yet — check PENDING.")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.55))
-                        .padding(.vertical, 6)
-                } else {
-                    VStack(spacing: 0) {
-                        ForEach(Array(shown.enumerated()), id: \.element.id) { i, r in
-                            row(r)
-                            if i < shown.count - 1 { Divider().overlay(Color.cream.opacity(0.08)) }
-                        }
-                    }
-                }
+                // Download first — the door doesn't scroll past every name to find it.
                 if !showPending && !approved.isEmpty {
-                    kicker("DOWNLOAD THE LIST · \(ListNight.label(night).uppercased())")
                     HStack(spacing: 10) {
                         ShareLink(item: GuestListExport.text(bar: barName, night: night, rows: approved)) {
                             exportLabel("SHARE", "square.and.arrow.up")
@@ -684,6 +705,19 @@ struct GuestListBody: View {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }
                         } label: { exportLabel(copied ? "COPIED" : "COPY", "doc.on.doc") }
                             .buttonStyle(PressScaleStyle())
+                    }
+                }
+                if shown.isEmpty {
+                    Text(showPending ? "Nobody waiting." : "Nobody approved yet — check PENDING.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.55))
+                        .padding(.vertical, 6)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(shown.enumerated()), id: \.element.id) { i, r in
+                            row(r)
+                            if i < shown.count - 1 { Divider().overlay(Color.cream.opacity(0.08)) }
+                        }
                     }
                 }
             }
@@ -851,61 +885,6 @@ struct GuestListBody: View {
         }
     }
 
-    // ── regulars & blocked (Business+) ──
-    private var regularsCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            kicker("REGULARS & BLOCKED")
-            BizCard {
-                if isPlus {
-                    Text("Star a guest and they're on the list the moment they ask. Block one and they're told the list is full. Both from the ⋯ on any name.")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.6))
-                        .fixedSize(horizontal: false, vertical: true)
-                    if !flags.isEmpty {
-                        VStack(spacing: 0) {
-                            ForEach(Array(flags.enumerated()), id: \.element.id) { i, f in
-                                HStack(spacing: 10) {
-                                    Image(systemName: f.flag == "favorite" ? "star.fill" : "hand.raised.fill")
-                                        .font(.system(size: 13, weight: .bold))
-                                        .foregroundStyle(f.flag == "favorite" ? Color.whiskey : Color.cream.opacity(0.5))
-                                        .frame(width: 22)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(f.lastName ?? f.name)
-                                            .font(.system(size: 15, weight: .heavy, design: .rounded))
-                                            .foregroundStyle(Color.cream)
-                                        Text([f.instagram.map { "@\($0)" }, f.username.map { "on Sejdel as @\($0)" }].compactMap { $0 }.joined(separator: " · "))
-                                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                            .foregroundStyle(Color.bronze)
-                                    }
-                                    Spacer(minLength: 0)
-                                    Button { setFlag(f.userId, nil) } label: {
-                                        Text("CLEAR")
-                                            .font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1.2)
-                                            .foregroundStyle(Color.cream.opacity(0.7))
-                                            .padding(.horizontal, 10).padding(.vertical, 7)
-                                            .background(Capsule().fill(Color.cream.opacity(0.08)))
-                                    }
-                                    .buttonStyle(PressScaleStyle())
-                                }
-                                .padding(.vertical, 9)
-                                if i < flags.count - 1 { Divider().overlay(Color.cream.opacity(0.08)) }
-                            }
-                        }
-                    }
-                } else {
-                    Text("The list on autopilot.")
-                        .font(.system(size: 19, weight: .heavy, design: .rounded))
-                        .foregroundStyle(Color.cream)
-                    Text("Business+ bars star their regulars — approved the moment they ask — and block the names they don't want at the door.")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.65))
-                        .fixedSize(horizontal: false, vertical: true)
-                    BizPrimaryButton(title: "GO BUSINESS+") { onUpgrade() }
-                }
-            }
-        }
-    }
-
     private func setFlag(_ user: UUID, _ flag: String?) {
         guard isPlus else { onUpgrade(); return }
         error = nil
@@ -935,6 +914,151 @@ struct GuestListBody: View {
             self.error = ListRequestStore.friendly(error)
         }
         loaded = true
+    }
+}
+
+/// Favourites or blocked, managed: the names on it, cleared with a tap, and
+/// recent guests to add from. Business+.
+struct GuestFlagSheet: View {
+    let business: UUID
+    /// "favorite" | "blocked"
+    let flag: String
+    let recent: [ListRequest]
+    var onChanged: () -> Void = {}
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var store = ListRequestStore.shared
+    @State private var flags: [ListGuestFlag] = []
+    @State private var loaded = false
+    @State private var busy: UUID?
+    @State private var error: String?
+
+    private var isFav: Bool { flag == "favorite" }
+    private var mine: [ListGuestFlag] { flags.filter { $0.flag == flag } }
+    private var candidates: [ListRequest] {
+        let flagged = Set(flags.map(\.userId))
+        return recent.filter { !flagged.contains($0.userId) }
+    }
+
+    var body: some View {
+        ZStack {
+            Color.ink.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(isFav ? "Favourites" : "Blocked")
+                                .font(.system(size: 30, weight: .black, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                            Text(isFav ? "On the list the moment they ask — no approving needed."
+                                       : "Told the list is full, every time. They never know.")
+                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.65))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 12)
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.85))
+                                .padding(12).background(Circle().fill(Color.cream.opacity(0.08)))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                    }
+
+                    kicker(isFav ? "YOUR FAVOURITES · \(mine.count)" : "BLOCKED · \(mine.count)")
+                    BizCard {
+                        if !loaded {
+                            ProgressView().tint(Color.whiskey).frame(maxWidth: .infinity)
+                        } else if mine.isEmpty {
+                            Text(isFav ? "No favourites yet. Add your regulars below." : "Nobody blocked.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        } else {
+                            VStack(spacing: 0) {
+                                ForEach(Array(mine.enumerated()), id: \.element.id) { i, f in
+                                    person(name: f.lastName ?? f.name, instagram: f.instagram, username: f.username) {
+                                        actionButton("CLEAR", filled: false, id: f.userId) { set(f.userId, nil) }
+                                    }
+                                    if i < mine.count - 1 { Divider().overlay(Color.cream.opacity(0.08)) }
+                                }
+                            }
+                        }
+                    }
+
+                    kicker("ADD FROM RECENT GUESTS")
+                    BizCard {
+                        if candidates.isEmpty {
+                            Text("Everyone who has asked recently is already on one of your lists.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.55))
+                        } else {
+                            VStack(spacing: 0) {
+                                ForEach(Array(candidates.enumerated()), id: \.element.id) { i, r in
+                                    person(name: r.fullName, instagram: r.instagram, username: r.userUsername) {
+                                        actionButton(isFav ? "STAR" : "BLOCK", filled: true, id: r.userId) { set(r.userId, flag) }
+                                    }
+                                    if i < candidates.count - 1 { Divider().overlay(Color.cream.opacity(0.08)) }
+                                }
+                            }
+                        }
+                    }
+                    ErrorLine(text: error)
+                    Spacer(minLength: 20)
+                }
+                .padding(20)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .task { await load() }
+    }
+
+    private func person(name: String, instagram: String?, username: String?, @ViewBuilder trailing: () -> some View) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(name)
+                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color.cream)
+                HStack(spacing: 8) {
+                    if let insta = instagram, let url = URL(string: "https://instagram.com/\(insta)") {
+                        InstagramLink(handle: insta, url: url, compact: true)
+                    }
+                    if let u = username {
+                        Text("@\(u)")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.bronze)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+            trailing()
+        }
+        .padding(.vertical, 9)
+    }
+
+    private func actionButton(_ title: String, filled: Bool, id: UUID, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(busy == id ? "…" : title)
+                .font(.system(size: 10, weight: .black, design: .monospaced)).tracking(1.2)
+                .foregroundStyle(filled ? Color.ink : Color.cream.opacity(0.7))
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Capsule().fill(filled ? Color.whiskey : Color.cream.opacity(0.08)))
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(busy != nil)
+    }
+
+    private func load() async {
+        flags = (try? await store.flags(for: business)) ?? []
+        loaded = true
+    }
+
+    private func set(_ user: UUID, _ value: String?) {
+        busy = user; error = nil
+        Task {
+            do { try await store.setFlag(business: business, user: user, flag: value); await load(); onChanged() }
+            catch { self.error = ListRequestStore.friendly(error) }
+            busy = nil
+        }
     }
 }
 
