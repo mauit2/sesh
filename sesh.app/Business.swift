@@ -794,20 +794,17 @@ final class BusinessStore: ObservableObject {
     }
 
     /// Re-check StoreKit's current entitlements for these bars and report
-    /// them — on open, after "restore", and when a renewal lands.
+    /// them — on open, after "restore", and when a renewal lands. Only what
+    /// StoreKit positively knows is reported: an empty answer (sandbox
+    /// hiccup, a bar set up outside StoreKit) must never read as "cancelled"
+    /// and revert an account. Lapses are the server's call, from the renewal
+    /// date it was given.
     func syncSubscriptions(for businesses: [UUID]) async {
         guard !businesses.isEmpty else { return }
-        var seen = Set<UUID>()
         for await entitlement in Transaction.currentEntitlements {
             guard case .verified(let txn) = entitlement, BizTier.ids.contains(txn.productID), txn.revocationDate == nil else { continue }
             let business = txn.appAccountToken.flatMap { businesses.contains($0) ? $0 : nil } ?? businesses[0]
-            seen.insert(business)
             try? await report(business: business, txn, jws: entitlement.jwsRepresentation)
-        }
-        // No entitlement at all for a bar → tell the server it lapsed.
-        for b in businesses where !seen.contains(b) {
-            try? await BusinessService().syncSubscription(business: b, productId: nil, originalTransactionId: nil,
-                                                          expiresAt: nil, transactionId: nil, jws: nil)
         }
     }
 
