@@ -63,6 +63,11 @@ struct SideMenuModifier: ViewModifier {
             .opacity(isOpen ? 1 : 0)
             .allowsHitTesting(isOpen)
             .accessibilityHidden(!isOpen)
+            // A bar's MESSAGE button: over to the DMs, wherever we were.
+            .onReceive(NotificationCenter.default.publisher(for: .sejdelOpenChat)) { _ in
+                if isOpen { close() }
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = .chats }
+            }
 
             // The app itself: the top layer, pushed aside. While the menu is
             // open the visible sliver is only a way back — tap it or swipe

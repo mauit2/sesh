@@ -1972,6 +1972,9 @@ private struct OffersMapView: View {
         }
         // The venue card is a real sheet — reliable buttons + dismiss, and the
         // medium detent leaves the pin visible on the map above it.
+        // MESSAGE on a bar's profile (opened from this card): drop the card so
+        // the chat isn't underneath it.
+        .onReceive(NotificationCenter.default.publisher(for: .sejdelOpenChat)) { _ in selectedVenue = nil }
         .sheet(item: $selectedVenue) { venue in
             // A normal modal sheet keeps every button working; the map + pin
             // stay visible (dimmed) in the top half at the medium detent.

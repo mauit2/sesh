@@ -13,7 +13,7 @@ struct DMMessage: Codable, Identifiable, Equatable {
     let id: UUID
     let senderId: UUID
     let recipientId: UUID
-    let kind: String            // "text" | "story_reply" | "story_like"
+    let kind: String            // "text" | "story_reply" | "story_like" | "list_request"
     let body: String?
     let storyId: UUID?
     let storyPath: String?
@@ -23,6 +23,8 @@ struct DMMessage: Codable, Identifiable, Equatable {
     /// nil only for locally-constructed optimistic rows — the default keeps
     /// the memberwise init unchanged for every optimistic construction site.
     var updatedAt: Date? = nil
+    /// The guest-list request this message carries (migration 123).
+    var listRequestId: UUID? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, kind, body
@@ -33,6 +35,7 @@ struct DMMessage: Codable, Identifiable, Equatable {
         case createdAt = "created_at"
         case readAt = "read_at"
         case updatedAt = "updated_at"
+        case listRequestId = "list_request_id"
     }
 
     /// Thumbnail of the story this message reacted to — renders while the
@@ -40,6 +43,33 @@ struct DMMessage: Codable, Identifiable, Equatable {
     var storyURL: URL? {
         guard let storyPath else { return nil }
         return try? supabase.storage.from("stories").getPublicURL(path: storyPath)
+    }
+}
+
+/// Room for the pinned tab bar under a chat's composer. The root's
+/// safeAreaInset reaches the threads list but not a pushed thread, so the
+/// thread pads itself; 0 while the keyboard is up (the composer rides it).
+private struct ChatBottomInsetKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+extension EnvironmentValues {
+    var chatBottomInset: CGFloat {
+        get { self[ChatBottomInsetKey.self] }
+        set { self[ChatBottomInsetKey.self] = newValue }
+    }
+}
+
+/// The person on the other side of a chat — what the DMs need and nothing
+/// more. Bars aren't friends, so this comes from `dm_partners`, not the
+/// profiles table.
+struct DMPartner: Decodable, Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    let username: String?
+    let avatarURL: String?
+    let businessId: UUID?
+    enum CodingKeys: String, CodingKey {
+        case id, name, username
+        case avatarURL = "avatar_url"
+        case businessId = "business_id"
     }
 }
 
@@ -55,7 +85,7 @@ final class DMService: ObservableObject {
     }
 
     @Published private(set) var messages: [DMMessage] = []
-    @Published private(set) var profilesById: [UUID: Profile] = [:]
+    @Published private(set) var profilesById: [UUID: DMPartner] = [:]
     private var myId: UUID? { supabase.auth.currentUser?.id }
     private var pollTask: Task<Void, Never>?
 
@@ -156,18 +186,23 @@ final class DMService: ObservableObject {
 
             let partners = Set(changed.map { $0.senderId == me ? $0.recipientId : $0.senderId })
                 .subtracting(profilesById.keys)
-            if !partners.isEmpty {
-                let ps: [Profile] = try await supabase
-                    .from("profiles")
-                    .select()
-                    .in("id", values: partners.map { $0.uuidString.lowercased() })
-                    .execute()
-                    .value
-                for p in ps { profilesById[p.id] = p }
-            }
+            await hydrate(partners)
         } catch {
             // Transient — next poll recovers.
         }
+    }
+
+    private func hydrate(_ ids: Set<UUID>) async {
+        guard !ids.isEmpty else { return }
+        struct P: Encodable { let p_ids: [String] }
+        if let rows: [DMPartner] = try? await supabase.rpc("dm_partners", params: P(p_ids: ids.map { $0.uuidString.lowercased() })).execute().value {
+            for p in rows { profilesById[p.id] = p }
+        }
+    }
+
+    /// A thread opened before any message exists (a bar's MESSAGE button).
+    func ensurePartner(_ id: UUID) async {
+        if profilesById[id] == nil { await hydrate([id]) }
     }
 
     private struct InsertRow: Encodable {
@@ -261,6 +296,9 @@ struct ChatsView: View {
 
     @State private var openThread: UUID?
     @State private var composeOpen = false
+    @ObservedObject private var deepLink = ChatDeepLink.shared
+    /// Names for threads opened from outside before the partner hydrates.
+    @State private var fallbackNames: [UUID: String] = [:]
 
     var body: some View {
         NavigationStack {
@@ -275,7 +313,14 @@ struct ChatsView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(item: $openThread) { other in
                 ChatThreadView(dm: dm, feed: feed, profile: profile, other: other,
-                               fallbackName: friends.friends.first(where: { $0.id == other })?.name)
+                               fallbackName: friends.friends.first(where: { $0.id == other })?.name ?? fallbackNames[other])
+            }
+            // "MESSAGE" on a bar's profile lands here with the person to open.
+            .onReceive(deepLink.$pending) { ref in
+                guard let ref else { return }
+                fallbackNames[ref.id] = ref.name
+                openThread = ref.id
+                deepLink.pending = nil
             }
             .sheet(isPresented: $composeOpen) {
                 NewChatPicker(friends: friends) { friendId in
@@ -406,6 +451,7 @@ struct ChatsView: View {
         switch m.kind {
         case "story_like":  return mine ? "You liked their story ❤️" : "Liked your story ❤️"
         case "story_reply": return (mine ? "You: " : "") + "↩︎ " + (m.body ?? "")
+        case "list_request": return (mine ? "You: " : "") + (m.body ?? "🎟 List request")
         default:            return (mine ? "You: " : "") + (m.body ?? "")
         }
     }
@@ -534,9 +580,14 @@ struct ChatThreadView: View {
 
     @State private var draft = ""
     @State private var openProfile: ProfileRef?
+    @State private var openBusiness: BizRef?
+    @State private var listSheetOpen = false
     @FocusState private var composerFocused: Bool
+    @Environment(\.chatBottomInset) private var bottomInset
 
-    private var otherProfile: Profile? { dm.profilesById[other] }
+    private var otherProfile: DMPartner? { dm.profilesById[other] }
+    /// Chatting with a bar (and not being one): the quick commands show.
+    private var canRequestList: Bool { otherProfile?.businessId != nil && profile.businessId == nil }
     private var otherRef: ProfileRef {
         ProfileRef(id: other, name: otherProfile?.name ?? fallbackName ?? "Chat",
                    username: otherProfile?.username, avatar: otherProfile?.avatarURL)
@@ -583,6 +634,28 @@ struct ChatThreadView: View {
                     }
                 }
 
+                // Quick commands — what you'd ask a bar anyway.
+                if canRequestList {
+                    HStack {
+                        Button { listSheetOpen = true } label: {
+                            HStack(spacing: 7) {
+                                Image(systemName: "ticket.fill")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                Text("Get on the list")
+                                    .font(.system(size: 13, weight: .heavy, design: .rounded))
+                            }
+                            .foregroundStyle(Color.whiskey)
+                            .padding(.horizontal, 14).padding(.vertical, 9)
+                            .background(Capsule().fill(Color.whiskey.opacity(0.12)))
+                            .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1))
+                        }
+                        .buttonStyle(PressScaleStyle())
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 10)
+                    .background(Color.inkElev)
+                }
                 HStack(spacing: 10) {
                     TextField(
                         "", text: $draft,
@@ -616,6 +689,7 @@ struct ChatThreadView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
+                .padding(.bottom, bottomInset)
                 .background(Color.inkElev)
             }
         }
@@ -626,7 +700,7 @@ struct ChatThreadView: View {
             // Tappable name/avatar → the friend's profile feed.
             ToolbarItem(placement: .principal) {
                 Button {
-                    openProfile = otherRef
+                    if let bid = otherProfile?.businessId { openBusiness = BizRef(id: bid) } else { openProfile = otherRef }
                 } label: {
                     HStack(spacing: 7) {
                         AvatarView(
@@ -646,6 +720,21 @@ struct ChatThreadView: View {
             ProfileFeedView(user: ref, feed: feed)
                 .presentationBackground(Color.ink)
         }
+        .sheet(item: $openBusiness) { ref in
+            BusinessProfileView(businessId: ref.id)
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+        .sheet(isPresented: $listSheetOpen) {
+            if let bid = otherProfile?.businessId {
+                ListRequestSheet(business: bid, barName: otherProfile?.name ?? fallbackName ?? "The bar", profile: profile) {
+                    Task { await dm.refresh() }
+                }
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+            }
+        }
+        .task { await dm.ensurePartner(other) }
         .onAppear {
             let t: Task<Void, Never> = Task { await dm.markRead(with: other) }
             _ = t
@@ -663,7 +752,7 @@ struct ChatThreadView: View {
             if mine { Spacer(minLength: 48) }
             VStack(alignment: mine ? .trailing : .leading, spacing: 4) {
                 // Story context chip for reactions/replies.
-                if m.kind != "text" {
+                if m.kind == "story_like" || m.kind == "story_reply" {
                     HStack(spacing: 6) {
                         if let url = m.storyURL {
                             DownsampledAsyncImage(url: url, targetPoints: 44, placeholder: Color.smoke)
@@ -677,7 +766,11 @@ struct ChatThreadView: View {
                             .foregroundStyle(Color.bronze)
                     }
                 }
-                if m.kind == "story_like" {
+                if m.kind == "list_request", let rid = m.listRequestId {
+                    ListRequestBubble(requestId: rid, fallback: m.body, mine: mine,
+                                      decider: !mine && profile.businessId != nil,
+                                      onDecided: { Task { await dm.refresh() } })
+                } else if m.kind == "story_like" {
                     Text("❤️")
                         .font(.system(size: 30, design: .rounded))
                 } else if let body = m.body {

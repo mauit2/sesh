@@ -105,7 +105,7 @@ enum BizTier {
 
 /// The business tools in the ☰ menu — each opens one slice of the dashboard.
 enum BizTool: String, Identifiable, CaseIterable {
-    case profile, plan, stats, deals, boost, card, push, qr
+    case profile, plan, stats, deals, list, boost, card, push, qr
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -113,6 +113,7 @@ enum BizTool: String, Identifiable, CaseIterable {
         case .plan:    return "Plan"
         case .stats:   return "Stats"
         case .deals:   return "Deals"
+        case .list:    return "Guest list"
         case .boost:   return "Boost a post"
         case .card:    return "App-open card"
         case .push:    return "Push notification"
@@ -125,6 +126,7 @@ enum BizTool: String, Identifiable, CaseIterable {
         case .plan:    return "creditcard"
         case .stats:   return "chart.bar.fill"
         case .deals:   return "tag.fill"
+        case .list:    return "list.clipboard.fill"
         case .boost:   return "bolt.fill"
         case .card:    return "rectangle.portrait.on.rectangle.portrait.angled"
         case .push:    return "bell.badge.fill"
@@ -137,6 +139,7 @@ enum BizTool: String, Identifiable, CaseIterable {
         case .plan:    return "Your plan"
         case .stats:   return "How it's going"
         case .deals:   return "Deals on your pin"
+        case .list:    return "The list"
         case .boost:   return "Boost a post"
         case .card:    return "App-open card"
         case .push:    return "Push notification"
@@ -1619,6 +1622,7 @@ struct BusinessDashboard: View {
             case .profile: profileCard(ov)
             case .plan:    planBody(ov)
             case .stats:   statsBody(ov)
+            case .list:    GuestListBody(business: ov.business.id, barName: ov.business.name)
             case .deals:   dealsSection(ov)
             case .boost:   boostBody(ov)
             case .card:    cardSection(ov)

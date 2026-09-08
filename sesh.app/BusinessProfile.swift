@@ -670,6 +670,8 @@ struct BusinessProfileView: View {
             let venueCity: String?
             let followers: Int
             let following: Bool
+            /// The account that IS the bar — who a message goes to.
+            let accountId: UUID?
             enum CodingKeys: String, CodingKey {
                 case id, name, username, tagline, tier, followers, following
                 case logoUrl = "logo_url"
@@ -677,6 +679,7 @@ struct BusinessProfileView: View {
                 case venueId = "venue_id"
                 case venueName = "venue_name"
                 case venueCity = "venue_city"
+                case accountId = "account_id"
             }
         }
         struct Post: Decodable, Identifiable {
@@ -836,6 +839,21 @@ struct BusinessProfileView: View {
                 .padding(.top, 2)
             HStack(spacing: 10) {
                 FollowButton(businessId: b.id)
+                if let acc = b.accountId, acc != supabase.auth.currentUser?.id {
+                    Button {
+                        dismiss()
+                        ChatDeepLink.open(id: acc, name: b.name)
+                    } label: {
+                        Label("MESSAGE", systemImage: "bubble.right.fill")
+                            .font(.system(size: 10, weight: .black, design: .monospaced))
+                            .tracking(1.4)
+                            .foregroundStyle(Color.whiskey)
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .background(Capsule().fill(Color.whiskey.opacity(0.1)))
+                            .overlay(Capsule().strokeBorder(Color.whiskey.opacity(0.4), lineWidth: 1))
+                    }
+                    .buttonStyle(PressScaleStyle())
+                }
                 if let onShowOnMap {
                     Button {
                         dismiss()

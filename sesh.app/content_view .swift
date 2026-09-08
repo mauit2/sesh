@@ -6871,6 +6871,7 @@ private struct SessionView: View {
     /// CHATS — DM threads (story likes/replies land here too).
     private var chatsPage: some View {
         ChatsView(dm: dm, friends: friends, feed: feed, profile: profile)
+            .environment(\.chatBottomInset, keyboardUp ? 0 : tabBarHeight)
     }
 
     private var timelineFeed: some View {
