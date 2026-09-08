@@ -2775,6 +2775,8 @@ enum RelativeTime {
         let plain = ISO8601DateFormatter()
         let date = withFrac.date(from: iso) ?? plain.date(from: iso)
         guard let date else { return "" }
+        // Clocks drift: a comment posted a second ago must never read "in 0s".
+        if date.timeIntervalSinceNow > -60 { return "now" }
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .abbreviated
         return f.localizedString(for: date, relativeTo: Date())

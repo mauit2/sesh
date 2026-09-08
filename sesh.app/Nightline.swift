@@ -1490,6 +1490,7 @@ struct TimelineFeedView: View {
     /// Fly the Deals map to a bar (venue id) — from a bar's post or profile.
     var onShowVenueOnMap: (UUID) -> Void = { _ in }
     @State private var openBusiness: BizRef?
+    @State private var openBusinessPost: BusinessPost?
     /// Sponsored posts (BillboardFeedCard), by slot ordinal — nil when there's
     /// nothing left to show in that slot. The first sits high, after the
     /// first or second post (drawn once per appearance, so it isn't always
@@ -1565,7 +1566,8 @@ struct TimelineFeedView: View {
                         case .bar(let post):
                             BusinessPostCard(post: post,
                                              onOpenBusiness: { openBusiness = BizRef(id: post.businessId) },
-                                             onShowOnMap: { onShowVenueOnMap(post.venueId) })
+                                             onShowOnMap: { onShowVenueOnMap(post.venueId) },
+                                             onOpen: { openBusinessPost = post })
                                 .padding(.horizontal, 16)
                         case .night(let post):
                         PostCard(post: post,
@@ -1637,6 +1639,12 @@ struct TimelineFeedView: View {
         // A bar's profile, opened from one of its posts.
         .sheet(item: $openBusiness) { ref in
             BusinessProfileView(businessId: ref.id, onShowOnMap: onShowVenueOnMap)
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+        // A bar's post, opened like any post: comments and all.
+        .sheet(item: $openBusinessPost) { p in
+            BusinessPostDetailSheet(post: p)
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }

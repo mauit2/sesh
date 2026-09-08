@@ -56,53 +56,6 @@ struct PlanCardPrice: View {
     }
 }
 
-/// One of the bar's own posts, opened from its profile grid.
-struct OwnerPostSheet: View {
-    @ObservedObject var svc: BusinessService
-    let post: BusinessOverview.Post
-    var onDone: () -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var deleting = false
-
-    var body: some View {
-        ZStack {
-            Color.ink.ignoresSafeArea()
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 16) {
-                    if let ov = svc.overview {
-                        BusinessPostCard(post: BusinessPost(
-                            id: post.id, businessId: ov.business.id, businessName: ov.business.name, username: ov.business.username,
-                            logoUrl: ov.business.logoUrl, venueId: ov.business.venueId ?? UUID(),
-                            venueName: ov.business.venueName, venueCity: ov.business.venueCity,
-                            imageUrl: post.imageUrl, imageUrls: post.imageUrls, imageRatio: post.imageRatio, caption: post.caption,
-                            eventAt: nil, offerId: post.offerId, createdAt: ISO8601DateFormatter().string(from: post.createdAt)
-                        ))
-                        if let b = post.boost, b.status != "pending" {
-                            Text(b.status == "done" ? "Boost done · \(b.views.formatted()) views · \(b.taps) taps"
-                                 : "Boosted · \(b.views.formatted()) / \(b.goalViews.formatted()) views")
-                                .font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(Color.whiskey)
-                        }
-                        Button {
-                            deleting = true
-                            Task { try? await svc.deletePost(post.id, business: ov.business.id); onDone(); dismiss() }
-                        } label: {
-                            Text(deleting ? "Deleting…" : "Delete post")
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                .foregroundStyle(Color.cream.opacity(0.5)).underline()
-                        }
-                        .buttonStyle(.plain)
-                        .frame(maxWidth: .infinity)
-                    }
-                    Spacer(minLength: 24)
-                }
-                .padding(20)
-                .padding(.top, 16)
-            }
-        }
-        .preferredColorScheme(.dark)
-    }
-}
-
 /// The blue-tick equivalent: every business account is a verified bar.
 struct VerifiedBadge: View {
     var size: CGFloat = 14
@@ -123,7 +76,7 @@ struct BusinessOwnerProfilePage: View {
     let profile: Profile
     @State private var selected: BusinessOverview.Post?
     @State private var planOpen = false
-    private let cols = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -174,9 +127,21 @@ struct BusinessOwnerProfilePage: View {
                 .presentationBackground(Color.ink)
         }
         .sheet(item: $selected) { p in
-            OwnerPostSheet(svc: svc, post: p) { selected = nil }
+            if let ov = svc.overview {
+                BusinessPostDetailSheet(post: BusinessPost(
+                    id: p.id, businessId: ov.business.id, businessName: ov.business.name, username: ov.business.username,
+                    logoUrl: ov.business.logoUrl, venueId: ov.business.venueId ?? UUID(),
+                    venueName: ov.business.venueName, venueCity: ov.business.venueCity,
+                    imageUrl: p.imageUrl, imageUrls: p.imageUrls, imageRatio: p.imageRatio, caption: p.caption,
+                    eventAt: nil, offerId: p.offerId, createdAt: ISO8601DateFormatter().string(from: p.createdAt),
+                    likeCount: p.likeCount, likedByMe: p.likedByMe, commentCount: p.commentCount, views: p.views
+                ), isOwner: true, onDelete: {
+                    try? await svc.deletePost(p.id, business: ov.business.id)
+                    selected = nil
+                })
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
+            }
         }
     }
 
@@ -196,14 +161,14 @@ struct BusinessOwnerProfilePage: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 40)
         } else {
-            LazyVGrid(columns: cols, spacing: 3) {
+            LazyVGrid(columns: cols, spacing: 6) {
                 ForEach(list) { p in
                     Button { selected = p } label: {
                         Color.cream.opacity(0.06)
                             .overlay { if let u = URL(string: p.imageUrl) { DownsampledAsyncImage(url: u, targetPoints: 160) } }
                             .aspectRatio(3.0 / 4.0, contentMode: .fit)
                             .frame(maxWidth: .infinity)
-                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .overlay(alignment: .topTrailing) {
                                 if (p.imageUrls?.count ?? 1) > 1 {
                                     Image(systemName: "square.on.square.fill")
@@ -222,7 +187,6 @@ struct BusinessOwnerProfilePage: View {
                     .buttonStyle(PressScaleStyle())
                 }
             }
-            .padding(.horizontal, -6)
         }
     }
 
@@ -342,34 +306,33 @@ struct BusinessEventsPage: View {
                     }
                     Spacer()
                 }
-                .padding(12)
+                .padding(10)
                 Color.clear
-                    .aspectRatio(1.6, contentMode: .fit)
+                    .aspectRatio(2.6, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .overlay {
                         ZStack {
                             LinearGradient(colors: [Color.whiskey.opacity(0.9), Color.bronze.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                            VStack(spacing: 4) {
-                                Text("DJ NIGHT").font(.system(size: 34, weight: .black, design: .rounded)).foregroundStyle(Color.ink)
-                                Text("FRIDAY · 22:00").font(.system(size: 13, weight: .black, design: .monospaced)).tracking(2).foregroundStyle(Color.ink.opacity(0.8))
+                            VStack(spacing: 2) {
+                                Text("DJ NIGHT").font(.system(size: 26, weight: .black, design: .rounded)).foregroundStyle(Color.ink)
+                                Text("FRIDAY · 22:00").font(.system(size: 11, weight: .black, design: .monospaced)).tracking(2).foregroundStyle(Color.ink.opacity(0.8))
                             }
                         }
                     }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("DJ night · free entry before 23").font(.system(size: 17, weight: .heavy, design: .rounded)).foregroundStyle(Color.cream)
-                    Text("Fri 22:00 · \(ov.business.venueCity ?? "your city")").font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(Color.whiskey)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("DJ night · free entry before 23").font(.system(size: 15, weight: .heavy, design: .rounded)).foregroundStyle(Color.cream)
+                    Text("Fri 22:00 · \(ov.business.venueCity ?? "your city")").font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Color.whiskey)
                 }
-                .padding(14)
+                .padding(10)
             }
             .background(Color.cream.opacity(0.04))
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.whiskey.opacity(0.35), lineWidth: 1))
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 perk("calendar.badge.plus", "In their calendar. Lands in every follower's upcoming events.")
                 perk("bell.badge.fill", "In their pocket. A push to every follower the moment you post it.")
                 perk("person.crop.circle.badge.checkmark", "On your profile. Anyone who finds you sees what's coming.")
-                perk("camera.fill", "Takes a minute. A picture, a title, a date and time.")
             }
             PlanCardPrice(price: BusinessStore.shared.displayPrice(BizTier.plus, fallbackSek: ov.product(BizTier.plus)?.amountSek ?? 0))
             BizPrimaryButton(title: "GO BUSINESS+") { upgradeOpen = true }

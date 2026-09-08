@@ -133,14 +133,14 @@ enum BizTool: String, Identifiable, CaseIterable {
     }
     var sheetTitle: String {
         switch self {
-        case .profile: return "Your profile."
-        case .plan:    return "Your plan."
-        case .stats:   return "How it's going."
-        case .deals:   return "Deals on your pin."
-        case .boost:   return "Boost a post."
-        case .card:    return "App-open card."
-        case .push:    return "Push notification."
-        case .qr:      return "QR codes."
+        case .profile: return "Your profile"
+        case .plan:    return "Your plan"
+        case .stats:   return "How it's going"
+        case .deals:   return "Deals on your pin"
+        case .boost:   return "Boost a post"
+        case .card:    return "App-open card"
+        case .push:    return "Push notification"
+        case .qr:      return "QR codes"
         }
     }
 }
@@ -222,6 +222,10 @@ struct BusinessOverview: Decodable {
         let offerId: UUID?
         let createdAt: Date
         let boost: Boost?
+        let likeCount: Int?
+        let likedByMe: Bool?
+        let commentCount: Int?
+        let views: Int?
     }
     struct Card: Decodable, Identifiable {
         let id: UUID
@@ -1185,6 +1189,7 @@ private struct PlanCard: View {
             ("checkmark.seal.fill", "Everything in Business."),
             ("photo.fill", "Poster, not a pin. Your photo on the map — impossible to miss."),
             ("bolt.fill", "Boost a post. Sponsored in every feed nearby, and a billboard on the map."),
+            ("party.popper.fill", "Events. Your nights in every follower's calendar, with a push."),
             ("bell.badge.fill", "Push it. A notification to your city every time you drop a deal."),
             ("square.stack.3d.up.fill", "Several deals live at once, on your profile and your poster."),
             ("rectangle.portrait.on.rectangle.portrait.angled.fill", "App-open card. Full screen the moment someone nearby opens the app."),
@@ -1612,13 +1617,29 @@ struct BusinessDashboard: View {
         } else {
             switch tool {
             case .profile: profileCard(ov)
-            case .plan:    tierCard(ov)
+            case .plan:    planBody(ov)
             case .stats:   statsBody(ov)
             case .deals:   dealsSection(ov)
             case .boost:   boostBody(ov)
             case .card:    cardSection(ov)
             case .push:    pushSection(ov)
             case .qr:      qrSection(ov)
+            }
+        }
+    }
+
+    // ── plan: what you have, and what you're missing ──
+    private func planBody(_ ov: BusinessOverview) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            tierCard(ov, showUpgrade: false)
+            if !ov.isPlus {
+                kicker("WHAT YOU'RE MISSING")
+                PlanCard(plus: true,
+                         price: store.displayPrice(BizTier.plus, fallbackSek: ov.product(BizTier.plus)?.amountSek ?? 0),
+                         cta: "GO BUSINESS+", busy: subscribing == BizTier.plus, enabled: subscribing == nil) { subscribe(BizTier.plus) }
+                if let n = subscribeNote {
+                    Text(n).font(.system(size: 13, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream.opacity(0.7))
+                }
             }
         }
     }
@@ -1771,7 +1792,7 @@ struct BusinessDashboard: View {
     }
 
     // ── subscribed ──
-    private func tierCard(_ ov: BusinessOverview) -> some View {
+    private func tierCard(_ ov: BusinessOverview, showUpgrade: Bool = true) -> some View {
         BizCard {
             HStack {
                 StatusPill(state: BizState(label: BizTier.label(ov.business.tier), color: ov.isPlus ? .whiskey : BizState.liveGreen))
@@ -1784,11 +1805,11 @@ struct BusinessDashboard: View {
             Text(ov.isPlus ? "Poster on the map · boosts · pushes · several deals at once" : "Pin on the map · profile · posts · one deal at a time")
                 .font(.system(size: 14, weight: .medium, design: .rounded)).foregroundStyle(Color.cream.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
-            if !ov.isPlus {
+            if !ov.isPlus && showUpgrade {
                 BizPrimaryButton(title: "GO BUSINESS+ · \(store.displayPrice(BizTier.plus, fallbackSek: ov.product(BizTier.plus)?.amountSek ?? 0)) / MO",
                                  enabled: subscribing == nil, busy: subscribing == BizTier.plus) { subscribe(BizTier.plus) }
             }
-            if let n = subscribeNote {
+            if let n = subscribeNote, showUpgrade {
                 Text(n).font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundStyle(Color.cream.opacity(0.7))
             }
             Button {
@@ -3189,7 +3210,7 @@ struct BusinessUpgradeSheet: View {
             Color.ink.ignoresSafeArea()
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
-                    SheetHeader(eyebrow: "", title: "Go Business+.", onClose: { dismiss() }, big: true)
+                    SheetHeader(eyebrow: "", title: "Go Business+", onClose: { dismiss() }, big: true)
                     PlanCard(plus: true,
                              price: store.displayPrice(BizTier.plus, fallbackSek: overview.product(BizTier.plus)?.amountSek ?? 0),
                              cta: "GO BUSINESS+", busy: busy, enabled: !busy) { upgrade() }
@@ -3232,7 +3253,7 @@ struct BusinessToolSheet: View {
             Color.ink.ignoresSafeArea()
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
-                    SheetHeader(eyebrow: tool.title.uppercased(), title: tool.sheetTitle, onClose: { dismiss() })
+                    SheetHeader(eyebrow: "", title: tool.sheetTitle, onClose: { dismiss() })
                     if let b = svc.mine.first {
                         BusinessDashboard(summary: b, svc: svc, tool: tool)
                     } else if svc.loaded {

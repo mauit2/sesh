@@ -55,9 +55,16 @@ struct BusinessPost: Decodable, Identifiable, Equatable {
     let eventAt: String?
     let offerId: UUID?
     let createdAt: String
+    var likeCount: Int? = nil
+    var likedByMe: Bool? = nil
+    var commentCount: Int? = nil
+    var views: Int? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, caption, username
+        case id, caption, username, views
+        case likeCount = "like_count"
+        case likedByMe = "liked_by_me"
+        case commentCount = "comment_count"
         case businessId = "business_id"
         case businessName = "business_name"
         case logoUrl = "logo_url"
@@ -275,6 +282,67 @@ struct BusinessPosterBanner: View {
     }
 }
 
+// MARK: - Likes & comments
+
+struct BusinessComment: Decodable, Identifiable {
+    let id: UUID
+    let userId: UUID
+    let name: String
+    let username: String?
+    let avatarUrl: String?
+    let body: String
+    let createdAt: String
+    let mine: Bool
+    enum CodingKeys: String, CodingKey {
+        case id, name, username, body, mine
+        case userId = "user_id"
+        case avatarUrl = "avatar_url"
+        case createdAt = "created_at"
+    }
+}
+
+/// Like and comment counts for bars' posts, shared by every card showing the
+/// same post so a tap in the feed shows on the profile too. Optimistic.
+@MainActor
+final class BusinessPostSocial: ObservableObject {
+    static let shared = BusinessPostSocial()
+    @Published private(set) var likeCount: [UUID: Int] = [:]
+    @Published private(set) var liked: Set<UUID> = []
+    @Published private(set) var commentCount: [UUID: Int] = [:]
+    private var seeded: Set<UUID> = []
+
+    /// First sighting of a post seeds the counts the server sent.
+    func seed(_ post: BusinessPost) {
+        guard !seeded.contains(post.id) else { return }
+        seeded.insert(post.id)
+        if let n = post.likeCount { likeCount[post.id] = n }
+        if post.likedByMe == true { liked.insert(post.id) }
+        if let n = post.commentCount { commentCount[post.id] = n }
+    }
+    func likes(_ post: BusinessPost) -> Int { likeCount[post.id] ?? post.likeCount ?? 0 }
+    func isLiked(_ post: BusinessPost) -> Bool { seeded.contains(post.id) ? liked.contains(post.id) : (post.likedByMe ?? false) }
+    func comments(_ post: BusinessPost) -> Int { commentCount[post.id] ?? post.commentCount ?? 0 }
+
+    func toggleLike(_ post: BusinessPost) async {
+        seed(post)
+        let on = !liked.contains(post.id)
+        if on { liked.insert(post.id) } else { liked.remove(post.id) }
+        likeCount[post.id] = max(0, likes(post) + (on ? 1 : -1))
+        struct P: Encodable { let p_post: String; let p_on: Bool }
+        if let n: Int = try? await supabase.rpc("business_post_like", params: P(p_post: post.id.uuidString.lowercased(), p_on: on)).execute().value {
+            likeCount[post.id] = n
+        } else {
+            if on { liked.remove(post.id) } else { liked.insert(post.id) }
+            likeCount[post.id] = max(0, likes(post) + (on ? -1 : 1))
+        }
+    }
+
+    func noteComment(_ post: BusinessPost, delta: Int) {
+        seed(post)
+        commentCount[post.id] = max(0, comments(post) + delta)
+    }
+}
+
 // MARK: - Post card
 
 /// A bar's post in the feed or on its profile: the bar as the author, the
@@ -284,6 +352,26 @@ struct BusinessPostCard: View {
     var showHeader = true
     var onOpenBusiness: () -> Void = {}
     var onShowOnMap: (() -> Void)? = nil
+    /// The bar sees its view count; guests don't.
+    var showViews = false
+    /// Being on screen counts as a view — except for the bar looking at itself.
+    var countsView = true
+    /// Tap the picture or the comment bubble: open the post. Inside the
+    /// detail sheet there's nothing further to open.
+    var onOpen: (() -> Void)? = nil
+    var inDetail = false
+    @ObservedObject private var social = BusinessPostSocial.shared
+    @ObservedObject private var ratios = ImageRatioCache.shared
+    @State private var detailOpen = false
+
+    /// The picture's own ratio once it has loaded — the stored one is only a
+    /// first guess for the box.
+    private var ratio: CGFloat { CampaignArt.clampFeed(ratios.ratio(for: post.images.first) ?? post.ratio) }
+
+    private func open() {
+        if inDetail { return }
+        if let onOpen { onOpen() } else { detailOpen = true }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -317,7 +405,7 @@ struct BusinessPostCard: View {
 
             // One picture, or the slideshow — same box, page dots when it swipes.
             Color.clear
-                .aspectRatio(post.ratio, contentMode: .fit)
+                .aspectRatio(ratio, contentMode: .fit)
                 .frame(maxWidth: .infinity)
                 .overlay {
                     if post.images.count > 1 {
@@ -332,6 +420,43 @@ struct BusinessPostCard: View {
                     }
                 }
                 .clipped()
+                .contentShape(Rectangle())
+                .onTapGesture { open() }
+
+            // Like · comment (· views for the bar) — the same strip a night has.
+            HStack(spacing: 18) {
+                let liked = social.isLiked(post)
+                Button { Task { await social.toggleLike(post) } } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: liked ? "heart.fill" : "heart")
+                            .font(.system(size: 23, weight: .semibold, design: .rounded))
+                            .foregroundStyle(liked ? Status.drunk.color : Color.cream.opacity(0.85))
+                        let n = social.likes(post)
+                        if n > 0 { Text("\(n)").foregroundStyle(Color.cream.opacity(0.85)) }
+                    }
+                    .padding(.vertical, 6).padding(.trailing, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PressScaleStyle())
+                Button { open() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bubble.right").foregroundStyle(Color.cream.opacity(0.85))
+                        let n = social.comments(post)
+                        if n > 0 { Text("\(n)").foregroundStyle(Color.cream.opacity(0.85)) }
+                    }
+                }
+                .buttonStyle(PressScaleStyle())
+                if showViews {
+                    HStack(spacing: 6) {
+                        Image(systemName: "eye")
+                        Text("\((post.views ?? 0).formatted())")
+                    }
+                    .foregroundStyle(Color.cream.opacity(0.6))
+                }
+                Spacer()
+            }
+            .font(.system(size: 15, weight: .semibold, design: .rounded))
+            .padding(.horizontal, 14).padding(.top, 12)
 
             VStack(alignment: .leading, spacing: 8) {
                 if let c = post.caption, !c.isEmpty {
@@ -365,6 +490,157 @@ struct BusinessPostCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
             .strokeBorder(Color.cream.opacity(0.1), lineWidth: 1))
+        .onAppear { social.seed(post) }
+        .onScrollVisibilityChange(threshold: 0.5) { shown in
+            if shown && countsView { CampaignStats.impression(post.id) }
+        }
+        .sheet(isPresented: $detailOpen) {
+            BusinessPostDetailSheet(post: post)
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
+    }
+}
+
+/// The post, opened: the card, its comments, and a place to write one. The
+/// bar sees views and can delete.
+struct BusinessPostDetailSheet: View {
+    let post: BusinessPost
+    var isOwner = false
+    var onDelete: (() async -> Void)? = nil
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var social = BusinessPostSocial.shared
+    @State private var comments: [BusinessComment] = []
+    @State private var loaded = false
+    @State private var text = ""
+    @State private var sending = false
+    @State private var deleting = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.ink.ignoresSafeArea()
+            VStack(spacing: 0) {
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        BusinessPostCard(post: post, showViews: isOwner, countsView: !isOwner, inDetail: true)
+                        if !comments.isEmpty {
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(comments) { c in commentRow(c) }
+                            }
+                            .padding(.horizontal, 4)
+                        } else if loaded {
+                            Text("No comments yet.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.cream.opacity(0.5))
+                                .padding(.horizontal, 4)
+                        }
+                        if isOwner, let onDelete {
+                            Button {
+                                deleting = true
+                                Task { await onDelete(); dismiss() }
+                            } label: {
+                                Text(deleting ? "Deleting…" : "Delete post")
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.5)).underline()
+                            }
+                            .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 8)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 52)
+                    .padding(.bottom, 16)
+                }
+                composer
+            }
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.85))
+                    .padding(12).background(Circle().fill(Color.cream.opacity(0.08)))
+            }
+            .padding(.top, 12).padding(.trailing, 16)
+            .buttonStyle(PressScaleStyle())
+        }
+        .preferredColorScheme(.dark)
+        .task { await load() }
+    }
+
+    private func commentRow(_ c: BusinessComment) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            FriendAvatar(name: c.name, avatarURL: c.avatarUrl, size: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(c.name).font(.system(size: 13, weight: .bold, design: .rounded)).foregroundStyle(Color.cream)
+                    Text(RelativeTime.short(c.createdAt)).font(.system(size: 11, design: .rounded)).foregroundStyle(Color.cream.opacity(0.45))
+                }
+                Text(c.body).font(.system(size: 14, design: .rounded)).foregroundStyle(Color.cream.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            if c.mine || isOwner {
+                Button { Task { await remove(c) } } label: {
+                    Image(systemName: "trash").font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.35))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var composer: some View {
+        HStack(spacing: 10) {
+            TextField("", text: $text, prompt: Text("Add a comment…").foregroundStyle(Color.cream.opacity(0.4)), axis: .vertical)
+                .lineLimit(1...4)
+                .font(.system(size: 14, design: .rounded))
+                .foregroundStyle(Color.cream)
+                .tint(Color.whiskey)
+                .focused($focused)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Capsule().fill(Color.cream.opacity(0.06)))
+            Button(action: send) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 15, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 38, height: 38)
+                    .background(Circle().fill(text.trimmingCharacters(in: .whitespaces).isEmpty ? Color.cream.opacity(0.15) : Color.whiskey))
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(sending || text.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(Color.ink)
+    }
+
+    private func load() async {
+        struct P: Encodable { let p_post: String }
+        comments = (try? await supabase.rpc("business_post_comments", params: P(p_post: post.id.uuidString.lowercased())).execute().value) ?? []
+        loaded = true
+    }
+
+    private func send() {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        sending = true
+        Task {
+            struct P: Encodable { let p_post: String; let p_body: String }
+            if (try? await supabase.rpc("business_post_comment", params: P(p_post: post.id.uuidString.lowercased(), p_body: body)).execute()) != nil {
+                text = ""
+                social.noteComment(post, delta: 1)
+                await load()
+            }
+            sending = false
+        }
+    }
+
+    private func remove(_ c: BusinessComment) async {
+        struct P: Encodable { let p_comment: String }
+        if (try? await supabase.rpc("business_post_delete_comment", params: P(p_comment: c.id.uuidString.lowercased())).execute()) != nil {
+            comments.removeAll { $0.id == c.id }
+            social.noteComment(post, delta: -1)
+        }
     }
 }
 
@@ -412,14 +688,21 @@ struct BusinessProfileView: View {
             let eventAt: String?
             let offerId: UUID?
             let createdAt: String
+            let likeCount: Int?
+            let likedByMe: Bool?
+            let commentCount: Int?
+            let views: Int?
             enum CodingKeys: String, CodingKey {
-                case id, caption
+                case id, caption, views
                 case imageUrl = "image_url"
                 case imageUrls = "image_urls"
                 case imageRatio = "image_ratio"
                 case eventAt = "event_at"
                 case offerId = "offer_id"
                 case createdAt = "created_at"
+                case likeCount = "like_count"
+                case likedByMe = "liked_by_me"
+                case commentCount = "comment_count"
             }
         }
         struct Event: Decodable, Identifiable {
@@ -493,7 +776,8 @@ struct BusinessProfileView: View {
                                     logoUrl: p.business.logoUrl, venueId: p.business.venueId,
                                     venueName: p.business.venueName, venueCity: p.business.venueCity,
                                     imageUrl: post.imageUrl, imageUrls: post.imageUrls, imageRatio: post.imageRatio, caption: post.caption,
-                                    eventAt: post.eventAt, offerId: post.offerId, createdAt: post.createdAt
+                                    eventAt: post.eventAt, offerId: post.offerId, createdAt: post.createdAt,
+                                    likeCount: post.likeCount, likedByMe: post.likedByMe, commentCount: post.commentCount, views: post.views
                                 ), showHeader: false)
                             }
                         }
