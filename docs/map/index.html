@@ -237,10 +237,23 @@
     .icon-btn,.seg,.sizes button,.legend,.sunbar,.drawer,.modal{
       -webkit-backdrop-filter:none;backdrop-filter:none;background:var(--ink);}
   }
+
+  /* accessibility: skip link + screen-reader-only text */
+  .vh{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
+    clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0;}
+  .skip{position:absolute;left:12px;top:-56px;z-index:2147483001;
+    background:#e8843c;color:#140f0b;font-weight:800;font-size:13px;letter-spacing:.04em;
+    padding:11px 18px;border-radius:999px;text-decoration:none;border:0;
+    transition:top .18s ease;}
+  .skip:focus{top:12px;}
+  .skip:focus-visible{outline:2px solid #f3e9d8;outline-offset:3px;}
 </style>
 </head>
 <body>
-<div id="map"></div>
+<a class="skip" href="#main">Skip to content</a>
+<h1 class="vh">Sejdel beer prices and deals map</h1>
+<div id="map" role="application" aria-label="Map of beer prices and bar deals" tabindex="-1"></div>
+<div id="main" tabindex="-1" class="vh">Map controls</div>
 
 <header class="bar">
   <a class="brand" href="/">Sejdel<span>.</span></a>
@@ -320,7 +333,7 @@
 
 <div class="sunbar" id="sunbar">
   <div class="row1"><span class="t" id="sunTime">--:--</span><span class="z" id="sunZone"></span><button class="now" id="sunNow">Now</button></div>
-  <input type="range" id="sunSlider" min="0" max="287" step="1" value="144" />
+  <input type="range" id="sunSlider" min="0" max="287" step="1" value="144" aria-label="Time of day" />
 </div>
 
 <div class="toast" id="toast">Thanks — added to the map!</div>
