@@ -67,8 +67,9 @@ final class ReviewPrompt: ObservableObject {
         #if DEBUG
         // Launch with SIMCTL_CHILD_SEJDEL_FORCE_REVIEW=1 to see the card
         // regardless of history. Nothing is stamped anywhere.
-        if ProcessInfo.processInfo.environment["SEJDEL_FORCE_REVIEW"] == "1", !showing {
-            lovedIt = false; stage = .ask
+        // "1" opens the ask; "feedback" opens the not-yet box straight away.
+        if let force = ProcessInfo.processInfo.environment["SEJDEL_FORCE_REVIEW"], !force.isEmpty, !showing {
+            lovedIt = false; stage = force == "feedback" ? .feedback : .ask
             withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { showing = true }
             return
         }
@@ -139,6 +140,10 @@ struct ReviewPromptCard: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var text = ""
     @FocusState private var focused: Bool
+    /// Tracked by hand: the container ignores the keyboard's safe-area
+    /// inset (so the dim stays full-screen and nothing else jumps) and the
+    /// card is lifted by exactly this much instead.
+    @State private var keyboardHeight: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -147,9 +152,21 @@ struct ReviewPromptCard: View {
                     .onTapGesture { if prompt.stage != .feedback { prompt.skip() } }
                 card
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 28)
+                    // The container ignores the bottom safe area entirely, so
+                    // both numbers are measured from the screen edge.
+                    .padding(.bottom, keyboardHeight > 0 ? keyboardHeight + 10 : 62)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+        }
+        .ignoresSafeArea(.keyboard)
+        .ignoresSafeArea(.container, edges: .bottom)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
+            guard let end = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            let h = max(0, UIScreen.main.bounds.height - end.origin.y)
+            withAnimation(.easeOut(duration: 0.25)) { keyboardHeight = h }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.25)) { keyboardHeight = 0 }
         }
         .zIndex(50)
         // Mounted for the whole signed-in life of the app, so this runs on
