@@ -1425,7 +1425,7 @@ for (const lang of ["sv", "en"]) {
 const base = [
   `${SITE}/`, `${SITE}/map/`, `${SITE}/calculator/`,
   `${SITE}/pricing/`, `${SITE}/privacy/`, `${SITE}/terms/`, `${SITE}/contact/`,
-  `${SITE}/cookies/`, `${SITE}/accessibility/`,
+  `${SITE}/cookies/`, `${SITE}/accessibility/`, `${SITE}/eula/`,
 ];
 const urls = [...base, ...written];
 writeFileSync(join(ROOT, "sitemap.xml"),

@@ -263,6 +263,7 @@ struct SideMenu: View {
             ("Terms", "https://sejdel.com/terms/"),
             ("Cookies", "https://sejdel.com/cookies/"),
             ("Accessibility", "https://sejdel.com/accessibility/"),
+            ("EULA", "https://sejdel.com/eula/"),
         ]
         return HStack(spacing: 6) {
             ForEach(Array(items.enumerated()), id: \.offset) { i, item in

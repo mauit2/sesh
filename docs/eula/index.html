@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- Hardening: zero JavaScript runs on this page, styles are inline-only,
+     fonts pinned to Google Fonts, nothing else may load or frame us. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta name="referrer" content="no-referrer" />
+<meta name="color-scheme" content="dark" />
+<meta name="theme-color" content="#140f0b" />
+<title>End User License Agreement — Sejdel</title>
+<meta name="description" content="End User License Agreement for the Sejdel iOS app — scope of licence, liability, warranty, and the terms you accept by downloading it." />
+<link rel="canonical" href="https://sejdel.com/eula/" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#140f0b; --bg-elev:#1d1610; --cream:#f3e9d8; --cream-dim:#cdbfa8;
+    --whiskey:#e8843c; --bronze:#b3895a; --line:rgba(243,233,216,.10);
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+    --measure:44rem;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(120% 80% at 85% -10%, rgba(232,132,60,.16), transparent 55%),
+      radial-gradient(90% 70% at -10% 0%, rgba(179,137,90,.10), transparent 50%),
+      var(--bg);
+    color:var(--cream);
+    font-family:"Hanken Grotesk",system-ui,sans-serif;
+    font-size:17px;line-height:1.72;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.04;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* faint carbonation in the margins */
+  .bubbles{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+  .bubbles i{
+    position:absolute;bottom:-6vh;border-radius:50%;
+    border:1px solid rgba(232,132,60,.22);
+    background:radial-gradient(circle at 32% 30%, rgba(243,233,216,.10), rgba(232,132,60,.04));
+    opacity:0;
+    animation:rise linear infinite;
+    will-change:transform,opacity;
+  }
+  @keyframes rise{
+    0%  {opacity:0;transform:translate3d(0,0,0) scale(.6);}
+    10% {opacity:.5;}
+    75% {opacity:.3;}
+    100%{opacity:0;transform:translate3d(var(--sway,2vw),-110vh,0) scale(1);}
+  }
+  .bubbles i:nth-child(1){left:4%;  width:9px; height:9px; --sway: 2vw; animation-duration:22s; animation-delay:0s;}
+  .bubbles i:nth-child(2){left:9%;  width:5px; height:5px; --sway:-2vw; animation-duration:28s; animation-delay:9s;}
+  .bubbles i:nth-child(3){left:93%; width:11px;height:11px;--sway:-3vw; animation-duration:24s; animation-delay:4s;}
+  .bubbles i:nth-child(4){left:88%; width:6px; height:6px; --sway: 3vw; animation-duration:30s; animation-delay:14s;}
+
+  .wrap{position:relative;z-index:1;max-width:var(--measure);margin:0 auto;padding:72px 24px 96px;}
+
+  /* header entrance */
+  .reveal{opacity:0;transform:translateY(12px);animation:up .7s cubic-bezier(.2,.7,.2,1) forwards;}
+  .d1{animation-delay:.04s}.d2{animation-delay:.16s}.d3{animation-delay:.3s}.d4{animation-delay:.44s}
+  @keyframes up{to{opacity:1;transform:none;}}
+
+  /* scroll-driven section reveals — pure CSS, no JS. Browsers without
+     animation-timeline just show the sections normally. */
+  @supports (animation-timeline: view()){
+    section{
+      animation:sectionUp .7s cubic-bezier(.2,.7,.2,1) both;
+      animation-timeline:view();
+      animation-range:entry 0% entry 32%;
+    }
+    @keyframes sectionUp{
+      from{opacity:0;transform:translateY(18px);}
+      to  {opacity:1;transform:none;}
+    }
+  }
+
+  .eyebrow{
+    font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.34em;
+    text-transform:uppercase;color:var(--bronze);margin:0 0 14px;
+  }
+  .dot{position:relative;display:inline-block;width:7px;height:7px;border-radius:50%;
+    background:var(--whiskey);margin-right:11px;vertical-align:middle;}
+  .dot::after{
+    content:"";position:absolute;inset:-3px;border-radius:50%;
+    border:1px solid var(--whiskey);
+    animation:sonar 2.2s ease-out infinite;
+  }
+  @keyframes sonar{
+    0%{transform:scale(.6);opacity:.9;}
+    70%,100%{transform:scale(2.4);opacity:0;}
+  }
+
+  h1{
+    font-family:"Fraunces",Georgia,serif;font-optical-sizing:auto;
+    font-weight:800;font-size:clamp(2.6rem,7vw,4rem);line-height:1.02;letter-spacing:-.03em;
+    margin:0 0 18px;color:var(--cream);
+  }
+  h1 em{font-style:italic;color:var(--whiskey);}
+  .dates{font-family:var(--mono);color:var(--cream-dim);font-size:13px;letter-spacing:.04em;margin:0 0 30px;}
+  .dates b{color:var(--cream);font-weight:600;}
+  .callout{
+    border-left:3px solid var(--whiskey);
+    background:linear-gradient(90deg,rgba(232,132,60,.10),rgba(232,132,60,.02));
+    padding:16px 20px;border-radius:0 14px 14px 0;margin:0 0 40px;
+    color:var(--cream-dim);font-size:15.5px;
+  }
+  .callout b{color:var(--cream);font-weight:700;}
+  .lede{color:var(--cream-dim);font-size:18px;margin:0 0 28px;}
+
+  h2{
+    font-family:"Fraunces",Georgia,serif;font-weight:700;
+    font-size:1.5rem;letter-spacing:-.01em;line-height:1.2;
+    margin:54px 0 6px;color:var(--cream);
+    display:flex;align-items:baseline;gap:12px;
+  }
+  h2 .num{
+    font-family:var(--mono);font-size:12px;font-weight:700;
+    letter-spacing:.2em;color:var(--whiskey);transform:translateY(-2px);flex-shrink:0;
+  }
+  h3{font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--bronze);margin:26px 0 4px;}
+  hr{border:none;border-top:1px solid var(--line);margin:18px 0 0;}
+  p{margin:14px 0;}
+  a{color:var(--whiskey);text-decoration:none;border-bottom:1px solid rgba(232,132,60,.35);
+    transition:border-color .15s ease;}
+  a:hover{border-color:var(--whiskey);}
+  a:focus-visible{outline:2px solid var(--whiskey);outline-offset:3px;}
+  ul{margin:14px 0;padding-left:20px;}
+  li{margin:9px 0;}
+  li::marker{color:var(--whiskey);}
+  strong{color:var(--cream);font-weight:600;}
+  em.inshort{color:var(--bronze);font-style:italic;}
+
+  /* table of contents */
+  .toc{margin:14px 0 8px;padding-left:20px;}
+  .toc li{margin:6px 0;}
+  .toc a{font-size:15.5px;border-bottom-color:transparent;}
+  .toc a:hover{border-bottom-color:var(--whiskey);}
+
+  table{
+    width:100%;border-collapse:collapse;margin:18px 0 8px;font-size:15px;
+    background:rgba(243,233,216,.03);border-radius:14px;overflow:hidden;
+  }
+  th{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--bronze);text-align:left;padding:12px 14px;
+    border-bottom:1px solid var(--line);
+  }
+  td{padding:12px 14px;border-bottom:1px solid rgba(243,233,216,.06);vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  td:last-child{font-family:var(--mono);font-size:13px;color:var(--whiskey);white-space:nowrap;text-align:center;}
+  .tablewrap{overflow-x:auto;}
+
+  .foot{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+    color:var(--cream-dim);font-size:14px;}
+  .back{
+    display:inline-block;margin-top:14px;font-weight:700;font-size:13px;
+    letter-spacing:.04em;color:var(--cream);text-decoration:none;border:1px solid var(--line);
+    border-radius:999px;padding:9px 18px;
+    transition:border-color .18s ease,color .18s ease,transform .18s ease;
+  }
+  .back:hover{border-color:var(--whiskey);color:var(--whiskey);transform:translateY(-2px);}
+  .back:focus-visible{outline:2px solid var(--whiskey);outline-offset:3px;}
+
+  @media (prefers-reduced-motion: reduce){
+    .bubbles i,.dot::after{animation:none;}
+    .reveal{animation:none;opacity:1;transform:none;}
+    @supports (animation-timeline: view()){
+      section{animation:none;opacity:1;transform:none;}
+    }
+    html{scroll-behavior:auto;}
+  }
+
+  /* sejdel dimples — concave pressed glass, two depth layers */
+  .dimples{position:fixed;inset:-260px;pointer-events:none;z-index:-1;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='204'%3E%3Cdefs%3E%3CradialGradient id='g' cx='63%' cy='67%' r='75%'%3E%3Cstop offset='0%' stop-color='%23f0c084' stop-opacity='.55'/%3E%3Cstop offset='35%' stop-color='%23c98136' stop-opacity='.28'/%3E%3Cstop offset='75%' stop-color='%23120a04' stop-opacity='.6'/%3E%3Cstop offset='100%' stop-color='%23120a04' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none' stroke-linecap='round'%3E%3Ccircle cx='45' cy='51' r='34' fill='url(%23g)'/%3E%3Cpath d='M14.1 53.7A31 31 0 0 1 62.8 25.6' stroke='%230a0603' stroke-opacity='.65' stroke-width='3'/%3E%3Cpath d='M75.9 48.4A31 31 0 0 1 32.3 78.2' stroke='%23f3e0c0' stroke-opacity='.42' stroke-width='1.6'/%3E%3Ccircle cx='135' cy='153' r='34' fill='url(%23g)'/%3E%3Cpath d='M104.1 155.7A31 31 0 0 1 152.8 127.6' stroke='%230a0603' stroke-opacity='.65' stroke-width='3'/%3E%3Cpath d='M165.9 150.4A31 31 0 0 1 122.3 180.2' stroke='%23f3e0c0' stroke-opacity='.42' stroke-width='1.6'/%3E%3C/g%3E%3C/svg%3E");will-change:transform;}
+  .dim-far{opacity:.10;background-size:176px 200px;filter:blur(1.8px);
+    animation:dimpledriftf 84s linear infinite;}
+  .dim-near{opacity:.24;background-size:300px 341px;
+    animation:dimpledriftn 44s linear infinite;}
+  @keyframes dimpledriftf{from{transform:translate3d(0,0,0)}to{transform:translate3d(-176px,-200px,0)}}
+  @keyframes dimpledriftn{from{transform:translate3d(0,0,0)}to{transform:translate3d(-300px,-341px,0)}}
+  @media (prefers-reduced-motion: reduce){.dimples{animation:none}}
+  /* readability: feathered pool of ink behind every text container */
+  .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
+
+  /* accessibility: skip link + screen-reader-only text */
+  .vh{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
+    clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0;}
+  .skip{position:absolute;left:12px;top:-56px;z-index:2147483001;
+    background:#e8843c;color:#140f0b;font-weight:800;font-size:13px;letter-spacing:.04em;
+    padding:11px 18px;border-radius:999px;text-decoration:none;border:0;
+    transition:top .18s ease;}
+  .skip:focus{top:12px;}
+  .skip:focus-visible{outline:2px solid #f3e9d8;outline-offset:3px;}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
+  <div class="bubbles" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <main class="wrap" id="main" tabindex="-1">
+    <p class="eyebrow reveal d1"><span class="dot"></span>Sejdel App</p>
+    <h1 class="reveal d2">End User <em>License Agreement.</em></h1>
+    <p class="dates reveal d3"><b>Last updated:</b> 9 September 2026</p>
+
+    <p class="lede reveal d3"><strong>Sejdel</strong> is licensed to You (End-User) by <strong>Sejdel AB</strong>
+      (&ldquo;<strong>Licensor</strong>&rdquo;), for use only under the terms of this License Agreement.</p>
+
+    <div class="callout reveal d4"><b>Not a safety device.</b> Sejdel estimates blood alcohol content from what you
+      enter. The figures are estimates, not measurements, and can differ substantially from your actual blood
+      alcohol content. Never use them to decide whether to drive.</div>
+
+    <p class="reveal d4">By downloading the Licensed Application from Apple&rsquo;s software distribution platform
+      (&ldquo;App Store&rdquo;), and any update thereto (as permitted by this License Agreement), You indicate that
+      You agree to be bound by all of the terms and conditions of this License Agreement, and that You accept this
+      License Agreement. App Store is referred to in this License Agreement as &ldquo;<strong>Services</strong>.&rdquo;</p>
+
+    <p>The parties of this License Agreement acknowledge that the Services are not a Party to this License Agreement
+      and are not bound by any provisions or obligations with regard to the Licensed Application, such as warranty,
+      liability, maintenance and support thereof. Sejdel AB, not the Services, is solely responsible for the Licensed
+      Application and the content thereof.</p>
+
+    <p>This License Agreement may not provide for usage rules for the Licensed Application that are in conflict with
+      the latest <a href="https://www.apple.com/legal/internet-services/itunes/us/terms.html" rel="noopener noreferrer" target="_blank">Apple
+      Media Services Terms and Conditions</a> (&ldquo;<strong>Usage Rules</strong>&rdquo;). Sejdel AB acknowledges
+      that it had the opportunity to review the Usage Rules and this License Agreement is not conflicting with them.</p>
+
+    <p>Sejdel, when purchased or downloaded through the Services, is licensed to You for use only under the terms of
+      this License Agreement. The Licensor reserves all rights not expressly granted to You. Sejdel is to be used on
+      devices that operate with Apple&rsquo;s operating systems (&ldquo;iOS&rdquo; and &ldquo;Mac OS&rdquo;).</p>
+
+    <section>
+    <h2><span class="num">—</span>Table of contents</h2>
+    <ul class="toc">
+      <li><a href="#application">1. The Application</a></li>
+      <li><a href="#scope">2. Scope of License</a></li>
+      <li><a href="#requirements">3. Technical requirements</a></li>
+      <li><a href="#support">4. Maintenance and support</a></li>
+      <li><a href="#datause">5. Use of data</a></li>
+      <li><a href="#ugc">6. User-generated contributions</a></li>
+      <li><a href="#contribution">7. Contribution License</a></li>
+      <li><a href="#liability">8. Liability</a></li>
+      <li><a href="#warranty">9. Warranty</a></li>
+      <li><a href="#productclaims">10. Product claims</a></li>
+      <li><a href="#compliance">11. Legal compliance</a></li>
+      <li><a href="#contact">12. Contact information</a></li>
+      <li><a href="#termination">13. Termination</a></li>
+      <li><a href="#thirdparty">14. Third-party terms of agreements and beneficiary</a></li>
+      <li><a href="#ipr">15. Intellectual property rights</a></li>
+      <li><a href="#law">16. Applicable law</a></li>
+      <li><a href="#misc">17. Miscellaneous</a></li>
+    </ul>
+    </section>
+
+    <section id="application">
+    <h2><span class="num">01</span>The Application</h2>
+    <p>Sejdel (&ldquo;<strong>Licensed Application</strong>&rdquo;) is a piece of software created to help people keep
+      track of a night out, and customized for iOS mobile devices (&ldquo;<strong>Devices</strong>&rdquo;). Sejdel lets
+      someone log what they drink and see a running estimate of their blood alcohol content, understand the pace they
+      are drinking at, and get a rough sense of when they will be sober, so the night is something they can see rather
+      than guess at. All figures are estimates calculated from what the user enters and are provided for awareness and
+      entertainment only. It is used to log drinks as the night goes on and see a live estimated blood alcohol content,
+      a drinking pace, and an approximate time until sober.</p>
+    <p>Furthermore, it is used to:</p>
+    <ul>
+      <li>Start or join a live group with a share code, to see friends&rsquo; estimated BAC in real time, share rounds,
+        and capture photos of the night;</li>
+      <li>Add friends, share a recap of a night, post stories, and optionally see which friends have checked in nearby;</li>
+      <li>Browse a map of beer prices and bar deals, and contribute prices;</li>
+      <li>Plan events and nights out with other users;</li>
+      <li>Play pass-the-phone drinking games;</li>
+      <li>Optionally connect Apple Health to see calories burned against calories consumed, steps, and heart rate for a
+        night out;</li>
+      <li>For bars and venues, run a business account with a profile, posts, deals, and a guest list, on a paid
+        subscription.</li>
+    </ul>
+    <p>The Licensed Application is not tailored to comply with industry-specific regulations (Health Insurance
+      Portability and Accountability Act (HIPAA), Federal Information Security Management Act (FISMA), etc.), so if
+      your interactions would be subjected to such laws, you may not use this Licensed Application. You may not use
+      the Licensed Application in a way that would violate the Gramm-Leach-Bliley Act (GLBA).</p>
+    </section>
+
+    <section id="scope">
+    <h2><span class="num">02</span>Scope of License</h2>
+    <p><strong>2.1</strong> You are given a non-transferable, non-exclusive, non-sublicensable license to install and
+      use the Licensed Application on any Devices that You (End-User) own or control and as permitted by the Usage
+      Rules, with the exception that such Licensed Application may be accessed and used by other accounts associated
+      with You (End-User, The Purchaser) via Family Sharing or volume purchasing.</p>
+    <p><strong>2.2</strong> This license will also govern any updates of the Licensed Application provided by Licensor
+      that replace, repair, and/or supplement the first Licensed Application, unless a separate license is provided for
+      such update, in which case the terms of that new license will govern.</p>
+    <p><strong>2.3</strong> You may not share or make the Licensed Application available to third parties (unless to
+      the degree allowed by the Usage Rules, and with Sejdel AB&rsquo;s prior written consent), sell, rent, lend, lease
+      or otherwise redistribute the Licensed Application.</p>
+    <p><strong>2.4</strong> You may not reverse engineer, translate, disassemble, integrate, decompile, remove, modify,
+      combine, create derivative works or updates of, adapt, or attempt to derive the source code of the Licensed
+      Application, or any part thereof (except with Sejdel AB&rsquo;s prior written consent).</p>
+    <p><strong>2.5</strong> You may not copy (excluding when expressly authorized by this license and the Usage Rules)
+      or alter the Licensed Application or portions thereof. You may create and store copies only on devices that You
+      own or control for backup keeping under the terms of this license, the Usage Rules, and any other terms and
+      conditions that apply to the device or software used. You may not remove any intellectual property notices. You
+      acknowledge that no unauthorized third parties may gain access to these copies at any time. If you sell your
+      Devices to a third party, you must remove the Licensed Application from the Devices before doing so.</p>
+    <p><strong>2.6</strong> Violations of the obligations mentioned above, as well as the attempt of such infringement,
+      may be subject to prosecution and damages.</p>
+    <p><strong>2.7</strong> Licensor reserves the right to modify the terms and conditions of licensing.</p>
+    <p><strong>2.8</strong> Nothing in this license should be interpreted to restrict third-party terms. When using the
+      Licensed Application, You must ensure that You comply with applicable third-party terms and conditions.</p>
+    </section>
+
+    <section id="requirements">
+    <h2><span class="num">03</span>Technical requirements</h2>
+    <p><strong>3.1</strong> The Licensed Application requires a firmware version 18.0 or higher. Licensor recommends
+      using the latest version of the firmware.</p>
+    <p><strong>3.2</strong> Licensor attempts to keep the Licensed Application updated so that it complies with
+      modified/new versions of the firmware and new hardware. You are not granted rights to claim such an update.</p>
+    <p><strong>3.3</strong> You acknowledge that it is Your responsibility to confirm and determine that the app
+      end-user device on which You intend to use the Licensed Application satisfies the technical specifications
+      mentioned above.</p>
+    <p><strong>3.4</strong> Licensor reserves the right to modify the technical specifications as it sees appropriate
+      at any time.</p>
+    </section>
+
+    <section id="support">
+    <h2><span class="num">04</span>Maintenance and support</h2>
+    <p><strong>4.1</strong> The Licensor is solely responsible for providing any maintenance and support services for
+      this Licensed Application. You can reach the Licensor at the email address listed in the App Store Overview for
+      this Licensed Application.</p>
+    <p><strong>4.2</strong> Sejdel AB and the End-User acknowledge that the Services have no obligation whatsoever to
+      furnish any maintenance and support services with respect to the Licensed Application.</p>
+    </section>
+
+    <section id="datause">
+    <h2><span class="num">05</span>Use of data</h2>
+    <p>You acknowledge that Licensor will be able to access and adjust Your downloaded Licensed Application content and
+      Your personal information, and that Licensor&rsquo;s use of such material and information is subject to Your legal
+      agreements with Licensor and Licensor&rsquo;s privacy policy, which can be accessed by opening the menu and
+      tapping Privacy at the bottom of the sidebar, or visiting
+      <a href="https://sejdel.com/privacy/">https://sejdel.com/privacy/</a>.</p>
+    <p>You acknowledge that the Licensor may periodically collect and use technical data and related information about
+      your device, system, and application software, and peripherals, offer product support, facilitate the software
+      updates, and for purposes of providing other services to you (if any) related to the Licensed Application.
+      Licensor may also use this information to improve its products or to provide services or technologies to you, as
+      long as it is in a form that does not personally identify you.</p>
+    </section>
+
+    <section id="ugc">
+    <h2><span class="num">06</span>User-generated contributions</h2>
+    <p>The Licensed Application may invite you to chat, contribute to, or participate in blogs, message boards, online
+      forums, and other functionality, and may provide you with the opportunity to create, submit, post, display,
+      transmit, perform, publish, distribute, or broadcast content and materials to us or in the Licensed Application,
+      including but not limited to text, writings, video, audio, photographs, graphics, comments, suggestions, or
+      personal information or other material (collectively, &ldquo;Contributions&rdquo;). Contributions may be viewable
+      by other users of the Licensed Application and through third-party websites or applications. As such, any
+      Contributions you transmit may be treated as non-confidential and non-proprietary. When you create or make
+      available any Contributions, you thereby represent and warrant that:</p>
+    <ol>
+      <li>The creation, distribution, transmission, public display, or performance, and the accessing, downloading, or
+        copying of your Contributions do not and will not infringe the proprietary rights, including but not limited to
+        the copyright, patent, trademark, trade secret, or moral rights of any third party.</li>
+      <li>You are the creator and owner of or have the necessary licenses, rights, consents, releases, and permissions
+        to use and to authorize us, the Licensed Application, and other users of the Licensed Application to use your
+        Contributions in any manner contemplated by the Licensed Application and this License Agreement.</li>
+      <li>You have the written consent, release, and/or permission of each and every identifiable individual person in
+        your Contributions to use the name or likeness or each and every such identifiable individual person to enable
+        inclusion and use of your Contributions in any manner contemplated by the Licensed Application and this License
+        Agreement.</li>
+      <li>Your Contributions are not false, inaccurate, or misleading.</li>
+      <li>Your Contributions are not unsolicited or unauthorized advertising, promotional materials, pyramid schemes,
+        chain letters, spam, mass mailings, or other forms of solicitation.</li>
+      <li>Your Contributions are not obscene, lewd, lascivious, filthy, violent, harassing, libelous, slanderous, or
+        otherwise objectionable (as determined by us).</li>
+      <li>Your Contributions do not ridicule, mock, disparage, intimidate, or abuse anyone.</li>
+      <li>Your Contributions are not used to harass or threaten (in the legal sense of those terms) any other person and
+        to promote violence against a specific person or class of people.</li>
+      <li>Your Contributions do not violate any applicable law, regulation, or rule.</li>
+      <li>Your Contributions do not violate the privacy or publicity rights of any third party.</li>
+      <li>Your Contributions do not violate any applicable law concerning child pornography, or otherwise intended to
+        protect the health or well-being of minors.</li>
+      <li>Your Contributions do not include any offensive comments that are connected to race, national origin, gender,
+        sexual preference, or physical handicap.</li>
+      <li>Your Contributions do not otherwise violate, or link to material that violates, any provision of this License
+        Agreement, or any applicable law or regulation.</li>
+    </ol>
+    <p>Any use of the Licensed Application in violation of the foregoing violates this License Agreement and may result
+      in, among other things, termination or suspension of your rights to use the Licensed Application.</p>
+    </section>
+
+    <section id="contribution">
+    <h2><span class="num">07</span>Contribution License</h2>
+    <p>By posting your Contributions to any part of the Licensed Application or making Contributions accessible to the
+      Licensed Application by linking your account from the Licensed Application to any of your social networking
+      accounts, you automatically grant, and you represent and warrant that you have the right to grant, to us an
+      unrestricted, unlimited, irrevocable, perpetual, non-exclusive, transferable, royalty-free, fully-paid, worldwide
+      right, and license to host, use copy, reproduce, disclose, sell, resell, publish, broadcast, retitle, archive,
+      store, cache, publicly display, reformat, translate, transmit, excerpt (in whole or in part), and distribute such
+      Contributions (including, without limitation, your image and voice) for any purpose, commercial advertising, or
+      otherwise, and to prepare derivative works of, or incorporate in other works, such as Contributions, and grant and
+      authorize sublicenses of the foregoing. The use and distribution may occur in any media formats and through any
+      media channels.</p>
+    <p>This license will apply to any form, media, or technology now known or hereafter developed, and includes our use
+      of your name, company name, and franchise name, as applicable, and any of the trademarks, service marks, trade
+      names, logos, and personal and commercial images you provide. You waive all moral rights in your Contributions,
+      and you warrant that moral rights have not otherwise been asserted in your Contributions.</p>
+    <p>We do not assert any ownership over your Contributions. You retain full ownership of all of your Contributions
+      and any intellectual property rights or other proprietary rights associated with your Contributions. We are not
+      liable for any statements or representations in your Contributions provided by you in any area in the Licensed
+      Application. You are solely responsible for your Contributions to the Licensed Application and you expressly agree
+      to exonerate us from any and all responsibility and to refrain from any legal action against us regarding your
+      Contributions.</p>
+    <p>We have the right, in our sole and absolute discretion, (1) to edit, redact, or otherwise change any
+      Contributions; (2) to recategorize any Contributions to place them in more appropriate locations in the Licensed
+      Application; and (3) to prescreen or delete any Contributions at any time and for any reason, without notice. We
+      have no obligation to monitor your Contributions.</p>
+    </section>
+
+    <section id="liability">
+    <h2><span class="num">08</span>Liability</h2>
+    <p><strong>8.1</strong> Licensor&rsquo;s responsibility in the case of violation of obligations and tort shall be
+      limited to intent and gross negligence. Only in case of a breach of essential contractual duties (cardinal
+      obligations), Licensor shall also be liable in case of slight negligence. In any case, liability shall be limited
+      to the foreseeable, contractually typical damages. The limitation mentioned above does not apply to injuries to
+      life, limb, or health.</p>
+    <p><strong>8.2</strong> Licensor takes no accountability or responsibility for any damages caused due to a breach of
+      duties according to Section 2 of this License Agreement. To avoid data loss, You are required to make use of
+      backup functions of the Licensed Application to the extent allowed by applicable third-party terms and conditions
+      of use. You are aware that in case of alterations or manipulations of the Licensed Application, You will not have
+      access to the Licensed Application.</p>
+    <p><strong>8.3</strong> Licensor takes no accountability and responsibility in case of any decision the user makes
+      in reliance on a blood alcohol content estimate, drinking pace, or time-to-sober figure shown in the Application,
+      including any decision to drive or to operate machinery.</p>
+    <p><strong>8.4</strong> Licensor takes no accountability and responsibility in case of the accuracy of any estimate,
+      which is calculated from information the user enters using a general formula that cannot account for individual
+      physiology, food, medication, or health conditions.</p>
+    <p><strong>8.5</strong> Licensor takes no accountability and responsibility in case of inaccurate, incomplete, or
+      out-of-date information entered by the user or by anyone in the user&rsquo;s group.</p>
+    <p><strong>8.6</strong> Licensor takes no accountability and responsibility in case of prices, offers, opening
+      hours, or other venue information, whether supplied by venues, by other users, or by third-party map providers.</p>
+    <p><strong>8.7</strong> Licensor takes no accountability and responsibility in case of content posted, shared, or
+      transmitted by other users of the Application.</p>
+    <p><strong>8.8</strong> Licensor takes no accountability and responsibility in case of health or fitness data
+      supplied by Apple Health or by the user&rsquo;s device.</p>
+    <p><strong>8.9</strong> Licensor takes no accountability and responsibility in case of loss or corruption of photos,
+      recaps, or other content stored in or shared through the Application.</p>
+    <p><strong>8.10</strong> Licensor takes no accountability and responsibility in case of interruption, suspension, or
+      discontinuation of the Application or of any third-party service it depends on.</p>
+    </section>
+
+    <section id="warranty">
+    <h2><span class="num">09</span>Warranty</h2>
+    <p><strong>9.1</strong> Licensor warrants that the Licensed Application is free of spyware, trojan horses, viruses,
+      or any other malware at the time of Your download. Licensor warrants that the Licensed Application works as
+      described in the user documentation.</p>
+    <p><strong>9.2</strong> No warranty is provided for the Licensed Application that is not executable on the device,
+      that has been unauthorizedly modified, handled inappropriately or culpably, combined or installed with
+      inappropriate hardware or software, used with inappropriate accessories, regardless if by Yourself or by third
+      parties, or if there are any other reasons outside of Sejdel AB&rsquo;s sphere of influence that affect the
+      executability of the Licensed Application.</p>
+    <p><strong>9.3</strong> You are required to inspect the Licensed Application immediately after installing it and
+      notify Sejdel AB about issues discovered without delay by email provided in
+      <a href="#contact">Contact Information</a>. The defect report will be taken into consideration and further
+      investigated if it has been emailed within a period of sixty (60) days after discovery.</p>
+    <p><strong>9.4</strong> If we confirm that the Licensed Application is defective, Sejdel AB reserves a choice to
+      remedy the situation either by means of solving the defect or substitute delivery.</p>
+    <p><strong>9.5</strong> In the event of any failure of the Licensed Application to conform to any applicable
+      warranty, You may notify the Services Store Operator, and Your Licensed Application purchase price will be
+      refunded to You. To the maximum extent permitted by applicable law, the Services Store Operator will have no other
+      warranty obligation whatsoever with respect to the Licensed Application, and any other losses, claims, damages,
+      liabilities, expenses, and costs attributable to any negligence to adhere to any warranty.</p>
+    <p><strong>9.6</strong> If the user is an entrepreneur, any claim based on faults expires after a statutory period
+      of limitation amounting to twelve (12) months after the Licensed Application was made available to the user. The
+      statutory periods of limitation given by law apply for users who are consumers.</p>
+    </section>
+
+    <section id="productclaims">
+    <h2><span class="num">10</span>Product claims</h2>
+    <p>Sejdel AB and the End-User acknowledge that Sejdel AB, and not the Services, is responsible for addressing any
+      claims of the End-User or any third party relating to the Licensed Application or the End-User&rsquo;s possession
+      and/or use of that Licensed Application, including, but not limited to:</p>
+    <ul>
+      <li>(i) product liability claims;</li>
+      <li>(ii) any claim that the Licensed Application fails to conform to any applicable legal or regulatory
+        requirement; and</li>
+      <li>(iii) claims arising under consumer protection, privacy, or similar legislation, including in connection with
+        Your Licensed Application&rsquo;s use of the HealthKit and HomeKit.</li>
+    </ul>
+    </section>
+
+    <section id="compliance">
+    <h2><span class="num">11</span>Legal compliance</h2>
+    <p>You represent and warrant that You are not located in a country that is subject to a US Government embargo, or
+      that has been designated by the US Government as a &ldquo;terrorist supporting&rdquo; country; and that You are
+      not listed on any US Government list of prohibited or restricted parties.</p>
+    </section>
+
+    <section id="contact">
+    <h2><span class="num">12</span>Contact information</h2>
+    <p>For general inquiries, complaints, questions or claims concerning the Licensed Application, please contact:</p>
+    <p><strong>Sejdel AB</strong><br>
+      Göteborg, Sweden<br>
+      <a href="mailto:contact@sejdel.com">contact@sejdel.com</a><br>
+      <a href="https://sejdel.com/contact/">sejdel.com/contact</a></p>
+    </section>
+
+    <section id="termination">
+    <h2><span class="num">13</span>Termination</h2>
+    <p>The license is valid until terminated by Sejdel AB or by You. Your rights under this license will terminate
+      automatically and without notice from Sejdel AB if You fail to adhere to any term(s) of this license. Upon License
+      termination, You shall stop all use of the Licensed Application, and destroy all copies, full or partial, of the
+      Licensed Application.</p>
+    </section>
+
+    <section id="thirdparty">
+    <h2><span class="num">14</span>Third-party terms of agreements and beneficiary</h2>
+    <p>Sejdel AB represents and warrants that Sejdel AB will comply with applicable third-party terms of agreement when
+      using Licensed Application.</p>
+    <p>In Accordance with Section 9 of the &ldquo;Instructions for Minimum Terms of Developer&rsquo;s End-User License
+      Agreement,&rdquo; Apple&rsquo;s subsidiaries shall be third-party beneficiaries of this End User License Agreement
+      and — upon Your acceptance of the terms and conditions of this License Agreement, Apple will have the right (and
+      will be deemed to have accepted the right) to enforce this End User License Agreement against You as a third-party
+      beneficiary thereof.</p>
+    </section>
+
+    <section id="ipr">
+    <h2><span class="num">15</span>Intellectual property rights</h2>
+    <p>Sejdel AB and the End-User acknowledge that, in the event of any third-party claim that the Licensed Application
+      or the End-User&rsquo;s possession and use of that Licensed Application infringes on the third party&rsquo;s
+      intellectual property rights, Sejdel AB, and not the Services, will be solely responsible for the investigation,
+      defense, settlement, and discharge or any such intellectual property infringement claims.</p>
+    </section>
+
+    <section id="law">
+    <h2><span class="num">16</span>Applicable law</h2>
+    <p>This License Agreement is governed by the laws of Sweden excluding its conflicts of law rules.</p>
+    </section>
+
+    <section id="misc">
+    <h2><span class="num">17</span>Miscellaneous</h2>
+    <p><strong>17.1</strong> If any of the terms of this agreement should be or become invalid, the validity of the
+      remaining provisions shall not be affected. Invalid terms will be replaced by valid ones formulated in a way that
+      will achieve the primary purpose.</p>
+    <p><strong>17.2</strong> Collateral agreements, changes and amendments are only valid if laid down in writing. The
+      preceding clause can only be waived in writing.</p>
+    <p><strong>17.3 Not a safety device.</strong> The Application estimates blood alcohol content using the Widmark
+      formula applied to information the user enters. These figures are estimates for awareness and entertainment only.
+      They are not measurements, they are not a medical, legal, or safety reference, and they can differ substantially
+      from a person&rsquo;s actual blood alcohol content. The user must never rely on the Application to decide whether
+      to drive, to operate machinery, or to make any other decision where impairment matters. Nothing in this Agreement
+      limits either party&rsquo;s liability for death or personal injury caused by negligence, or for fraud, where such
+      liability cannot be excluded by law.</p>
+    </section>
+
+    <div class="foot">
+      <p>Questions? <a href="mailto:contact@sejdel.com">contact@sejdel.com</a>
+        &nbsp;·&nbsp; <a href="../contact/">Contact</a>
+        &nbsp;·&nbsp; See also the <a href="../privacy/">Privacy Notice</a>,
+        <a href="../terms/">Terms &amp; Conditions</a>, <a href="../cookies/">Cookie Policy</a> and
+        <a href="../accessibility/">Accessibility Statement</a>.</p>
+      <a class="back" href="../">← Back to Sejdel</a>
+    </div>
+  </main>
+</body>
+</html>
