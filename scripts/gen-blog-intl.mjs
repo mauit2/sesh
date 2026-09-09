@@ -570,8 +570,8 @@ ${CSS}
 ${jsonld ? (Array.isArray(jsonld) ? jsonld : [jsonld])
     .map((d) => `<script type="application/ld+json">${JSON.stringify(d)}</script>`).join("\n") : ""}${autoLang}
 </head>
-<body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
-<div class="wrap">
+<body><a class="skip" href="#main">Skip to content</a><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
+<div class="wrap" id="main" tabindex="-1">
   <header class="top">
     <a class="brand" href="${SITE}/">Sejdel<span>.</span></a>
     <nav>
@@ -929,6 +929,13 @@ const WORLD_REL = "blog/what-does-beer-cost-around-the-world-reddit";
     padding:4px 9px;border-radius:8px;white-space:nowrap;}
   .countryrail a:hover{color:var(--cream);background:rgba(232,132,60,.15);}
   @media (max-width:1279px){.countryrail{display:none;}}
+
+  /* accessibility: skip link */
+  .skip{position:absolute;left:12px;top:-56px;z-index:2147483001;
+    background:#e8843c;color:#140f0b;font-weight:800;font-size:13px;letter-spacing:.04em;
+    padding:11px 18px;border-radius:999px;text-decoration:none;border:0;transition:top .18s ease;}
+  .skip:focus{top:12px;}
+  .skip:focus-visible{outline:2px solid #f3e9d8;outline-offset:3px;}
   </style>
   <nav class="countryrail" aria-label="Jump to a country">
     <b>Countries</b>

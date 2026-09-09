@@ -365,12 +365,19 @@ function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body
   @media (prefers-reduced-motion: reduce){.dimples{animation:none}}
   /* readability: feathered pool of ink behind every text container */
   .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
+
+  /* accessibility: skip link */
+  .skip{position:absolute;left:12px;top:-56px;z-index:2147483001;
+    background:#e8843c;color:#140f0b;font-weight:800;font-size:13px;letter-spacing:.04em;
+    padding:11px 18px;border-radius:999px;text-decoration:none;border:0;transition:top .18s ease;}
+  .skip:focus{top:12px;}
+  .skip:focus-visible{outline:2px solid #f3e9d8;outline-offset:3px;}
 </style>
 ${jsonld ? (Array.isArray(jsonld) ? jsonld : [jsonld])
     .map((d) => `<script type="application/ld+json">${JSON.stringify(d)}</script>`).join("\n") : ""}
 </head>
-<body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
-<div class="wrap">
+<body><a class="skip" href="#main">Skip to content</a><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
+<div class="wrap" id="main" tabindex="-1">
   <header class="top">
     <a class="brand" href="${SITE}/">Sejdel<span>.</span></a>
     <nav>
