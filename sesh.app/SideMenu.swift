@@ -172,9 +172,19 @@ struct SideMenu: View {
             // so the card edge reads as an edge and not a seam.
             LinearGradient(colors: [Color.ink, Color.inkElev], startPoint: .leading, endPoint: .trailing)
                 .ignoresSafeArea()
-            panel
-                .frame(width: width)
-                .frame(maxHeight: .infinity, alignment: .top)
+            // Scrolls only when it has to. The GeometryReader gives the
+            // content a minimum height of the screen, so the Spacer above the
+            // footer still pushes it to the bottom on a roomy phone, while a
+            // crowded menu — owner rows plus six legal links on a small screen
+            // — becomes scrollable instead of clipping.
+            GeometryReader { geo in
+                ScrollView(showsIndicators: false) {
+                    panel
+                        .frame(minHeight: geo.size.height, alignment: .top)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+            }
+            .frame(width: width)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
