@@ -546,7 +546,7 @@ function page({ lang, T, title, desc, canonical, alts, h1, kicker, body, jsonld 
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
@@ -563,9 +563,7 @@ ${altLinks}
 <meta property="og:site_name" content="Sejdel" />
 <meta name="twitter:card" content="summary" />
 ${FAVICON}
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/fonts/sejdel-fonts.css" />
 ${CSS}
 ${jsonld ? (Array.isArray(jsonld) ? jsonld : [jsonld])
     .map((d) => `<script type="application/ld+json">${JSON.stringify(d)}</script>`).join("\n") : ""}${autoLang}

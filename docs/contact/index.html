@@ -6,16 +6,13 @@
 <!-- Hardening: zero JavaScript runs on this page, styles are inline-only,
      fonts pinned to Google Fonts. The only relaxation vs. the other pages is
      form-action mailto: so the contact form can open the visitor's mail app. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action mailto:" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; base-uri 'none'; form-action mailto:" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
 <title>Contact — Sejdel</title>
 <meta name="description" content="Get in touch with Sejdel — questions, support, bug reports, or privacy requests. Reach us at contact@sejdel.com." />
 <link rel="canonical" href="https://sejdel.com/contact/" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <style>
   :root{
     --bg:#140f0b; --bg-elev:#1d1610; --cream:#f3e9d8; --cream-dim:#cdbfa8;
@@ -186,6 +183,8 @@
   .skip:focus{top:12px;}
   .skip:focus-visible{outline:2px solid #f3e9d8;outline-offset:3px;}
 </style>
+
+<link rel="stylesheet" href="/fonts/sejdel-fonts.css" />
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>

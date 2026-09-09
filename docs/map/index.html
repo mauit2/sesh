@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.apple-mapkit.com; style-src 'unsafe-inline' https://cdn.apple-mapkit.com https://fonts.googleapis.com; font-src https://cdn.apple-mapkit.com https://fonts.gstatic.com data:; img-src 'self' data: blob: https://*.apple-mapkit.com https://cdn.apple-mapkit.com https://lltuozmbxacxiepardys.supabase.co; connect-src https://*.apple-mapkit.com https://cdn.apple-mapkit.com https://lltuozmbxacxiepardys.supabase.co; worker-src blob:; child-src blob:; base-uri 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.apple-mapkit.com; style-src 'self' 'unsafe-inline' https://cdn.apple-mapkit.com; font-src 'self' https://cdn.apple-mapkit.com data:; img-src 'self' data: blob: https://*.apple-mapkit.com https://cdn.apple-mapkit.com https://lltuozmbxacxiepardys.supabase.co; connect-src https://*.apple-mapkit.com https://cdn.apple-mapkit.com https://lltuozmbxacxiepardys.supabase.co; worker-src blob:; child-src blob:; base-uri 'none'" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="light dark" />
 <meta name="theme-color" content="#0b0a08" />
@@ -13,9 +13,6 @@
 <!-- All /map/?lat=…&lon=…&v=…&city=… deep-links serve this same page; point them at one canonical
      so Google consolidates them instead of flagging duplicates. -->
 <link rel="canonical" href="https://sejdel.com/map/" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <style>
   :root{
     --ink:#0b0a08; --ink-elev:#13110e; --smoke:#312d26;
@@ -248,6 +245,8 @@
   .skip:focus{top:12px;}
   .skip:focus-visible{outline:2px solid #f3e9d8;outline-offset:3px;}
 </style>
+
+<link rel="stylesheet" href="/fonts/sejdel-fonts.css" />
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>

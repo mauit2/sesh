@@ -5,16 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <!-- Hardening: zero JavaScript runs on this page, styles are inline-only,
      fonts pinned to Google Fonts, nothing else may load or frame us. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
 <title>Acceptable Use Policy — Sejdel</title>
 <meta name="description" content="Acceptable Use Policy for Sejdel — what you may and may not do on the app and site, our community guidelines, and how we handle reports." />
 <link rel="canonical" href="https://sejdel.com/acceptable-use/" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <style>
   :root{
     --bg:#140f0b; --bg-elev:#1d1610; --cream:#f3e9d8; --cream-dim:#cdbfa8;
@@ -203,6 +200,8 @@
   .skip:focus{top:12px;}
   .skip:focus-visible{outline:2px solid #f3e9d8;outline-offset:3px;}
 </style>
+
+<link rel="stylesheet" href="/fonts/sejdel-fonts.css" />
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>

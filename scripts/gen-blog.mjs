@@ -211,7 +211,7 @@ function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
@@ -228,9 +228,7 @@ function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body
 <meta property="og:site_name" content="Sejdel" />
 <meta name="twitter:card" content="summary" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23140f0b'/%3E%3Cpath d='M19 14h3.5a3.5 3.5 0 0 1 3.5 3.5v2a3.5 3.5 0 0 1-3.5 3.5H19' fill='none' stroke='%23e8843c' stroke-width='2.4'/%3E%3Cpath d='M6 11h13v12a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z' fill='%23e8843c'/%3E%3Crect x='8.6' y='14' width='1.6' height='9' rx='0.8' fill='%23c96a2c'/%3E%3Crect x='11.7' y='14' width='1.6' height='9' rx='0.8' fill='%23c96a2c'/%3E%3Crect x='14.8' y='14' width='1.6' height='9' rx='0.8' fill='%23c96a2c'/%3E%3Crect x='6' y='8.5' width='13' height='4' rx='2' fill='%23f3e9d8'/%3E%3C/svg%3E" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/fonts/sejdel-fonts.css" />
 <style>
   :root{
     --bg:#140f0b; --bg-elev:#1d1610; --cream:#f3e9d8; --cream-dim:#cdbfa8;
