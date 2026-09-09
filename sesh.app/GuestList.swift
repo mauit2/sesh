@@ -36,7 +36,8 @@ struct ListRequest: Decodable, Identifiable, Equatable {
     let businessId: UUID
     let userId: UUID
     let fullName: String
-    let instagram: String
+    /// Optional: a guest may leave it blank, and the bar simply sees no handle.
+    let instagram: String?
     let plusCount: Int
     /// "yyyy-MM-dd"
     let night: String
@@ -66,7 +67,10 @@ struct ListRequest: Decodable, Identifiable, Equatable {
     var pending: Bool { status == "pending" }
     var approved: Bool { status == "approved" }
     var nightLabel: String { ListNight.label(night) }
-    var instagramURL: URL { URL(string: "https://instagram.com/\(instagram)") ?? URL(string: "https://instagram.com")! }
+    var instagramURL: URL? {
+        guard let h = instagram, !h.isEmpty else { return nil }
+        return URL(string: "https://instagram.com/\(h)")
+    }
     /// "Mauritz Andersson +6"
     var headline: String { plusCount > 0 ? "\(fullName) +\(plusCount)" : fullName }
 }
@@ -234,7 +238,7 @@ final class ListRequestStore: ObservableObject {
         if has("closed_night")      { return "The bar doesn't take the list that night." }
         if has("not_on_sejdel")     { return "This bar isn't on Sejdel right now." }
         if has("name_required")     { return "Add your full name." }
-        if has("instagram_required") { return "Add your Instagram handle." }
+        if has("instagram_invalid") { return "That Instagram handle doesn't look right — or leave it blank." }
         if has("bad_night")         { return "Pick a night from tonight on." }
         if has("bad_party")         { return "Up to +50." }
         if has("own_bar")           { return "That's your own bar." }
@@ -282,7 +286,7 @@ struct ListRequestSheet: View {
                             Text("Get on the list")
                                 .font(.system(size: 30, weight: .black, design: .rounded))
                                 .foregroundStyle(Color.cream)
-                            Text("\(barName) gets your name, your crew size and your Instagram, and says yes or no right here in the chat.")
+                            Text("\(barName) gets your name and your crew size, plus your Instagram if you add one, and says yes or no right here in the chat.")
                                 .font(.system(size: 14, weight: .medium, design: .rounded))
                                 .foregroundStyle(Color.cream.opacity(0.65))
                                 .fixedSize(horizontal: false, vertical: true)
@@ -298,7 +302,7 @@ struct ListRequestSheet: View {
                     }
 
                     field("FULL NAME", "As on your ID", text: $fullName, field: .name, capitalize: .words)
-                    field("INSTAGRAM", "@yourhandle", text: $instagram, field: .instagram, capitalize: .never)
+                    field("INSTAGRAM (OPTIONAL)", "@yourhandle", text: $instagram, field: .instagram, capitalize: .never)
 
                     VStack(alignment: .leading, spacing: 8) {
                         kicker("HOW MANY")
@@ -347,7 +351,7 @@ struct ListRequestSheet: View {
 
                     ErrorLine(text: error)
                     BizPrimaryButton(title: "SEND REQUEST", enabled: canSend, busy: busy) { send() }
-                    Text("The bar sees your name, +\(plus) and your Instagram. Nothing else.")
+                    Text("The bar sees your name and +\(plus), plus your Instagram if you added one. Nothing else.")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.45))
                     Spacer(minLength: 20)
@@ -367,7 +371,6 @@ struct ListRequestSheet: View {
 
     private var canSend: Bool {
         fullName.trimmingCharacters(in: .whitespaces).count >= 2
-            && !instagram.trimmingCharacters(in: .whitespaces).isEmpty
             && night != nil
     }
 
@@ -454,7 +457,9 @@ struct ListRequestBubble: View {
                 Text(r.plusCount == 0 ? "Just them" : "\(r.total) in total")
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.cream.opacity(0.6))
-                InstagramLink(handle: r.instagram, url: r.instagramURL)
+                if let h = r.instagram, let u = r.instagramURL {
+                    InstagramLink(handle: h, url: u)
+                }
                 if decider && r.pending {
                     HStack(spacing: 10) {
                         decisionButton("APPROVE", filled: true) { decide(r, true) }
@@ -780,7 +785,9 @@ struct GuestListBody: View {
                         Text("\(r.total) in total")
                             .font(.system(size: 12, weight: .semibold, design: .rounded))
                             .foregroundStyle(Color.cream.opacity(0.6))
-                        InstagramLink(handle: r.instagram, url: r.instagramURL, compact: true)
+                        if let h = r.instagram, let u = r.instagramURL {
+                            InstagramLink(handle: h, url: u, compact: true)
+                        }
                     }
                     if let u = r.userUsername {
                         Text("on Sejdel as @\(u)")
@@ -1173,7 +1180,7 @@ enum GuestListExport {
         func q(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
         var out = ["Night,Name,Plus,Total,Instagram,Status,Requested"]
         for r in rows {
-            out.append([q(r.night), q(r.fullName), "\(r.plusCount)", "\(r.total)", q("@" + r.instagram), q(r.status), q(r.createdAt)].joined(separator: ","))
+            out.append([q(r.night), q(r.fullName), "\(r.plusCount)", "\(r.total)", q(r.instagram.map { "@" + $0 } ?? ""), q(r.status), q(r.createdAt)].joined(separator: ","))
         }
         return out.joined(separator: "\n") + "\n"
     }
