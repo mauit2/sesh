@@ -19,6 +19,25 @@ final class AdminService: ObservableObject {
     @Published private(set) var isOwner = false
     /// Full admin roster, for the owner's management list.
     @Published private(set) var admins: [AdminEntry] = []
+    /// "Not yet" answers from the review prompt. Owner-readable only.
+    @Published private(set) var feedback: [FeedbackEntry] = []
+
+    struct FeedbackEntry: Identifiable, Decodable {
+        let id: UUID
+        let user_id: UUID
+        let name: String?
+        let username: String?
+        let message: String
+        let build: String?
+        let created_at: Date
+    }
+
+    func loadFeedback() async {
+        guard isAdmin else { feedback = []; return }
+        if let rows: [FeedbackEntry] = try? await supabase.rpc("admin_app_feedback").execute().value {
+            feedback = rows
+        }
+    }
 
     struct AdminEntry: Identifiable, Equatable {
         let userId: UUID

@@ -1253,6 +1253,8 @@ final class RecapHistoryStore: ObservableObject {
     func save(_ recap: NightRecap) {
         guard let data = try? enc.encode(recap) else { return }
         try? data.write(to: fileURL(recap.id), options: .atomic)
+        // A long enough night is what earns the review ask.
+        Task { @MainActor in ReviewPrompt.shared.noteRecap(recap) }
         if let i = recaps.firstIndex(where: { $0.id == recap.id }) {
             recaps[i] = recap
         } else {
@@ -1990,6 +1992,7 @@ final class PostService: ObservableObject {
         // past night. (No-op at END, where it was never a past night.)
         history.markPosted(recap.id)
         history.removeFromPastNights(recap.id)
+        await MainActor.run { ReviewPrompt.shared.notePosted() }
     }
 }
 

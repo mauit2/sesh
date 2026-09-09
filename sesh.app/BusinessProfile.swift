@@ -145,16 +145,31 @@ final class BusinessFollowStore: ObservableObject {
     @Published private(set) var following: Set<UUID> = []
     @Published private(set) var counts: [UUID: Int] = [:]
     @Published private(set) var busy: Set<UUID> = []
+    /// Followed bars whose pushes this account has turned off (the bell).
+    @Published private(set) var muted: Set<UUID> = []
 
     func load() async {
-        guard supabase.auth.currentUser != nil else { following = []; return }
-        struct Row: Decodable { let business_id: UUID }
-        if let rows: [Row] = try? await supabase.from("business_follows").select("business_id").execute().value {
+        guard supabase.auth.currentUser != nil else { following = []; muted = []; return }
+        struct Row: Decodable { let business_id: UUID; let notify: Bool? }
+        if let rows: [Row] = try? await supabase.from("business_follows").select("business_id,notify").execute().value {
             following = Set(rows.map(\.business_id))
+            muted = Set(rows.filter { $0.notify == false }.map(\.business_id))
         }
     }
 
     func isFollowing(_ id: UUID) -> Bool { following.contains(id) }
+    func wantsPushes(_ id: UUID) -> Bool { !muted.contains(id) }
+
+    /// Flip pushes from one followed bar. Optimistic, rolled back on failure.
+    func toggleNotify(_ id: UUID) async {
+        let on = muted.contains(id)
+        if on { muted.remove(id) } else { muted.insert(id) }
+        struct P: Encodable { let p_business: String; let p_on: Bool }
+        if (try? await supabase.rpc("set_business_follow_notify",
+                                    params: P(p_business: id.uuidString.lowercased(), p_on: on)).execute()) == nil {
+            if on { muted.insert(id) } else { muted.remove(id) }
+        }
+    }
 
     /// Flip the follow; returns the new state. Optimistic, rolled back on failure.
     @discardableResult
@@ -168,6 +183,7 @@ final class BusinessFollowStore: ObservableObject {
             let count: Int = try await supabase.rpc("follow_business", params: P(p_business: id.uuidString.lowercased(), p_on: on))
                 .execute().value
             counts[id] = count
+            if !on { muted.remove(id) }
             return on
         } catch {
             if on { following.remove(id) } else { following.insert(id) }
@@ -196,6 +212,31 @@ struct FollowButton: View {
         }
         .buttonStyle(PressScaleStyle())
         .disabled(follows.busy.contains(businessId))
+    }
+}
+
+/// The bell beside FOLLOW on a bar's profile: pushes from this one bar on or
+/// off. Only there once you follow — nothing to mute before that.
+struct FollowBellButton: View {
+    let businessId: UUID
+    @ObservedObject private var follows = BusinessFollowStore.shared
+
+    var body: some View {
+        if follows.isFollowing(businessId) {
+            let on = follows.wantsPushes(businessId)
+            Button {
+                Task { await follows.toggleNotify(businessId) }
+            } label: {
+                Image(systemName: on ? "bell.fill" : "bell.slash")
+                    .font(.system(size: 12, weight: .black))
+                    .foregroundStyle(on ? Color.whiskey : Color.cream.opacity(0.45))
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.cream.opacity(0.08)))
+                    .overlay(Circle().strokeBorder(Color.cream.opacity(0.15), lineWidth: 1))
+            }
+            .buttonStyle(PressScaleStyle())
+            .accessibilityLabel(on ? "Turn off pushes from this bar" : "Turn on pushes from this bar")
+        }
     }
 }
 
@@ -839,6 +880,7 @@ struct BusinessProfileView: View {
                 .padding(.top, 2)
             HStack(spacing: 10) {
                 FollowButton(businessId: b.id)
+                FollowBellButton(businessId: b.id)
                 if let acc = b.accountId, acc != supabase.auth.currentUser?.id {
                     Button {
                         dismiss()

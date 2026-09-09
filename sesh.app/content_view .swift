@@ -2134,12 +2134,16 @@ struct RootView: View {
                 SessionView(profile: profile, auth: auth, invites: invites, admin: admin)
                     .transition(.opacity)
             }
+            // The review ask floats over whatever is signed in. Lives here,
+            // not on SessionView's modifier chain, which is already at the
+            // type-checker's limit.
+            if case .signedIn = auth.state { ReviewPromptCard() }
         }
         .animation(.easeInOut(duration: 0.35), value: auth.state)
         // A restored session can already be .signedIn on first render, in
         // which case onChange below never fires — so also refresh on appear.
         .task(id: auth.state) {
-            if case .signedIn = auth.state { await admin.refresh() }
+            if case .signedIn = auth.state { await admin.refresh(); await ReviewPrompt.shared.bootstrap() }
         }
         .onChange(of: auth.state) { _, new in
             switch new {
@@ -8853,6 +8857,9 @@ private struct ProfileSheet: View {
     /// the flag is mirrored to the server (set_deals_push_opt_in) so
     /// send_venue_push knows who to reach.
     @AppStorage(DealsPush.optInKey) private var dealsPushOptIn = false
+    /// The Friday afternoon "keep track of your weekend" push. On unless
+    /// turned off; mirrored to the server, which does the sending.
+    @AppStorage(WeekendPush.optInKey) private var weekendPushOptIn = true
 
     /// Contact-discovery controls. The number is never persisted — it's
     /// hashed, published, and dropped (see ContactDiscovery / migration 099).
@@ -9152,6 +9159,20 @@ private struct ProfileSheet: View {
                                     .foregroundStyle(Color.cream.opacity(0.55))
                                     .fixedSize(horizontal: false, vertical: true)
                                     .padding(.horizontal, 4)
+                                Toggle(isOn: $weekendPushOptIn) {
+                                    Text("Friday check-in")
+                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(Color.cream)
+                                }
+                                .toggleStyle(SwitchToggleStyle(tint: .whiskey))
+                                .padding(.top, 6)
+                                Text(weekendPushOptIn
+                                     ? "One push on Friday afternoons: keep track of the weekend, get home safe."
+                                     : "No Friday push.")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.cream.opacity(0.55))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.horizontal, 4)
                             }
                         }
                     }
@@ -9162,6 +9183,9 @@ private struct ProfileSheet: View {
                     }
                     .onChange(of: sponsoredCardsOff) { _, off in
                         SponsoredCards.setOptOut(off)
+                    }
+                    .onChange(of: weekendPushOptIn) { _, on in
+                        WeekendPush.setOptIn(on)
                     }
                     .onChange(of: bacUnitMode) { _ in
                         // Push the new unit out to the home-screen widget and
@@ -9705,10 +9729,11 @@ struct AdminPanelView: View {
             Color.ink.ignoresSafeArea()
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
-                    header
+                    header.task { await admin.loadFeedback() }
                     if admin.isOwner {
                         grantSection
                         rosterSection
+                        feedbackSection
                     } else {
                         Text("You can add beverages to the catalog without waiting for 5-user verification. Only the owner can promote or demote admins.")
                             .font(.system(size: 13, weight: .regular, design: .rounded))
@@ -9782,6 +9807,44 @@ struct AdminPanelView: View {
                 }
                 .buttonStyle(PressScaleStyle())
                 .disabled(working || email.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    /// The "not yet" answers from the review prompt. Newest first.
+    private var feedbackSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("APP FEEDBACK")
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .tracking(2.0)
+                .foregroundStyle(Color.bronze)
+            if admin.feedback.isEmpty {
+                Text("Nothing yet. When someone answers \"not yet\" to the review prompt and tells you why, it lands here.")
+                    .font(.system(size: 13, weight: .regular, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.55))
+                    .lineSpacing(3)
+            }
+            VStack(spacing: 8) {
+                ForEach(admin.feedback) { f in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 8) {
+                            Text(f.name.flatMap { $0.isEmpty ? nil : $0 } ?? f.username.map { "@" + $0 } ?? "Someone")
+                                .font(.system(size: 13, weight: .heavy, design: .rounded))
+                                .foregroundStyle(Color.cream)
+                            Spacer(minLength: 0)
+                            Text(f.created_at.formatted(date: .abbreviated, time: .shortened) + (f.build.map { " · b\($0)" } ?? ""))
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Color.cream.opacity(0.45))
+                        }
+                        Text(f.message)
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.cream.opacity(0.85))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.inkElev.opacity(0.7)))
+                }
             }
         }
     }

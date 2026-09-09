@@ -3013,6 +3013,17 @@ enum DealsInterstitial {
 /// Client side of the opt-in nearby-bar deal-push preference (migration 058).
 /// Stored locally for instant UI and mirrored to the server so send_venue_push
 /// knows the audience.
+/// The Friday afternoon push. The server sends it; this only records
+/// whether this account wants it.
+enum WeekendPush {
+    static let optInKey = "sejdel.weekend.pushOptIn.v1"
+    static func setOptIn(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: optInKey)
+        struct P: Encodable { let p_on: Bool }
+        Task { _ = try? await supabase.rpc("set_weekend_push_opt_in", params: P(p_on: on)).execute() }
+    }
+}
+
 enum DealsPush {
     static let optInKey = "sesh.deals.pushOptIn.v1"
     /// Whether we've shown the one-time "want deals from nearby bars?" ask.
