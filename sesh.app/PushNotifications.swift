@@ -104,10 +104,14 @@ final class PushManager: ObservableObject {
         // `supabase` is the shared client defined in content_view.swift.
         // The RPC stamps auth.uid() server-side, so an unauthenticated
         // call just raises and is ignored here.
-        struct Params: Encodable { let p_token: String; let p_platform: String }
+        // The zone rides along so the Friday nudge lands at 16:00 wherever
+        // this phone actually is (migration 127). Refreshed every launch,
+        // since APNs hands the token over each time.
+        struct Params: Encodable { let p_token: String; let p_platform: String; let p_time_zone: String }
         do {
             _ = try await supabase
-                .rpc("register_device_token", params: Params(p_token: hex, p_platform: "ios"))
+                .rpc("register_device_token",
+                     params: Params(p_token: hex, p_platform: "ios", p_time_zone: TimeZone.current.identifier))
                 .execute()
         } catch {
             // Not signed in yet, offline, or migration not applied — all
