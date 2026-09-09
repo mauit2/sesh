@@ -6,7 +6,7 @@
 <!-- Hardening: this page runs INLINE JavaScript only (the calculator math,
      all local — nothing is sent anywhere). Styles inline, fonts pinned to
      Google Fonts, no network calls, nothing else may load or frame us. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; connect-src 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; connect-src 'none'" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
@@ -428,5 +428,6 @@ $("sexM").addEventListener("click",   function(){ state.sex = "m"; render(); });
 $("sexF").addEventListener("click",   function(){ state.sex = "f"; render(); });
 render();
 </script>
+  <script src="/consent.js" defer></script>
 </body>
 </html>

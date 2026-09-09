@@ -6,7 +6,7 @@
 <!-- Hardening: zero JavaScript runs on this page, styles are inline-only,
      fonts pinned to Google Fonts. The only relaxation vs. the other pages is
      form-action mailto: so the contact form can open the visitor's mail app. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action mailto:" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action mailto:" />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="dark" />
 <meta name="theme-color" content="#140f0b" />
@@ -226,5 +226,6 @@
       <a class="back" href="../">← Back to Sejdel</a>
     </div>
   </main>
+  <script src="/consent.js" defer></script>
 </body>
 </html>
