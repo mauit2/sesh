@@ -140,33 +140,36 @@ struct ReviewPromptCard: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var text = ""
     @FocusState private var focused: Bool
-    /// Tracked by hand: the container ignores the keyboard's safe-area
-    /// inset (so the dim stays full-screen and nothing else jumps) and the
-    /// card is lifted by exactly this much instead.
-    @State private var keyboardHeight: CGFloat = 0
+    /// The keyboard's top edge in screen coordinates, when it is up. The
+    /// container ignores the keyboard's own safe-area inset (so the dim
+    /// stays full-screen and nothing else jumps) and the card is lifted by
+    /// the measured overlap instead.
+    @State private var keyboardTop: CGFloat? = nil
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            if prompt.showing {
-                Color.black.opacity(0.5).ignoresSafeArea()
-                    .onTapGesture { if prompt.stage != .feedback { prompt.skip() } }
-                card
-                    .padding(.horizontal, 16)
-                    // The container ignores the bottom safe area entirely, so
-                    // both numbers are measured from the screen edge.
-                    .padding(.bottom, keyboardHeight > 0 ? keyboardHeight + 10 : 62)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+        GeometryReader { geo in
+            let bottom = geo.frame(in: .global).maxY
+            let lift: CGFloat = keyboardTop.map { max(0, bottom - $0) + 10 } ?? 28
+            ZStack(alignment: .bottom) {
+                if prompt.showing {
+                    Color.black.opacity(0.5).ignoresSafeArea()
+                        .onTapGesture { if prompt.stage != .feedback { prompt.skip() } }
+                    card
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, lift)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
         }
         .ignoresSafeArea(.keyboard)
-        .ignoresSafeArea(.container, edges: .bottom)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
             guard let end = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
-            let h = max(0, UIScreen.main.bounds.height - end.origin.y)
-            withAnimation(.easeOut(duration: 0.25)) { keyboardHeight = h }
+            let offscreen = end.origin.y >= UIScreen.main.bounds.height
+            withAnimation(.easeOut(duration: 0.25)) { keyboardTop = offscreen ? nil : end.origin.y }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            withAnimation(.easeOut(duration: 0.25)) { keyboardHeight = 0 }
+            withAnimation(.easeOut(duration: 0.25)) { keyboardTop = nil }
         }
         .zIndex(50)
         // Mounted for the whole signed-in life of the app, so this runs on
