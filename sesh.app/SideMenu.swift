@@ -258,18 +258,32 @@ struct SideMenu: View {
     /// dimmed on purpose: they must be findable, not compete with the app.
     /// Opened in Safari rather than a sheet — these are pages to keep.
     private var legalRow: some View {
-        // One wrapping Text rather than an HStack: six links no longer fit on
-        // a single line, and markdown links wrap where a stack cannot.
-        Text("[Privacy](https://sejdel.com/privacy/) · [Terms](https://sejdel.com/terms/) · [Cookies](https://sejdel.com/cookies/) · [Accessibility](https://sejdel.com/accessibility/) · [EULA](https://sejdel.com/eula/) · [Disclaimer](https://sejdel.com/disclaimer/)")
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.cream.opacity(0.42))
-            .tint(Color.cream.opacity(0.42))
-            .lineSpacing(3)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 22)
-            .padding(.top, 10)
+        // One per line. Six of them wrapping mid-sentence read as a paragraph
+        // rather than a list, and nobody scans a paragraph for the document
+        // they want.
+        VStack(alignment: .leading, spacing: 9) {
+            ForEach(Self.legalLinks, id: \.0) { title, url in
+                Link(destination: URL(string: url)!) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.4))
+                        .contentShape(Rectangle())
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 22)
+        .padding(.top, 12)
     }
+
+    private static let legalLinks: [(String, String)] = [
+        ("Privacy Notice", "https://sejdel.com/privacy/"),
+        ("Terms & Conditions", "https://sejdel.com/terms/"),
+        ("Cookie Policy", "https://sejdel.com/cookies/"),
+        ("EULA", "https://sejdel.com/eula/"),
+        ("Disclaimer", "https://sejdel.com/disclaimer/"),
+        ("Accessibility", "https://sejdel.com/accessibility/"),
+    ]
 
     /// A row in the same shape as `row`, dialled down — for the things that
     /// should be reachable without pulling the eye.

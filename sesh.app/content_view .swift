@@ -2137,7 +2137,12 @@ struct RootView: View {
             // The review ask floats over whatever is signed in. Lives here,
             // not on SessionView's modifier chain, which is already at the
             // type-checker's limit.
-            if case .signedIn = auth.state { ReviewPromptCard() }
+            if case .signedIn = auth.state {
+                ReviewPromptCard()
+                // Blocking, and before anything else: for a new account this
+                // lands the moment sign-up completes.
+                SafetyDisclaimerGate()
+            }
         }
         .animation(.easeInOut(duration: 0.35), value: auth.state)
         // A restored session can already be .signedIn on first render, in

@@ -889,7 +889,7 @@ struct AuthView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Sejdel is a fun BAC estimate, not a legal or medical reference. Never use it to decide whether to drive.")
             if mode == .signUp {
-                Text("By creating an account you agree to our [Terms & Conditions](https://sejdel.com/terms/), [Privacy Notice](https://sejdel.com/privacy/), [EULA](https://sejdel.com/eula/) and our other [legal documents](https://sejdel.com/cookies/).")
+                Text("By creating an account you agree to our [Terms & Conditions](https://sejdel.com/terms/), [Privacy Notice](https://sejdel.com/privacy/), [Cookie Policy](https://sejdel.com/cookies/), [EULA](https://sejdel.com/eula/) and [Disclaimer](https://sejdel.com/disclaimer/).")
                     .tint(Color.whiskey)
             }
         }
