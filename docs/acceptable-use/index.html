@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- Hardening: zero JavaScript runs on this page, styles are inline-only,
+     fonts pinned to Google Fonts, nothing else may load or frame us. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
+<meta name="referrer" content="no-referrer" />
+<meta name="color-scheme" content="dark" />
+<meta name="theme-color" content="#140f0b" />
+<title>Acceptable Use Policy — Sejdel</title>
+<meta name="description" content="Acceptable Use Policy for Sejdel — what you may and may not do on the app and site, our community guidelines, and how we handle reports." />
+<link rel="canonical" href="https://sejdel.com/acceptable-use/" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#140f0b; --bg-elev:#1d1610; --cream:#f3e9d8; --cream-dim:#cdbfa8;
+    --whiskey:#e8843c; --bronze:#b3895a; --line:rgba(243,233,216,.10);
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+    --measure:44rem;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(120% 80% at 85% -10%, rgba(232,132,60,.16), transparent 55%),
+      radial-gradient(90% 70% at -10% 0%, rgba(179,137,90,.10), transparent 50%),
+      var(--bg);
+    color:var(--cream);
+    font-family:"Hanken Grotesk",system-ui,sans-serif;
+    font-size:17px;line-height:1.72;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.04;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* faint carbonation in the margins */
+  .bubbles{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+  .bubbles i{
+    position:absolute;bottom:-6vh;border-radius:50%;
+    border:1px solid rgba(232,132,60,.22);
+    background:radial-gradient(circle at 32% 30%, rgba(243,233,216,.10), rgba(232,132,60,.04));
+    opacity:0;
+    animation:rise linear infinite;
+    will-change:transform,opacity;
+  }
+  @keyframes rise{
+    0%  {opacity:0;transform:translate3d(0,0,0) scale(.6);}
+    10% {opacity:.5;}
+    75% {opacity:.3;}
+    100%{opacity:0;transform:translate3d(var(--sway,2vw),-110vh,0) scale(1);}
+  }
+  .bubbles i:nth-child(1){left:4%;  width:9px; height:9px; --sway: 2vw; animation-duration:22s; animation-delay:0s;}
+  .bubbles i:nth-child(2){left:9%;  width:5px; height:5px; --sway:-2vw; animation-duration:28s; animation-delay:9s;}
+  .bubbles i:nth-child(3){left:93%; width:11px;height:11px;--sway:-3vw; animation-duration:24s; animation-delay:4s;}
+  .bubbles i:nth-child(4){left:88%; width:6px; height:6px; --sway: 3vw; animation-duration:30s; animation-delay:14s;}
+
+  .wrap{position:relative;z-index:1;max-width:var(--measure);margin:0 auto;padding:72px 24px 96px;}
+
+  /* header entrance */
+  .reveal{opacity:0;transform:translateY(12px);animation:up .7s cubic-bezier(.2,.7,.2,1) forwards;}
+  .d1{animation-delay:.04s}.d2{animation-delay:.16s}.d3{animation-delay:.3s}.d4{animation-delay:.44s}
+  @keyframes up{to{opacity:1;transform:none;}}
+
+  /* scroll-driven section reveals — pure CSS, no JS. Browsers without
+     animation-timeline just show the sections normally. */
+  @supports (animation-timeline: view()){
+    section{
+      animation:sectionUp .7s cubic-bezier(.2,.7,.2,1) both;
+      animation-timeline:view();
+      animation-range:entry 0% entry 32%;
+    }
+    @keyframes sectionUp{
+      from{opacity:0;transform:translateY(18px);}
+      to  {opacity:1;transform:none;}
+    }
+  }
+
+  .eyebrow{
+    font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.34em;
+    text-transform:uppercase;color:var(--bronze);margin:0 0 14px;
+  }
+  .dot{position:relative;display:inline-block;width:7px;height:7px;border-radius:50%;
+    background:var(--whiskey);margin-right:11px;vertical-align:middle;}
+  .dot::after{
+    content:"";position:absolute;inset:-3px;border-radius:50%;
+    border:1px solid var(--whiskey);
+    animation:sonar 2.2s ease-out infinite;
+  }
+  @keyframes sonar{
+    0%{transform:scale(.6);opacity:.9;}
+    70%,100%{transform:scale(2.4);opacity:0;}
+  }
+
+  h1{
+    font-family:"Fraunces",Georgia,serif;font-optical-sizing:auto;
+    font-weight:800;font-size:clamp(2.6rem,7vw,4rem);line-height:1.02;letter-spacing:-.03em;
+    margin:0 0 18px;color:var(--cream);
+  }
+  h1 em{font-style:italic;color:var(--whiskey);}
+  .dates{font-family:var(--mono);color:var(--cream-dim);font-size:13px;letter-spacing:.04em;margin:0 0 30px;}
+  .dates b{color:var(--cream);font-weight:600;}
+  .callout{
+    border-left:3px solid var(--whiskey);
+    background:linear-gradient(90deg,rgba(232,132,60,.10),rgba(232,132,60,.02));
+    padding:16px 20px;border-radius:0 14px 14px 0;margin:0 0 40px;
+    color:var(--cream-dim);font-size:15.5px;
+  }
+  .callout b{color:var(--cream);font-weight:700;}
+  .lede{color:var(--cream-dim);font-size:18px;margin:0 0 28px;}
+
+  h2{
+    font-family:"Fraunces",Georgia,serif;font-weight:700;
+    font-size:1.5rem;letter-spacing:-.01em;line-height:1.2;
+    margin:54px 0 6px;color:var(--cream);
+    display:flex;align-items:baseline;gap:12px;
+  }
+  h2 .num{
+    font-family:var(--mono);font-size:12px;font-weight:700;
+    letter-spacing:.2em;color:var(--whiskey);transform:translateY(-2px);flex-shrink:0;
+  }
+  h3{font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--bronze);margin:26px 0 4px;}
+  hr{border:none;border-top:1px solid var(--line);margin:18px 0 0;}
+  p{margin:14px 0;}
+  a{color:var(--whiskey);text-decoration:none;border-bottom:1px solid rgba(232,132,60,.35);
+    transition:border-color .15s ease;}
+  a:hover{border-color:var(--whiskey);}
+  a:focus-visible{outline:2px solid var(--whiskey);outline-offset:3px;}
+  ul{margin:14px 0;padding-left:20px;}
+  li{margin:9px 0;}
+  li::marker{color:var(--whiskey);}
+  strong{color:var(--cream);font-weight:600;}
+  em.inshort{color:var(--bronze);font-style:italic;}
+
+  /* table of contents */
+  .toc{margin:14px 0 8px;padding-left:20px;}
+  .toc li{margin:6px 0;}
+  .toc a{font-size:15.5px;border-bottom-color:transparent;}
+  .toc a:hover{border-bottom-color:var(--whiskey);}
+
+  table{
+    width:100%;border-collapse:collapse;margin:18px 0 8px;font-size:15px;
+    background:rgba(243,233,216,.03);border-radius:14px;overflow:hidden;
+  }
+  th{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--bronze);text-align:left;padding:12px 14px;
+    border-bottom:1px solid var(--line);
+  }
+  td{padding:12px 14px;border-bottom:1px solid rgba(243,233,216,.06);vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  td:last-child{font-family:var(--mono);font-size:13px;color:var(--whiskey);white-space:nowrap;text-align:center;}
+  .tablewrap{overflow-x:auto;}
+
+  .foot{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+    color:var(--cream-dim);font-size:14px;}
+  .back{
+    display:inline-block;margin-top:14px;font-weight:700;font-size:13px;
+    letter-spacing:.04em;color:var(--cream);text-decoration:none;border:1px solid var(--line);
+    border-radius:999px;padding:9px 18px;
+    transition:border-color .18s ease,color .18s ease,transform .18s ease;
+  }
+  .back:hover{border-color:var(--whiskey);color:var(--whiskey);transform:translateY(-2px);}
+  .back:focus-visible{outline:2px solid var(--whiskey);outline-offset:3px;}
+
+  @media (prefers-reduced-motion: reduce){
+    .bubbles i,.dot::after{animation:none;}
+    .reveal{animation:none;opacity:1;transform:none;}
+    @supports (animation-timeline: view()){
+      section{animation:none;opacity:1;transform:none;}
+    }
+    html{scroll-behavior:auto;}
+  }
+
+  /* sejdel dimples — concave pressed glass, two depth layers */
+  .dimples{position:fixed;inset:-260px;pointer-events:none;z-index:-1;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='204'%3E%3Cdefs%3E%3CradialGradient id='g' cx='63%' cy='67%' r='75%'%3E%3Cstop offset='0%' stop-color='%23f0c084' stop-opacity='.55'/%3E%3Cstop offset='35%' stop-color='%23c98136' stop-opacity='.28'/%3E%3Cstop offset='75%' stop-color='%23120a04' stop-opacity='.6'/%3E%3Cstop offset='100%' stop-color='%23120a04' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none' stroke-linecap='round'%3E%3Ccircle cx='45' cy='51' r='34' fill='url(%23g)'/%3E%3Cpath d='M14.1 53.7A31 31 0 0 1 62.8 25.6' stroke='%230a0603' stroke-opacity='.65' stroke-width='3'/%3E%3Cpath d='M75.9 48.4A31 31 0 0 1 32.3 78.2' stroke='%23f3e0c0' stroke-opacity='.42' stroke-width='1.6'/%3E%3Ccircle cx='135' cy='153' r='34' fill='url(%23g)'/%3E%3Cpath d='M104.1 155.7A31 31 0 0 1 152.8 127.6' stroke='%230a0603' stroke-opacity='.65' stroke-width='3'/%3E%3Cpath d='M165.9 150.4A31 31 0 0 1 122.3 180.2' stroke='%23f3e0c0' stroke-opacity='.42' stroke-width='1.6'/%3E%3C/g%3E%3C/svg%3E");will-change:transform;}
+  .dim-far{opacity:.10;background-size:176px 200px;filter:blur(1.8px);
+    animation:dimpledriftf 84s linear infinite;}
+  .dim-near{opacity:.24;background-size:300px 341px;
+    animation:dimpledriftn 44s linear infinite;}
+  @keyframes dimpledriftf{from{transform:translate3d(0,0,0)}to{transform:translate3d(-176px,-200px,0)}}
+  @keyframes dimpledriftn{from{transform:translate3d(0,0,0)}to{transform:translate3d(-300px,-341px,0)}}
+  @media (prefers-reduced-motion: reduce){.dimples{animation:none}}
+  /* readability: feathered pool of ink behind every text container */
+  .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
+
+  /* accessibility: skip link + screen-reader-only text */
+  .vh{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
+    clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0;}
+  .skip{position:absolute;left:12px;top:-56px;z-index:2147483001;
+    background:#e8843c;color:#140f0b;font-weight:800;font-size:13px;letter-spacing:.04em;
+    padding:11px 18px;border-radius:999px;text-decoration:none;border:0;
+    transition:top .18s ease;}
+  .skip:focus{top:12px;}
+  .skip:focus-visible{outline:2px solid #f3e9d8;outline-offset:3px;}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
+  <div class="bubbles" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <main class="wrap" id="main" tabindex="-1">
+    <p class="eyebrow reveal d1"><span class="dot"></span>Sejdel</p>
+    <h1 class="reveal d2">Acceptable <em>Use Policy.</em></h1>
+    <p class="dates reveal d3"><b>Last updated:</b> 9 September 2026</p>
+
+    <p class="lede reveal d3">This Acceptable Use Policy (&ldquo;<strong>Policy</strong>&rdquo;) is part of our
+      <a href="../terms/">Terms &amp; Conditions</a> (&ldquo;<strong>Legal Terms</strong>&rdquo;) and should therefore
+      be read alongside them. If you do not agree with these Legal Terms, please refrain from using our Services. Your
+      continued use of our Services implies acceptance of these Legal Terms.</p>
+
+    <p class="reveal d4">Please carefully review this Policy which applies to any and all:</p>
+    <ul class="reveal d4">
+      <li>(a) uses of our Services (as defined in the Legal Terms);</li>
+      <li>(b) forms, materials, consent tools, comments, posts, and all other content available on the Services
+        (&ldquo;<strong>Content</strong>&rdquo;);</li>
+      <li>(c) material which you contribute to the Services including any upload, post, review, disclosure, ratings,
+        comments, chat and similar, in any forum, chatrooms, reviews, and to any interactive services associated with
+        it (&ldquo;<strong>Contribution</strong>&rdquo;);</li>
+      <li>(d) responsible implementation and management of AI Products within our Services.</li>
+    </ul>
+
+    <section id="who">
+    <h2><span class="num">01</span>Who we are</h2>
+    <p>We are <strong>Sejdel AB</strong> (&ldquo;<strong>Company</strong>,&rdquo; &ldquo;<strong>we</strong>,&rdquo;
+      &ldquo;<strong>us</strong>,&rdquo; or &ldquo;<strong>our</strong>&rdquo;), a company registered in Sweden,
+      Göteborg. We operate the website <a href="https://sejdel.com">https://sejdel.com</a> (the
+      &ldquo;<strong>Site</strong>&rdquo;), the mobile application Sejdel (the &ldquo;<strong>App</strong>&rdquo;), as
+      well as any other related products and services that refer or link to this Policy (collectively, the
+      &ldquo;<strong>Services</strong>&rdquo;).</p>
+    </section>
+
+    <section id="use">
+    <h2><span class="num">02</span>Use of the Services</h2>
+    <p>When you use the Services, you warrant that you will comply with this Policy and with all applicable laws.</p>
+    <p>You also acknowledge that you may not:</p>
+    <ul>
+      <li>Systematically retrieve data or other content from the Services to create or compile, directly or indirectly,
+        a collection, compilation, database, or directory without written permission from us.</li>
+      <li>Make any unauthorized use of the Services, including collecting usernames and/or email addresses of users by
+        electronic or other means for the purpose of sending unsolicited email, or creating user accounts by automated
+        means or under false pretenses.</li>
+      <li>Circumvent, disable, or otherwise interfere with security-related features of the Services, including features
+        that prevent or restrict the use or copying of any Content or enforce limitations on the use of the Services
+        and/or the Content contained therein.</li>
+      <li>Engage in unauthorized framing of or linking to the Services.</li>
+      <li>Trick, defraud, or mislead us and other users, especially in any attempt to learn sensitive account
+        information such as user passwords.</li>
+      <li>Make improper use of our Services, including our support services, or submit false reports of abuse or
+        misconduct.</li>
+      <li>Engage in any automated use of the Services, such as using scripts to send comments or messages, or using any
+        data mining, robots, or similar data gathering and extraction tools.</li>
+      <li>Interfere with, disrupt, or create an undue burden on the Services or the networks or the Services
+        connected.</li>
+      <li>Attempt to impersonate another user or person or use the username of another user.</li>
+      <li>Use any information obtained from the Services in order to harass, abuse, or harm another person.</li>
+      <li>Use the Services as part of any effort to compete with us or otherwise use the Services and/or the Content for
+        any revenue-generating endeavor or commercial enterprise.</li>
+      <li>Decipher, decompile, disassemble, or reverse engineer any of the software comprising or in any way making up a
+        part of the Services, except as expressly permitted by applicable law.</li>
+      <li>Attempt to bypass any measures of the Services designed to prevent or restrict access to the Services, or any
+        portion of the Services.</li>
+      <li>Harass, annoy, intimidate, or threaten any of our employees or agents engaged in providing any portion of the
+        Services to you.</li>
+      <li>Delete the copyright or other proprietary rights notice from any Content.</li>
+      <li>Copy or adapt the Services' software, including but not limited to Flash, PHP, HTML, JavaScript, or other
+        code.</li>
+      <li>Upload or transmit (or attempt to upload or to transmit) viruses, Trojan horses, or other material, including
+        excessive use of capital letters and spamming (continuous posting of repetitive text), that interferes with any
+        party's uninterrupted use and enjoyment of the Services or modifies, impairs, disrupts, alters, or interferes
+        with the use, features, functions, operation, or maintenance of the Services.</li>
+      <li>Upload or transmit (or attempt to upload or to transmit) any material that acts as a passive or active
+        information collection or transmission mechanism, including without limitation, clear graphics interchange
+        formats (&ldquo;gifs&rdquo;), 1×1 pixels, web bugs, cookies, or other similar devices (sometimes referred to as
+        &ldquo;spyware&rdquo; or &ldquo;passive collection mechanisms&rdquo; or &ldquo;pcms&rdquo;).</li>
+      <li>Except as may be the result of standard search engine or Internet browser usage, use, launch, develop, or
+        distribute any automated system, including without limitation, any spider, robot, cheat utility, scraper, or
+        offline reader that accesses the Services, or using or launching any unauthorized script or other software.</li>
+      <li>Disparage, tarnish, or otherwise harm, in our opinion, us and/or the Services.</li>
+      <li>Use the Services in a manner inconsistent with any applicable laws or regulations.</li>
+      <li>Use a buying agent or purchasing agent to make purchases on the Services.</li>
+      <li>Sell or otherwise transfer your profile.</li>
+      <li>Use check-ins, live presence, or the friends map to locate, follow, or monitor a person against their
+        wishes.</li>
+      <li>Create additional accounts to evade a block, a suspension, or any limit.</li>
+      <li>Use another person's account, or allow anyone else to use your account credentials.</li>
+      <li>Submit false reports, or use the reporting tools to harass another user or venue.</li>
+      <li>Probe, scan, or test the security of the Services, or interfere with their normal operation.</li>
+    </ul>
+
+    <h3>Subscriptions</h3>
+    <p>If you subscribe to our Services, you understand, acknowledge, and agree that you may not, except if expressly
+      permitted:</p>
+    <ul>
+      <li>Engage in any use, including modification, copying, redistribution, publication, display, performance, or
+        retransmission, of any portions of any Services, other than as expressly permitted by this Policy, without the
+        prior written consent of Sejdel AB, which consent Sejdel AB may grant or refuse in its sole and absolute
+        discretion.</li>
+      <li>Reconstruct or attempt to discover any source code or algorithms of the Services, or any portion thereof, by
+        any means whatsoever.</li>
+      <li>Provide, or otherwise make available, the Services to any third party.</li>
+      <li>Intercept any data not intended for you.</li>
+      <li>Damage, reveal, or alter any user's data, or any other hardware, software, or information relating to another
+        person or entity.</li>
+      <li>Use a business subscription for any venue other than the one it was purchased for, or share business account
+        credentials between venues or operators.</li>
+      <li>Claim or operate a venue profile without authority from that venue.</li>
+      <li>Use boosts, cards, or push notifications to promote anything other than the subscribing venue, or resell that
+        placement to a third party.</li>
+      <li>Obtain or keep paid features through a refunded, reversed, or otherwise fraudulently obtained purchase.</li>
+      <li>Circumvent limits on campaigns, boosts, pushes, or guest-list capacity.</li>
+      <li>Use automated access, scraping, or bulk collection of venue, deal, or price data.</li>
+    </ul>
+
+    <h3>AI Products</h3>
+    <p>When you use the AI Products provided by Sejdel AB, you warrant that you will not:</p>
+    <ul>
+      <li>Deploy AI techniques that utilize subliminal, manipulative, or deceptive methods designed to distort behavior
+        and impair informed decision-making, particularly when such actions cause significant harm to individuals.</li>
+      <li>Exploit vulnerabilities related to age, disability, or socio-economic circumstances through AI in a way that
+        distorts behavior or decision-making, especially if this results in significant harm to the individual.</li>
+      <li>Use AI systems for biometric categorization that infer sensitive attributes such as race, political opinions,
+        trade union membership, religious or philosophical beliefs, sex life, or sexual orientation, except in limited
+        cases, such as labeling or filtering lawfully acquired datasets, or specific law enforcement activities.</li>
+      <li>Implement AI-based social scoring systems that evaluate or classify individuals or groups based on their
+        social behavior or personal traits in a manner that causes harm, discrimination, or unfair treatment.</li>
+      <li>Assess the risk of an individual committing criminal offenses based solely on profiling, personality traits,
+        or other non-behavioral factors, except in narrowly defined circumstances where legal safeguards are in
+        place.</li>
+      <li>Compile facial recognition databases through untargeted scraping of facial images from the internet, social
+        media, or CCTV footage, unless it is part of a legally compliant and narrowly defined purpose.</li>
+      <li>Use AI to infer emotions in sensitive environments such as workplaces, educational institutions, or any other
+        context where such analysis could lead to discrimination, unfair treatment, or privacy violations.</li>
+      <li>Engage in real-time remote biometric identification in public places for law enforcement purposes, except in
+        specific situations where there are strong legal justifications and oversight mechanisms.</li>
+    </ul>
+    </section>
+
+    <section id="guidelines">
+    <h2><span class="num">03</span>Community guidelines</h2>
+    <p>Sejdel is for people who go out together, and it works because people trust each other with a fairly personal
+      picture of their night. These rules keep it that way.</p>
+    <p><strong>Look after each other.</strong> Never use Sejdel to pressure, dare, or compete anyone into drinking more
+      than they want to. Racing, forfeits, and &ldquo;keep up&rdquo; challenges are not what the numbers are for.</p>
+    <p><strong>Other people's nights are theirs.</strong> Only post photos of people who are happy to be posted. Someone
+      who has been drinking cannot meaningfully agree to a photo going up, so if in doubt, do not post it. Remove it if
+      they ask.</p>
+    <p><strong>Do not share what you see about someone else.</strong> A friend's estimated blood alcohol content, their
+      location, whether they are out, and who they are with are shared with you inside a session, not with anyone
+      outside it. Do not screenshot or repost it.</p>
+    <p><strong>Be accurate about bars.</strong> Beer prices and venue details you add are used by other people to decide
+      where to go. Do not submit prices you have not seen, and do not report a venue falsely.</p>
+    <p><strong>Do not impersonate.</strong> Do not pretend to be another person, or claim a bar or venue you have no
+      authority over.</p>
+    <p><strong>No harassment.</strong> No abuse, threats, hate, sexual harassment, or unwanted contact, in posts,
+      comments, or direct messages. Do not use the guest list or messaging to pester a venue or a person.</p>
+    <p><strong>Nothing illegal, and nothing that puts people at risk.</strong> No drugs, weapons, stolen goods, or
+      sexual content. Do not encourage anyone to drink and drive.</p>
+    <p><strong>You must be 18 or over</strong> to use Sejdel.</p>
+    <p><strong>If something is wrong, report it.</strong> Use the report and block tools in the app, or email
+      <a href="mailto:contact@sejdel.com">contact@sejdel.com</a>. We remove content and suspend accounts that break
+      these rules.</p>
+    </section>
+
+    <section id="ai">
+    <h2><span class="num">04</span>Artificial intelligence</h2>
+    <p>We recognize the significant impact AI can have on our users and society, and we are dedicated to ensuring that
+      our AI Products are designed and operated in a manner that aligns with comprehensive ethical standards. We aim to
+      use AI to enhance user experiences while upholding fairness, transparency, and accountability principles.</p>
+    <p>This Policy applies to all AI-powered features, services, and systems in our Services. It governs the
+      development, deployment, and use of AI technologies to protect users' rights and maintain transparency in all AI
+      operations. This Policy applies to all stakeholders, including employees, third-party vendors, and partners who
+      contribute to or interact with our AI Products.</p>
+
+    <h3>Enforcement</h3>
+    <p>Any misuse of our AI Products or failure to adhere to the standards outlined in this Policy will result in
+      appropriate actions to ensure the integrity of our platform and the protection of our users. The specific
+      consequences for misuse of AI may vary depending on the nature and severity of the violation and the user's
+      history with our Services.</p>
+    <p>Violations may include, but are not limited to:</p>
+    <ul>
+      <li>Engaging the AI Products in ways that violate user privacy, manipulate data, disregard ethical guidelines, or
+        are against AI Service Providers' terms of use.</li>
+      <li>Deploying AI in a manner that introduces or causes bias, leading to unfair treatment of users or groups.</li>
+      <li>Improper handling, storage, or use of data by AI Products, leading to breaches of user trust and legal
+        compliance.</li>
+      <li>Using AI in a way that compromises the privacy and security of our systems, data, or users.</li>
+    </ul>
+    <p>Depending on the violation, Sejdel AB may take one or more of the following actions:</p>
+    <ul>
+      <li><strong>Warnings:</strong> The responsible party may receive a formal warning and be required to cease
+        violating practices.</li>
+      <li><strong>Temporary suspension:</strong> In cases of repeated or more severe violations, the responsible
+        individual's access to AI Products or certain features of our platform may be temporarily suspended while the
+        issue is investigated.</li>
+      <li><strong>Termination of access:</strong> Serious violations, particularly those that result in harm to users or
+        breach privacy or other regulations, may lead to the permanent termination of access to our AI Products and
+        Services.</li>
+      <li><strong>Legal action:</strong> In cases where the misuse of AI leads to significant harm, data breaches, or
+        legal violations, we may pursue legal action against the party responsible. This could include reporting the
+        incident to law enforcement or regulatory bodies.</li>
+      <li><strong>Public disclosure:</strong> For incidents that impact public trust or involve severe ethical breaches,
+        we reserve the right to publicly disclose the violation and the actions taken in response to maintain
+        transparency and accountability.</li>
+    </ul>
+
+    <h3>Commitment to responsible AI</h3>
+    <p>In addition to the consequences outlined above, we are committed to repairing any harm caused by the misuse of
+      AI. We will correct biased outcomes and implement additional safeguards to prevent future violations.</p>
+    <p>At Sejdel AB, we are committed to the ongoing refinement and enhancement of our Policy. As technology evolves and
+      regulatory environments shift, we recognize the importance of keeping our policies up to date to ensure that they
+      remain relevant, effective, and aligned with best practices in AI ethics. We will regularly review and update our
+      Policy to reflect technological advancements and legal changes in local, national, and international regulations
+      related to AI.</p>
+    </section>
+
+    <section id="contributions">
+    <h2><span class="num">05</span>Contributions</h2>
+    <p>In this Policy, the term &ldquo;Contributions&rdquo; means:</p>
+    <ul>
+      <li>any data, information, software, text, code, music, scripts, sound, graphics, photos, videos, tags, messages,
+        interactive features, or other materials that you post, share, upload, submit, or otherwise provide in any
+        manner on or through the Services; or</li>
+      <li>any other content, materials, or data you provide to Sejdel AB or use with the Services.</li>
+    </ul>
+    <p>Some areas of the Services may allow users to upload, transmit, or post Contributions. We may but are under no
+      obligation to review or moderate the Contributions made on the Services, and we expressly exclude our liability
+      for any loss or damage resulting from any of our users' breach of this Policy. Please report any Contribution that
+      you believe breaches this Policy; however, we will determine, in our sole discretion, whether a Contribution is
+      indeed in breach of this Policy.</p>
+    <p>You warrant that:</p>
+    <ul>
+      <li>you are the creator and owner of or have the necessary licenses, rights, consents, releases, and permissions
+        to use and to authorize us, the Services, and other users of the Services to use your Contributions in any
+        manner contemplated by the Services and this Policy;</li>
+      <li>all your Contributions comply with applicable laws and are original and true (if they represent your opinion
+        or facts);</li>
+      <li>the creation, distribution, transmission, public display, or performance, and the accessing, downloading, or
+        copying of your Contributions do not and will not infringe the proprietary rights, including but not limited to
+        the copyright, patent, trademark, trade secret, or moral rights of any third party; and</li>
+      <li>you have the verifiable consent, release, and/or permission of each and every identifiable individual person
+        in your Contributions to use the name or likeness of each and every such identifiable individual person to
+        enable inclusion and use of your Contributions in any manner contemplated by the Services and this Policy.</li>
+    </ul>
+    <p>You also agree that you will not post, transmit, or upload any (or any part of a) Contribution that:</p>
+    <ul>
+      <li>is in breach of applicable laws, regulation, court order, contractual obligation, this Policy, our Legal
+        Terms, a legal duty, or that promotes or facilitates fraud or illegal activities;</li>
+      <li>is defamatory, obscene, offensive, hateful, insulting, intimidating, bullying, abusive, or threatening, to any
+        person or group;</li>
+      <li>is false, inaccurate, or misleading;</li>
+      <li>includes child sexual abuse material, or violates any applicable law concerning child pornography or otherwise
+        intended to protect minors;</li>
+      <li>contains any material that solicits personal information from anyone under the age of 18 or exploits people
+        under the age of 18 in a sexual or violent manner;</li>
+      <li>promotes violence, advocates the violent overthrow of any government, or incites, encourages, or threatens
+        physical harm against another;</li>
+      <li>is obscene, lewd, lascivious, filthy, violent, harassing, libelous, slanderous, contains sexually explicit
+        material, or is otherwise objectionable (as determined by us);</li>
+      <li>is discriminatory based on race, sex, religion, nationality, disability, sexual orientation, or age;</li>
+      <li>bullies, intimidates, humiliates, or insults any person;</li>
+      <li>promotes, facilitates, or assists anyone in promoting and facilitating acts of terrorism;</li>
+      <li>infringes, or assists anyone in infringing, a third party's intellectual property rights or publicity or
+        privacy rights;</li>
+      <li>is deceitful, misrepresents your identity or affiliation with any person and/or misleads anyone as to your
+        relationship with us or implies that the Contribution was made by someone else than you;</li>
+      <li>contains unsolicited or unauthorized advertising, promotional materials, pyramid schemes, chain letters, spam,
+        mass mailings, or other forms of solicitation that has been &ldquo;paid for,&rdquo; whether with monetary
+        compensation or in kind; or</li>
+      <li>misrepresents your identity or who the Contribution is from.</li>
+    </ul>
+    <p>You may not use our Services to offer, present, promote, sell, give away or otherwise make available to others
+      any good or service involving:</p>
+    <ul>
+      <li>items that promote, encourage, facilitate, or instruct others how to engage in illegal activity;</li>
+      <li>cigarettes;</li>
+      <li>controlled substances and/or other products that present a risk to consumer safety, narcotics, steroids, drug
+        paraphernalia;</li>
+      <li>specific knives or other weapons regulated under applicable law;</li>
+      <li>firearms, ammunition, or certain firearm parts or accessories;</li>
+      <li>certain sexually oriented materials or services;</li>
+      <li>certain items before the seller has control or possession of the item;</li>
+      <li>alcohol promotions that encourage excessive, rapid, or competitive drinking, including unlimited-drink offers,
+        drinking contests, and all-you-can-drink pricing;</li>
+      <li>any promotion of alcohol directed at, or likely to appeal to, people under the legal drinking age;</li>
+      <li>alcohol offered without the serving licence required in the venue's jurisdiction;</li>
+      <li>any claim that alcohol improves performance, resolves personal problems, or is safe to combine with driving or
+        operating machinery;</li>
+      <li>tobacco, e-cigarettes, vaping products, nicotine pouches and snus;</li>
+      <li>counterfeit, stolen, or otherwise illegally obtained goods;</li>
+      <li>prescription medicines, unapproved supplements, and products claiming health benefits;</li>
+      <li>gambling services, betting, or promotions of either;</li>
+      <li>products or services identified by government agencies to be highly likely to be fraudulent; and</li>
+      <li>any transaction or activity that requires pre-approval without having obtained said approval.</li>
+    </ul>
+    </section>
+
+    <section id="reviews">
+    <h2><span class="num">06</span>Reviews and ratings</h2>
+    <p>When your Contribution is a review or rating, you also agree that:</p>
+    <ul>
+      <li>you have firsthand experience with the services being reviewed;</li>
+      <li>your Contribution is true to your experience;</li>
+      <li>you are not affiliated with competitors if posting negative reviews (or linked in any way to, for example by
+        being the owner or seller of a product or service if posting positive reviews);</li>
+      <li>you cannot make or offer any conclusions as to the legality of conduct;</li>
+      <li>you cannot post any false or misleading statements; and</li>
+      <li>you do not and will not organize a campaign encouraging others to post reviews, whether positive or
+        negative.</li>
+    </ul>
+    </section>
+
+    <section id="reporting">
+    <h2><span class="num">07</span>Reporting a breach of this Policy</h2>
+    <p>We may but are under no obligation to review or moderate the Contributions made on the Services and we expressly
+      exclude our liability for any loss or damage resulting from any of our users' breach of this Policy.</p>
+    <p>If you consider that any Service, Content, or Contribution:</p>
+    <ul>
+      <li>breaches this Policy, please email us at <a href="mailto:contact@sejdel.com">contact@sejdel.com</a>, visit
+        <a href="https://sejdel.com/contact/">https://sejdel.com/contact/</a>, or refer to the contact details at the
+        bottom of this document to let us know which Service, Content, or Contribution is in breach of this Policy and
+        why;</li>
+      <li>infringes any third-party intellectual property rights, please see our Legal Terms for information about our
+        copyright infringement reporting process here:
+        <a href="https://sejdel.com/terms/#copyrightyes">https://sejdel.com/terms/#copyrightyes</a>;</li>
+      <li>users can also send detailed feedback on their interactions with our AI Products by emailing
+        <a href="mailto:contact@sejdel.com">contact@sejdel.com</a> or referring to the contact details at the bottom of
+        this document. You should include specific details about the AI interaction, such as the context, the nature of
+        the concern, and any relevant screenshots or documentation.</li>
+    </ul>
+    <p>We will reasonably determine whether a Service, Content, or Contribution breaches this Policy.</p>
+    </section>
+
+    <section id="consequences">
+    <h2><span class="num">08</span>Consequences of breaching this Policy</h2>
+    <p>The consequences for violating our Policy will vary depending on the severity of the breach and the user's
+      history on the Services, by way of example:</p>
+    <p>We may, in some cases, give you a warning and/or remove the infringing Contribution, however, if your breach is
+      serious or if you continue to breach our Legal Terms and this Policy, we have the right to suspend or terminate
+      your access to and use of our Services and, if applicable, disable your account. We may also notify law
+      enforcement or issue legal proceedings against you when we believe that there is a genuine risk to an individual
+      or a threat to public safety.</p>
+    <p>We exclude our liability for all action we may take in response to any of your breaches of this Policy.</p>
+    </section>
+
+    <section id="complaints">
+    <h2><span class="num">09</span>Complaints and removal of legitimate content</h2>
+    <p>If you consider that some Content or Contribution has been mistakenly removed or blocked from the Services,
+      please refer to the contact details at the bottom of this document and we will promptly review our decision to
+      remove such Content or Contribution. The Content or Contribution may stay &ldquo;down&rdquo; whilst we conduct the
+      review process.</p>
+    <p>Sejdel does not review content before it is published. Posts, stories, comments, submitted beer prices, and venue
+      offers appear immediately.</p>
+    <p>We monitor in two ways. Any user can block another user, which takes effect at once and needs no decision from
+      us. Any user can also report a post, story, comment, profile, or venue listing, with a reason. Reports go to a
+      queue that only Sejdel administrators can read.</p>
+    <p>We review each report against this Policy and our community guidelines. What we consider includes what the
+      content shows, whether the person affected consented, whether the account has been reported before, and whether
+      the content is unlawful. Where the report concerns a photograph of someone who did not agree to appear in it, we
+      act on the request of the person shown.</p>
+    <p>Depending on the outcome we may take no action, remove the content, warn the account, restrict its ability to
+      post, suspend it, or suspend a venue's business account. Serious cases, in particular anything involving a minor,
+      credible threats, or the use of the app to track or follow a person, result in immediate suspension without a
+      warning. Unlawful content is removed and reported to the relevant authority where required.</p>
+    <p>We aim to review reports within a few days. Stories expire automatically twenty-four hours after posting.</p>
+    <p>If your content is removed or your account is restricted, you may contest the decision by emailing
+      <a href="mailto:contact@sejdel.com">contact@sejdel.com</a>, and a person will review it.</p>
+    </section>
+
+    <section id="disclaimer">
+    <h2><span class="num">10</span>Disclaimer</h2>
+    <p>Sejdel AB is under no obligation to monitor users' activities, and we disclaim any responsibility for any user's
+      misuse of the Services. Sejdel AB has no responsibility for any user or other Content or Contribution created,
+      maintained, stored, transmitted, or accessible on or through the Services, and is not obligated to monitor or
+      exercise any editorial control over such material. If Sejdel AB becomes aware that any such Content or
+      Contribution violates this Policy, Sejdel AB may, in addition to removing such Content or Contribution and
+      blocking your account, report such breach to the police or appropriate regulatory authority. Unless otherwise
+      stated in this Policy, Sejdel AB disclaims any obligation to any person who has not entered into an agreement with
+      Sejdel AB for the use of the Services.</p>
+    </section>
+
+    <section id="contact">
+    <h2><span class="num">11</span>How can you contact us about this Policy?</h2>
+    <p>If you have any further questions or comments, or wish to report any problematic Content or Contribution, you may
+      contact us by email at <a href="mailto:contact@sejdel.com">contact@sejdel.com</a>, or through our
+      <a href="../contact/">contact form</a>.</p>
+    </section>
+
+    <div class="foot">
+      <p>Questions? <a href="mailto:contact@sejdel.com">contact@sejdel.com</a>
+        &nbsp;·&nbsp; <a href="../contact/">Contact</a>
+        &nbsp;·&nbsp; See also the <a href="../privacy/">Privacy Notice</a>,
+        <a href="../terms/">Terms &amp; Conditions</a>, <a href="../cookies/">Cookie Policy</a>,
+        <a href="../accessibility/">Accessibility Statement</a>, the <a href="../eula/">EULA</a> and the
+        <a href="../disclaimer/">Disclaimer</a>.</p>
+      <a class="back" href="../">← Back to Sejdel</a>
+    </div>
+  </main>
+</body>
+</html>

@@ -292,6 +292,7 @@ struct SideMenu: View {
         ("Cookie Policy", "https://sejdel.com/cookies/"),
         ("EULA", "https://sejdel.com/eula/"),
         ("Disclaimer", "https://sejdel.com/disclaimer/"),
+        ("Acceptable Use", "https://sejdel.com/acceptable-use/"),
         ("Accessibility", "https://sejdel.com/accessibility/"),
     ]
 
