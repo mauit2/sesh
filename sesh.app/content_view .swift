@@ -3597,6 +3597,7 @@ private struct AppBadgeModifier: ViewModifier {
     }
 }
 
+
 /// Instagram-"Map"-style bubble in the TONIGHT strip: a circular live map
 /// thumbnail that opens the friends map. Snapshots the checked-in friends'
 /// area as a dark Apple-Maps thumbnail; falls back to a globe motif when no

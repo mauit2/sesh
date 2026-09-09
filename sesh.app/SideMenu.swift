@@ -241,7 +241,8 @@ struct SideMenu: View {
 
             rule
             row("questionmark.circle", "Replay the tour", nil, onReplayTour)
-            row("envelope", "Contact support", nil, onSupport)
+            quietRow("envelope", "Contact support", onSupport)
+            legalRow
             if let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
                 Text("Sejdel \(v)")
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -251,6 +252,54 @@ struct SideMenu: View {
                     .padding(.bottom, 14)
             }
         }
+    }
+
+    /// The documents, in the one place people go looking for them. Small and
+    /// dimmed on purpose: they must be findable, not compete with the app.
+    /// Opened in Safari rather than a sheet — these are pages to keep.
+    private var legalRow: some View {
+        let items: [(String, String)] = [
+            ("Privacy", "https://sejdel.com/privacy/"),
+            ("Terms", "https://sejdel.com/terms/"),
+            ("Cookies", "https://sejdel.com/cookies/"),
+            ("Accessibility", "https://sejdel.com/accessibility/"),
+        ]
+        return HStack(spacing: 6) {
+            ForEach(Array(items.enumerated()), id: \.offset) { i, item in
+                if i > 0 {
+                    Text("·")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.cream.opacity(0.22))
+                }
+                Link(item.0, destination: URL(string: item.1)!)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.42))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 10)
+    }
+
+    /// A row in the same shape as `row`, dialled down — for the things that
+    /// should be reachable without pulling the eye.
+    private func quietRow(_ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.45))
+                    .frame(width: 28)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.cream.opacity(0.5))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleStyle())
     }
 
     private var rule: some View {

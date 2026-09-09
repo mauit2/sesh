@@ -882,12 +882,22 @@ struct AuthView: View {
         .buttonStyle(PressScaleStyle())
     }
 
+    /// Two different things, so they are two different lines: the safety
+    /// disclaimer everyone should read, and the legal acceptance that only
+    /// matters at the moment an account is created.
     private var footnote: some View {
-        Text("By continuing you accept that sejdel is a fun BAC estimate, not a legal or medical reference. Never use it to decide whether to drive.")
-            .font(.system(size: 10, design: .rounded))
-            .lineSpacing(3)
-            .foregroundStyle(Color.bronze)
-            .padding(.top, 4)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Sejdel is a fun BAC estimate, not a legal or medical reference. Never use it to decide whether to drive.")
+            if mode == .signUp {
+                Text("By creating an account you agree to our [Terms & Conditions](https://sejdel.com/terms/), [Privacy Notice](https://sejdel.com/privacy/), [Cookie Policy](https://sejdel.com/cookies/) and our other legal documents, including the End User Licence Agreement.")
+                    .tint(Color.whiskey)
+            }
+        }
+        .font(.system(size: 10, design: .rounded))
+        .lineSpacing(3)
+        .foregroundStyle(Color.bronze)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.top, 4)
     }
 
     private func submit() {
