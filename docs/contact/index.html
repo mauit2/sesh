@@ -227,6 +227,10 @@
       <button class="send" type="submit">Send message</button>
       <p class="hint">Tapping <strong>Send</strong> opens your email app with the message ready to go —
         just hit send. Prefer to write it yourself? Email <a href="mailto:contact@sejdel.com">contact@sejdel.com</a>.</p>
+      <p class="hint" id="mailto-fallback" hidden>Your email app should have opened with the message
+        ready. <strong>If nothing happened</strong>, your browser can't hand off to an email app — copy
+        your message and send it to <a href="mailto:contact@sejdel.com">contact@sejdel.com</a> instead,
+        otherwise it won't reach us.</p>
     </form>
 
     <div class="foot">
@@ -237,5 +241,6 @@
     </div>
   </main>
   <script src="/consent.js" defer></script>
+  <script src="contact-form.js" defer></script>
 </body>
 </html>
