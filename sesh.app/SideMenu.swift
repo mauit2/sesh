@@ -258,28 +258,17 @@ struct SideMenu: View {
     /// dimmed on purpose: they must be findable, not compete with the app.
     /// Opened in Safari rather than a sheet — these are pages to keep.
     private var legalRow: some View {
-        let items: [(String, String)] = [
-            ("Privacy", "https://sejdel.com/privacy/"),
-            ("Terms", "https://sejdel.com/terms/"),
-            ("Cookies", "https://sejdel.com/cookies/"),
-            ("Accessibility", "https://sejdel.com/accessibility/"),
-            ("EULA", "https://sejdel.com/eula/"),
-        ]
-        return HStack(spacing: 6) {
-            ForEach(Array(items.enumerated()), id: \.offset) { i, item in
-                if i > 0 {
-                    Text("·")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.cream.opacity(0.22))
-                }
-                Link(item.0, destination: URL(string: item.1)!)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.cream.opacity(0.42))
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 22)
-        .padding(.top, 10)
+        // One wrapping Text rather than an HStack: six links no longer fit on
+        // a single line, and markdown links wrap where a stack cannot.
+        Text("[Privacy](https://sejdel.com/privacy/) · [Terms](https://sejdel.com/terms/) · [Cookies](https://sejdel.com/cookies/) · [Accessibility](https://sejdel.com/accessibility/) · [EULA](https://sejdel.com/eula/) · [Disclaimer](https://sejdel.com/disclaimer/)")
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color.cream.opacity(0.42))
+            .tint(Color.cream.opacity(0.42))
+            .lineSpacing(3)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 22)
+            .padding(.top, 10)
     }
 
     /// A row in the same shape as `row`, dialled down — for the things that
