@@ -1,0 +1,165 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Sejdel — App Store frames</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&family=IBM+Plex+Mono:wght@500;700&display=block" rel="stylesheet">
+<style>
+  /* ── Sejdel palette, lifted from DesignSystem.swift ─────────────────── */
+  :root{
+    --ink:#0B0A08; --ink-2:#131108; --ink-3:#1C1912;
+    --whiskey:#E8A84A; --whiskey-deep:#C9862B;
+    --cream:#F5EDE0; --bronze:#8A7F6E;
+    --W:1320px; --H:2868px;
+  }
+  html,body{margin:0;background:#000}
+  body{font-family:"Bricolage Grotesque",Georgia,serif;-webkit-font-smoothing:antialiased}
+  .frame{display:none;position:relative;width:var(--W);height:var(--H);overflow:hidden;background:var(--ink);color:var(--cream);isolation:isolate}
+  .frame.on{display:block}
+
+  /* ── Atmosphere: a bar light pooling up behind the phone at closing time */
+  .glow{position:absolute;inset:0;z-index:0;pointer-events:none;
+    background:
+      radial-gradient(1500px 900px at 50% 64%, rgba(232,168,74,.62), transparent 60%),
+      radial-gradient(1000px 700px at 50% 52%, rgba(255,196,96,.42), transparent 62%),
+      radial-gradient(1700px 1000px at 50% 110%, rgba(170,96,22,.6), transparent 60%),
+      radial-gradient(900px 600px at 8% 4%, rgba(232,168,74,.16), transparent 60%),
+      radial-gradient(800px 560px at 98% 28%, rgba(201,134,43,.2), transparent 60%);}
+  .grid{position:absolute;inset:0;z-index:0;opacity:.055;pointer-events:none;
+    background-image:radial-gradient(rgba(245,237,224,.9) 1.4px, transparent 1.6px);background-size:56px 56px;
+    mask-image:linear-gradient(180deg,#000 0%,transparent 78%)}
+  .grain{position:absolute;inset:0;z-index:9;pointer-events:none;opacity:.075;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")}
+
+  /* ── Copy block ─────────────────────────────────────────────────────── */
+  .copy{position:absolute;left:100px;right:100px;top:168px;z-index:3}
+  .eyebrow{font:700 30px/1 "IBM Plex Mono",monospace;letter-spacing:.34em;text-transform:uppercase;color:var(--whiskey);display:flex;align-items:center;gap:20px;margin-bottom:44px}
+  .eyebrow i{width:16px;height:16px;border-radius:50%;background:var(--whiskey);box-shadow:0 0 0 8px rgba(232,168,74,.18),0 0 34px rgba(232,168,74,.8)}
+  h1{margin:0;font-weight:800;font-variation-settings:"opsz" 96;font-size:156px;line-height:.94;letter-spacing:-.035em;color:var(--cream);text-wrap:balance}
+  h1 em{font-style:normal;color:var(--whiskey)}
+  .sub{margin:38px 0 0;font:500 34px/1.35 "IBM Plex Mono",monospace;color:rgba(245,237,224,.62);max-width:900px}
+
+  /* ── Device ─────────────────────────────────────────────────────────── */
+  .device{position:absolute;left:50%;top:930px;width:1000px;height:2176px;transform:translateX(-50%);z-index:2;
+    background:#0a0a0a;border-radius:158px;padding:16px;box-sizing:border-box;
+    box-shadow:0 0 0 2px #2a2621,0 0 0 4px #0a0a0a,0 90px 160px -40px rgba(0,0,0,.9),0 0 140px 10px rgba(232,168,74,.28),0 40px 120px -10px rgba(201,134,43,.45)}
+  .device .screen{width:100%;height:100%;border-radius:142px;overflow:hidden;background:#000 center top/cover no-repeat}
+  .device .island{position:absolute;top:44px;left:50%;transform:translateX(-50%);width:262px;height:78px;border-radius:44px;background:#000}
+  .device .btn{position:absolute;background:#1c1a17;border-radius:4px}
+  .device .btn.l1{left:-6px;top:520px;width:6px;height:90px}
+  .device .btn.l2{left:-6px;top:660px;width:6px;height:170px}
+  .device .btn.l3{left:-6px;top:860px;width:6px;height:170px}
+  .device .btn.r1{right:-6px;top:700px;width:6px;height:260px}
+
+  /* ── Floating notification card (cream, breaks the device edge) ─────── */
+  .card{position:absolute;z-index:4;background:var(--cream);color:var(--ink);border-radius:44px;padding:34px 44px 34px 34px;
+    display:flex;align-items:center;gap:30px;width:max-content;max-width:1080px;
+    box-shadow:0 50px 90px -20px rgba(0,0,0,.75),0 0 0 1px rgba(255,255,255,.08) inset;
+    animation:none}
+  .card .app{width:120px;height:120px;border-radius:30px;background:var(--ink);display:grid;place-items:center;flex:none;font-size:66px}
+  .card b{display:block;font:800 40px/1.15 "Bricolage Grotesque";letter-spacing:-.02em}
+  .card span{display:block;margin-top:8px;font:500 31px/1.2 "IBM Plex Mono",monospace;color:rgba(11,10,8,.66)}
+  .card .t{position:absolute;right:44px;top:30px;font:500 26px "IBM Plex Mono",monospace;color:rgba(11,10,8,.4)}
+
+  /* ── Stat chips ─────────────────────────────────────────────────────── */
+  .chip{position:absolute;z-index:4;border-radius:999px;padding:24px 40px;font:700 30px/1 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;
+    background:var(--whiskey);color:var(--ink);box-shadow:0 30px 60px -20px rgba(232,168,74,.6)}
+  .chip.dark{background:var(--ink-3);color:var(--cream);box-shadow:0 0 0 2px rgba(245,237,224,.14) inset,0 30px 60px -20px rgba(0,0,0,.8)}
+  .chip.big{font-size:44px;padding:30px 46px}
+
+  /* ── Wordmark, bottom-right, quiet ──────────────────────────────────── */
+  .mark{position:absolute;right:100px;top:158px;z-index:5;font:800 40px/1 "Bricolage Grotesque";letter-spacing:-.04em;color:rgba(245,237,224,.42)}
+  .mark:before{content:"";display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--whiskey);margin-right:16px;vertical-align:middle;opacity:.9}
+</style>
+
+<!-- ─────────────────────────────────────────────────────────────────────
+     STORYBOARD. One object per frame. `screen` is a file in ./screens/.
+     `#N` in the URL picks which frame is shown, so headless Chrome can
+     screenshot each one at exactly 1320×2868.
+     ───────────────────────────────────────────────────────────────────── -->
+<script>
+const frames = [
+  { eyebrow:"Live sesh",
+    h:'See where <em>friends</em> are drinking',
+    screen:"map.png", deviceTop:930,
+    card:{ icon:"📍", top:790, left:120, title:"Emma just checked in", sub:"210 m away · tap to see where", t:"now" } },
+  { eyebrow:"Right now",
+    h:'Know your <em>night.</em>',
+    sub:"Live BAC from every drink you log.",
+    screen:"live-hero.png", deviceTop:640,
+    chips:[{txt:"Widmark · live",cls:"dark",top:548,right:-1}] },
+  { eyebrow:"Nightline",
+    h:'Your night, in <em>photos.</em>',
+    sub:"Friends only. Never public.",
+    screen:"home.png", deviceTop:760 },
+  { eyebrow:"Live group",
+    h:'Drink <em>together.</em>',
+    sub:"One code. Everyone's BAC, live.",
+    screen:"group.png", deviceTop:880,
+    card:{ icon:"🔥", top:740, left:120, title:"The roast", sub:"Emma thinks they're whispering. They are not.", t:"" } },
+  { eyebrow:"Game night",
+    h:'Five games. <em>One</em> table.',
+    sub:"Sips get logged live for the whole group.",
+    screen:"game-play.png", deviceTop:800 },
+  { eyebrow:"Beer prices",
+    h:'Cheapest <em>pint</em> nearby',
+    sub:"Every bar's price, colour-coded.",
+    screen:"beer.png", deviceTop:800,
+    chips:[{txt:"Green = cheap · Red = ouch",cls:"",top:700,right:-1}] },
+  { eyebrow:"Where's the sun",
+    h:'Find a terrace in the <em>sun.</em>',
+    sub:"Hour by hour, building shadows and all.",
+    screen:"sun.png", deviceTop:840,
+    chips:[{txt:"103 in the sun · 12:15",cls:"",top:760,left:-1}] },
+  { eyebrow:"Plan an event",
+    h:'Plan the <em>pre-game.</em>',
+    sub:"Pick a level. The list writes itself.",
+    screen:"plan-top.png", deviceTop:840,
+    chips:[{txt:"Lands everyone at ≈ 0.91 ‰",cls:"",top:760,right:-1}] },
+  { eyebrow:"Deals nearby",
+    h:'Deals near you <em>tonight.</em>',
+    sub:"Bars post them. You see them on the map.",
+    screen:"deals.png", deviceTop:930,
+    card:{ icon:"🍻", top:790, left:120, title:"New deal nearby", sub:"2 for 1 on large beer · until 21:00", t:"now" } },
+];
+addEventListener("DOMContentLoaded",()=>{
+  const n = Math.max(0, parseInt(location.hash.slice(1)||"0",10));
+  const f = frames[Math.min(n, frames.length-1)];
+  const el = document.getElementById("f");
+  el.querySelector(".eyebrow span").textContent = f.eyebrow;
+  el.querySelector("h1").innerHTML = f.h;
+  const sub = el.querySelector(".sub"); if (f.sub) sub.textContent = f.sub; else sub.remove();
+  el.querySelector(".screen").style.backgroundImage = `url(screens/${f.screen})`;
+  if (f.deviceTop) el.querySelector(".device").style.top = f.deviceTop+"px";
+  if (f.card) {
+    const c = document.createElement("div"); c.className="card";
+    c.style.top=f.card.top+"px"; c.style.left=f.card.left+"px";
+    c.innerHTML=`<div class="app">${f.card.icon}</div><div><b>${f.card.title}</b><span>${f.card.sub}</span></div><div class="t">${f.card.t||""}</div>`;
+    el.appendChild(c);
+  }
+  (f.chips||[]).forEach(ch=>{
+    const c=document.createElement("div"); c.className="chip "+(ch.cls||""); c.textContent=ch.txt;
+    c.style.top=ch.top+"px";
+    if (ch.left===-1) c.style.left="60px"; else if (ch.left!=null) c.style.left=ch.left+"px";
+    if (ch.right===-1) c.style.right="60px"; else if (ch.right!=null) c.style.right=ch.right+"px";
+    el.appendChild(c);
+  });
+  el.classList.add("on");
+  document.title = `Sejdel frame ${n}`;
+});
+</script>
+
+<section class="frame" id="f">
+  <div class="glow"></div><div class="grid"></div>
+  <div class="copy">
+    <div class="eyebrow"><i></i><span></span></div>
+    <h1></h1>
+    <p class="sub"></p>
+  </div>
+  <div class="device">
+    <div class="screen"></div>
+    <div class="island"></div>
+    <div class="btn l1"></div><div class="btn l2"></div><div class="btn l3"></div><div class="btn r1"></div>
+  </div>
+  <div class="mark">sejdel</div>
+  <div class="grain"></div>
+</section>
