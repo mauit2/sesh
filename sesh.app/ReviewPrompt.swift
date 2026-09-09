@@ -25,9 +25,8 @@ final class ReviewPrompt: ObservableObject {
     /// the full App Store review link.
     @Published var lovedIt = false
 
-    /// App Store Connect → your app → App Information → Apple ID. Empty hides
-    /// the "write a full review" link until it is filled in.
-    static let appStoreID = ""
+    /// App Store Connect → Sejdel → App Information → Apple ID.
+    static let appStoreID = "6780926501"
 
     private let d = UserDefaults.standard
     private let doneKey = "sejdel.review.done.v1"
