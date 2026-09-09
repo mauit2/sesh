@@ -158,8 +158,15 @@
   @media (prefers-reduced-motion: reduce){.dimples{animation:none}}
   /* readability: feathered pool of ink behind every text container */
   .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
+
+  /* accessibility: skip link */
+  .skip{position:absolute;left:12px;top:-56px;z-index:2147483001;
+    background:#e8843c;color:#140f0b;font-weight:800;font-size:13px;letter-spacing:.04em;
+    padding:11px 18px;border-radius:999px;text-decoration:none;border:0;transition:top .18s ease;}
+  .skip:focus{top:12px;}
+  .skip:focus-visible{outline:2px solid #f3e9d8;outline-offset:3px;}
 </style>
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Onde fica a cerveja mais barata em Porto?","acceptedAnswer":{"@type":"Answer","text":"Cervejaria Galiza tem o preço mais baixo reportado: 1.8 € (40 cl)."}},{"@type":"Question","name":"Quanto custa uma cerveja em Porto?","acceptedAnswer":{"@type":"Answer","text":"A mediana de todos os bares que seguimos em Porto é 2 €, contando a cerveja mais barata de cada bar."}},{"@type":"Question","name":"Os preços estão atualizados?","acceptedAnswer":{"@type":"Answer","text":"A página é reconstruída diariamente a partir dos últimos reportes — esta versão é de 8 de setembro de 2026."}},{"@type":"Question","name":"Posso reportar um preço?","acceptedAnswer":{"@type":"Answer","text":"Sim — procura o bar no mapa da Sejdel e adiciona o que pagaste. Aparece no mapa de imediato e aqui na próxima reconstrução."}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Onde fica a cerveja mais barata em Porto?","acceptedAnswer":{"@type":"Answer","text":"Cervejaria Galiza tem o preço mais baixo reportado: 1.8 € (40 cl)."}},{"@type":"Question","name":"Quanto custa uma cerveja em Porto?","acceptedAnswer":{"@type":"Answer","text":"A mediana de todos os bares que seguimos em Porto é 2 €, contando a cerveja mais barata de cada bar."}},{"@type":"Question","name":"Os preços estão atualizados?","acceptedAnswer":{"@type":"Answer","text":"A página é reconstruída diariamente a partir dos últimos reportes — esta versão é de 9 de setembro de 2026."}},{"@type":"Question","name":"Posso reportar um preço?","acceptedAnswer":{"@type":"Answer","text":"Sim — procura o bar no mapa da Sejdel e adiciona o que pagaste. Aparece no mapa de imediato e aqui na próxima reconstrução."}}]}</script>
 <script>
 (function(){try{
   var qs=new URLSearchParams(location.search);
@@ -172,8 +179,8 @@
 }catch(e){}})();
 </script>
 </head>
-<body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
-<div class="wrap">
+<body><a class="skip" href="#main">Skip to content</a><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
+<div class="wrap" id="main" tabindex="-1">
   <header class="top">
     <a class="brand" href="https://sejdel.com/">Sejdel<span>.</span></a>
     <nav>
@@ -186,7 +193,7 @@
   <h1>Esplanada e cerveja barata: Porto</h1>
 
   <p class="lede">Bares de Porto com esplanada, ordenados pela cerveja mais barata — 7 neste momento.</p>
-  <p class="stamp">Atualizado 8 de setembro de 2026</p>
+  <p class="stamp">Atualizado 9 de setembro de 2026</p>
   <div class="figs"><div class="fig"><b class="s1" title="7">7</b><span>Esplanadas</span></div><div class="fig"><b class="s1" title="1.9 €">1.9 €</b><span>cerveja mais barata</span></div><div class="fig"><b class="s1" title="2 €">2 €</b><span>mediana da cidade</span></div></div>
   <div class="tw"><table><tr><th></th><th>Bar</th><th>Tamanho</th><th>Preço</th><th>Por cl</th></tr>
 <tr>
@@ -248,7 +255,7 @@
   <h3>Quanto custa uma cerveja em Porto?</h3>
   <p>A mediana de todos os bares que seguimos em Porto é 2 €, contando a cerveja mais barata de cada bar.</p>
   <h3>Os preços estão atualizados?</h3>
-  <p>A página é reconstruída diariamente a partir dos últimos reportes — esta versão é de 8 de setembro de 2026.</p>
+  <p>A página é reconstruída diariamente a partir dos últimos reportes — esta versão é de 9 de setembro de 2026.</p>
   <h3>Posso reportar um preço?</h3>
   <p>Sim — procura o bar no mapa da Sejdel e adiciona o que pagaste. Aparece no mapa de imediato e aqui na próxima reconstrução.</p>
 <h2>Mais cidades</h2>

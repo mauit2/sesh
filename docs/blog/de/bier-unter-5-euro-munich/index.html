@@ -158,8 +158,15 @@
   @media (prefers-reduced-motion: reduce){.dimples{animation:none}}
   /* readability: feathered pool of ink behind every text container */
   .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
+
+  /* accessibility: skip link */
+  .skip{position:absolute;left:12px;top:-56px;z-index:2147483001;
+    background:#e8843c;color:#140f0b;font-weight:800;font-size:13px;letter-spacing:.04em;
+    padding:11px 18px;border-radius:999px;text-decoration:none;border:0;transition:top .18s ease;}
+  .skip:focus{top:12px;}
+  .skip:focus-visible{outline:2px solid #f3e9d8;outline-offset:3px;}
 </style>
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Wo ist das Bier am günstigsten in Munich?","acceptedAnswer":{"@type":"Answer","text":"Robbies Burger & Bar hat den niedrigsten gemeldeten Preis: 2.5 € (50 cl)."}},{"@type":"Question","name":"Was kostet ein Bier in Munich?","acceptedAnswer":{"@type":"Answer","text":"Der Median über alle erfassten Bars in Munich liegt bei 4.7 €, gerechnet auf das günstigste Bier jeder Bar."}},{"@type":"Question","name":"Wie aktuell sind die Preise?","acceptedAnswer":{"@type":"Answer","text":"Die Seite wird täglich aus den neuesten Meldungen neu gebaut — diese Version ist vom 8. September 2026."}},{"@type":"Question","name":"Kann ich selbst einen Preis melden?","acceptedAnswer":{"@type":"Answer","text":"Ja — such die Bar auf der Sejdel-Bierkarte und trag ein, was du bezahlt hast. Auf der Karte erscheint es sofort, hier beim nächsten Neuaufbau."}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Wo ist das Bier am günstigsten in Munich?","acceptedAnswer":{"@type":"Answer","text":"Robbies Burger & Bar hat den niedrigsten gemeldeten Preis: 2.5 € (50 cl)."}},{"@type":"Question","name":"Was kostet ein Bier in Munich?","acceptedAnswer":{"@type":"Answer","text":"Der Median über alle erfassten Bars in Munich liegt bei 4.7 €, gerechnet auf das günstigste Bier jeder Bar."}},{"@type":"Question","name":"Wie aktuell sind die Preise?","acceptedAnswer":{"@type":"Answer","text":"Die Seite wird täglich aus den neuesten Meldungen neu gebaut — diese Version ist vom 9. September 2026."}},{"@type":"Question","name":"Kann ich selbst einen Preis melden?","acceptedAnswer":{"@type":"Answer","text":"Ja — such die Bar auf der Sejdel-Bierkarte und trag ein, was du bezahlt hast. Auf der Karte erscheint es sofort, hier beim nächsten Neuaufbau."}}]}</script>
 <script>
 (function(){try{
   var qs=new URLSearchParams(location.search);
@@ -172,8 +179,8 @@
 }catch(e){}})();
 </script>
 </head>
-<body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
-<div class="wrap">
+<body><a class="skip" href="#main">Skip to content</a><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
+<div class="wrap" id="main" tabindex="-1">
   <header class="top">
     <a class="brand" href="https://sejdel.com/">Sejdel<span>.</span></a>
     <nav>
@@ -186,7 +193,7 @@
   <h1>Bier unter 5 € in Munich</h1>
 
   <p class="lede">Jede Bar unten hat mindestens ein Bier für 5 € oder weniger — aktuell 262, das günstigste zuerst.</p>
-  <p class="stamp">Aktualisiert 8. September 2026</p>
+  <p class="stamp">Aktualisiert 9. September 2026</p>
   <div class="figs"><div class="fig"><b class="s1" title="262">262</b><span>Bars mit Preisen</span></div><div class="fig"><b class="s1" title="2.5 €">2.5 €</b><span>günstigstes Bier</span></div><div class="fig"><b class="s1" title="4.7 €">4.7 €</b><span>Stadt-Median</span></div></div>
   <div class="tw"><table><tr><th></th><th>Bar</th><th>Größe</th><th>Preis</th><th>Pro cl</th></tr>
 <tr>
@@ -304,7 +311,7 @@
   <h3>Was kostet ein Bier in Munich?</h3>
   <p>Der Median über alle erfassten Bars in Munich liegt bei 4.7 €, gerechnet auf das günstigste Bier jeder Bar.</p>
   <h3>Wie aktuell sind die Preise?</h3>
-  <p>Die Seite wird täglich aus den neuesten Meldungen neu gebaut — diese Version ist vom 8. September 2026.</p>
+  <p>Die Seite wird täglich aus den neuesten Meldungen neu gebaut — diese Version ist vom 9. September 2026.</p>
   <h3>Kann ich selbst einen Preis melden?</h3>
   <p>Ja — such die Bar auf der Sejdel-Bierkarte und trag ein, was du bezahlt hast. Auf der Karte erscheint es sofort, hier beim nächsten Neuaufbau.</p>
 <h2>Weitere Städte</h2>

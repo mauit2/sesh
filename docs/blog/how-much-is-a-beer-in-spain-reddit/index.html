@@ -157,11 +157,18 @@
   @media (prefers-reduced-motion: reduce){.dimples{animation:none}}
   /* readability: feathered pool of ink behind every text container */
   .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
+
+  /* accessibility: skip link */
+  .skip{position:absolute;left:12px;top:-56px;z-index:2147483001;
+    background:#e8843c;color:#140f0b;font-weight:800;font-size:13px;letter-spacing:.04em;
+    padding:11px 18px;border-radius:999px;text-decoration:none;border:0;transition:top .18s ease;}
+  .skip:focus{top:12px;}
+  .skip:focus-visible{outline:2px solid #f3e9d8;outline-offset:3px;}
 </style>
 
 </head>
-<body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
-<div class="wrap">
+<body><a class="skip" href="#main">Skip to content</a><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
+<div class="wrap" id="main" tabindex="-1">
   <header class="top">
     <a class="brand" href="https://sejdel.com/">Sejdel<span>.</span></a>
     <nav>
@@ -174,7 +181,7 @@
   <h1>How much is a beer in Spain?</h1>
 
   <p class="lede">Reported beer prices from 53 bars across Spain, with city pages for the 3 busiest cities — the rest are on the map.</p>
-  <p class="stamp">Updated 8 September 2026</p>
+  <p class="stamp">Updated 9 September 2026</p>
   <h2>Pick your city</h2>
   <div class="citygrid">
     <div class="citycard">

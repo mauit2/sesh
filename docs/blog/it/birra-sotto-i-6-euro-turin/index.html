@@ -158,8 +158,15 @@
   @media (prefers-reduced-motion: reduce){.dimples{animation:none}}
   /* readability: feathered pool of ink behind every text container */
   .wrap{background:rgba(20,15,11,.55);box-shadow:0 0 70px 55px rgba(20,15,11,.55);border-radius:26px;}
+
+  /* accessibility: skip link */
+  .skip{position:absolute;left:12px;top:-56px;z-index:2147483001;
+    background:#e8843c;color:#140f0b;font-weight:800;font-size:13px;letter-spacing:.04em;
+    padding:11px 18px;border-radius:999px;text-decoration:none;border:0;transition:top .18s ease;}
+  .skip:focus{top:12px;}
+  .skip:focus-visible{outline:2px solid #f3e9d8;outline-offset:3px;}
 </style>
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Dove costa meno la birra a Turin?","acceptedAnswer":{"@type":"Answer","text":"Le Panche ha il prezzo più basso segnalato: 3 € (formato non indicato)."}},{"@type":"Question","name":"Quanto costa una birra a Turin?","acceptedAnswer":{"@type":"Answer","text":"La mediana su tutti i bar che seguiamo a Turin è 5 €, contando la birra più economica di ogni bar."}},{"@type":"Question","name":"Questi prezzi sono aggiornati?","acceptedAnswer":{"@type":"Answer","text":"La pagina viene ricostruita ogni giorno dalle ultime segnalazioni — questa versione è del 8 settembre 2026."}},{"@type":"Question","name":"Posso segnalare un prezzo?","acceptedAnswer":{"@type":"Answer","text":"Sì — trova il bar sulla mappa Sejdel e aggiungi quanto hai pagato. Sulla mappa appare subito, qui alla prossima ricostruzione."}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Dove costa meno la birra a Turin?","acceptedAnswer":{"@type":"Answer","text":"Le Panche ha il prezzo più basso segnalato: 3 € (formato non indicato)."}},{"@type":"Question","name":"Quanto costa una birra a Turin?","acceptedAnswer":{"@type":"Answer","text":"La mediana su tutti i bar che seguiamo a Turin è 5 €, contando la birra più economica di ogni bar."}},{"@type":"Question","name":"Questi prezzi sono aggiornati?","acceptedAnswer":{"@type":"Answer","text":"La pagina viene ricostruita ogni giorno dalle ultime segnalazioni — questa versione è del 9 settembre 2026."}},{"@type":"Question","name":"Posso segnalare un prezzo?","acceptedAnswer":{"@type":"Answer","text":"Sì — trova il bar sulla mappa Sejdel e aggiungi quanto hai pagato. Sulla mappa appare subito, qui alla prossima ricostruzione."}}]}</script>
 <script>
 (function(){try{
   var qs=new URLSearchParams(location.search);
@@ -172,8 +179,8 @@
 }catch(e){}})();
 </script>
 </head>
-<body><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
-<div class="wrap">
+<body><a class="skip" href="#main">Skip to content</a><div class="dimples dim-far" aria-hidden="true"></div><div class="dimples dim-near" aria-hidden="true"></div>
+<div class="wrap" id="main" tabindex="-1">
   <header class="top">
     <a class="brand" href="https://sejdel.com/">Sejdel<span>.</span></a>
     <nav>
@@ -186,7 +193,7 @@
   <h1>Birra sotto i 6 € a Turin</h1>
 
   <p class="lede">Ogni bar qui sotto ha almeno una birra a 6 € o meno — al momento 12.</p>
-  <p class="stamp">Aggiornato 8 settembre 2026</p>
+  <p class="stamp">Aggiornato 9 settembre 2026</p>
   <div class="figs"><div class="fig"><b class="s1" title="12">12</b><span>bar con prezzi</span></div><div class="fig"><b class="s1" title="3 €">3 €</b><span>birra più economica</span></div><div class="fig"><b class="s1" title="5 €">5 €</b><span>mediana della città</span></div></div>
   <div class="tw"><table><tr><th></th><th>Bar</th><th>Formato</th><th>Prezzo</th><th>Al cl</th></tr>
 <tr>
@@ -283,7 +290,7 @@
   <h3>Quanto costa una birra a Turin?</h3>
   <p>La mediana su tutti i bar che seguiamo a Turin è 5 €, contando la birra più economica di ogni bar.</p>
   <h3>Questi prezzi sono aggiornati?</h3>
-  <p>La pagina viene ricostruita ogni giorno dalle ultime segnalazioni — questa versione è del 8 settembre 2026.</p>
+  <p>La pagina viene ricostruita ogni giorno dalle ultime segnalazioni — questa versione è del 9 settembre 2026.</p>
   <h3>Posso segnalare un prezzo?</h3>
   <p>Sì — trova il bar sulla mappa Sejdel e aggiungi quanto hai pagato. Sulla mappa appare subito, qui alla prossima ricostruzione.</p>
 <h2>Altre città</h2>
