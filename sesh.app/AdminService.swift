@@ -46,6 +46,70 @@ final class AdminService: ObservableObject {
         var id: UUID { userId }
     }
 
+    // MARK: - Moderation
+
+    /// Open reports, newest first, with the reported thing attached so the
+    /// queue is decidable without a second round trip (migration 131).
+    @Published private(set) var reports: [ReportEntry] = []
+
+    struct ReportEntry: Identifiable, Decodable, Equatable {
+        let id: UUID
+        let created_at: Date
+        let reporter_name: String?
+        let reporter_username: String?
+        let target_kind: String          // user | post | story
+        let target_id: UUID
+        let target_name: String?
+        let target_username: String?
+        let reason: String?
+        let content_caption: String?
+        let content_created_at: Date?
+        let content_deleted_at: Date?
+        /// The row is gone entirely — an expired story, or a deleted account.
+        let content_gone: Bool
+
+        var isContent: Bool { target_kind == "post" || target_kind == "story" }
+        var isRemoved: Bool { content_deleted_at != nil }
+    }
+
+    func loadReports() async {
+        guard isAdmin else { reports = []; return }
+        struct P: Encodable { let p_include_resolved: Bool }
+        if let rows: [ReportEntry] = try? await supabase
+            .rpc("admin_reports", params: P(p_include_resolved: false))
+            .execute().value {
+            reports = rows
+        }
+    }
+
+    /// Hide a post or story. Every open report against it closes with it, so
+    /// one piece of content reported by five people leaves the queue once.
+    func takedown(_ r: ReportEntry, reason: String?) async {
+        struct P: Encodable { let p_kind: String; let p_id: String; let p_reason: String? }
+        _ = try? await supabase.rpc("admin_takedown", params: P(
+            p_kind: r.target_kind, p_id: r.target_id.uuidString.lowercased(), p_reason: reason
+        )).execute()
+        await loadReports()
+    }
+
+    /// Close a report without removing anything — the usual outcome.
+    func resolve(_ r: ReportEntry, action: String) async {
+        struct P: Encodable { let p_report: String; let p_action: String }
+        _ = try? await supabase.rpc("admin_report_resolve", params: P(
+            p_report: r.id.uuidString.lowercased(), p_action: action
+        )).execute()
+        await loadReports()
+    }
+
+    /// Undo a takedown.
+    func restore(_ r: ReportEntry) async {
+        struct P: Encodable { let p_kind: String; let p_id: String }
+        _ = try? await supabase.rpc("admin_restore", params: P(
+            p_kind: r.target_kind, p_id: r.target_id.uuidString.lowercased()
+        )).execute()
+        await loadReports()
+    }
+
     private struct RoleRow: Decodable { let user_id: UUID; let is_owner: Bool }
 
     /// Pull the current user's role (and, for owners, the full roster).

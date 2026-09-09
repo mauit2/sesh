@@ -27,6 +27,7 @@ struct SideMenuModifier: ViewModifier {
     @State private var businessDeskOpen = false
     @State private var specialsOpen = false
     @State private var adminPanelOpen = false
+    @State private var reportsOpen = false
     @State private var tool: BizTool?
     @Environment(\.openURL) private var openURL
 
@@ -50,6 +51,7 @@ struct SideMenuModifier: ViewModifier {
                 onBusinessDesk: { close(); businessDeskOpen = true },
                 onSpecials: { close(); specialsOpen = true },
                 onAdminPanel: { close(); adminPanelOpen = true },
+                onReports: { close(); reportsOpen = true },
                 onReplayTour: {
                     close()
                     // Let the app slide back before the spotlights land.
@@ -124,6 +126,11 @@ struct SideMenuModifier: ViewModifier {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.ink)
         }
+        .sheet(isPresented: $reportsOpen) {
+            ReportsAdminView(admin: admin)
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
     }
 
     private func close() {
@@ -161,6 +168,7 @@ struct SideMenu: View {
     let onBusinessDesk: () -> Void
     let onSpecials: () -> Void
     let onAdminPanel: () -> Void
+    let onReports: () -> Void
     let onReplayTour: () -> Void
     let onSupport: () -> Void
 
@@ -243,6 +251,7 @@ struct SideMenu: View {
                     .padding(.top, 14)
                     .padding(.bottom, 4)
                 row("checkmark.seal", isOwner ? "Owner panel" : "Admin panel", nil, onAdminPanel)
+                row("flag", "Reports", nil, onReports)
                 row("tag", "Manage specials", nil, onSpecials)
                 row("building.2", "Business desk", nil, onBusinessDesk)
             }
