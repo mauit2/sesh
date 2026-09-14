@@ -25,7 +25,7 @@ const ROOT = join(HERE, "..", "docs");
 const CUR = { US: "USD", GB: "GBP", CA: "CAD", DE: "EUR", ES: "EUR", IT: "EUR",
               NL: "EUR", BE: "EUR", PT: "EUR", FR: "EUR", BR: "BRL", CH: "CHF",
               TH: "THB", SG: "SGD", HK: "HKD" };
-const MIN_BARS = 5;
+const MIN_BARS = 15;
 
 const slugify = (s) => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "")
   .toLowerCase().replace(/ø/g, "o").replace(/æ/g, "ae").replace(/ß/g, "ss")
@@ -87,7 +87,7 @@ for (const p of prices) {
 
 // The generated page for a city (English flagship carries the count fig).
 const pagePath = (city) =>
-  join(ROOT, "blog", `where-is-the-cheapest-beer-in-${slugify(city)}-reddit`, "index.html");
+  join(ROOT, "blog", `beer-prices-in-${slugify(city)}`, "index.html");
 const barsOnPage = (html) => {
   const m = html.match(/title="(\d+)">\1<\/b><span>bars with prices<\/span>/);
   return m ? Number(m[1]) : null;

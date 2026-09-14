@@ -34,9 +34,9 @@ const HERE = dirname(new URL(import.meta.url).pathname);
 const ROOT = join(HERE, "..", "docs");
 const SITE = "https://sejdel.com";
 
-const MIN_BARS = 5;    // a city page below this is too thin to publish
-const MIN_UNDER = 5;   // "beer under N" needs this many qualifying bars
-const MIN_OUT = 5;     // an outdoor page (terrace data is sparser abroad)
+const MIN_BARS = 15;   // a city page below this is too thin to publish
+const MIN_UNDER = 3;   // an "under N" section needs this many qualifying bars
+const MIN_OUT = 3;     // an outdoor section (terrace data is sparser abroad)
 const TABLE_CAP = 15;
 
 // Representative centilitres per serving. 47.3 is the US 16 oz pint.
@@ -96,9 +96,9 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 
 // Query-shaped slugs, per language. {c}=city slug, {n}=threshold, {w}=currency word.
 const SLUG = {
-  en: { cheap: (c) => `where-is-the-cheapest-beer-in-${c}-reddit`,
-        under: (n, w, c) => `beer-under-${n}-${w}-in-${c}-reddit`,
-        out:   (c) => `best-outdoor-seating-cheap-beer-in-${c}-reddit` },
+  en: { cheap: (c) => `beer-prices-in-${c}`,
+        under: (n, w, c) => `beer-under-${n}-${w}-in-${c}`,
+        out:   (c) => `outdoor-seating-cheap-beer-in-${c}` },
   de: { cheap: (c) => `wo-ist-das-bier-am-guenstigsten-in-${c}`,
         under: (n, w, c) => `bier-unter-${n}-${w}-${c}`,
         out:   (c) => `biergarten-guenstiges-bier-${c}` },
@@ -472,6 +472,7 @@ const rows = prices
       serving: p.serving, price: Number(p.price),
       cl: clOf(p.serving),
       currency: p.currency, outdoor: p.outdoor === true,
+      at: p.last_reported ? new Date(p.last_reported) : null,
     };
   })
   .filter((r) => r.city && r.country && r.country !== "SE"
@@ -512,8 +513,13 @@ const CSS = (genBlogSrc.match(/<style>[\s\S]*?<\/style>/) || [""])[0];
 if (!CSS) throw new Error("could not lift <style> block from gen-blog.mjs");
 const FAVICON = (genBlogSrc.match(/<link rel="icon"[^>]+\/>/) || [""])[0];
 
-const updated = new Date().toISOString().slice(0, 10);
-const dateIn = (lang) => new Date().toLocaleDateString(L[lang].updatedLocale,
+// Data-driven "updated": the newest report behind the page being rendered.
+const TODAY = new Date();
+let updatedDate = TODAY;
+let updated = TODAY.toISOString().slice(0, 10);
+function setUpdated(d) { updatedDate = d instanceof Date && !isNaN(d) ? d : TODAY; updated = updatedDate.toISOString().slice(0, 10); }
+function newestOf(list) { return list.reduce((m, r) => (r.at && (!m || r.at > m) ? r.at : m), null); }
+const dateIn = (lang) => updatedDate.toLocaleDateString(L[lang].updatedLocale,
   { year: "numeric", month: "long", day: "numeric" });
 
 function page({ lang, T, title, desc, canonical, alts, h1, kicker, body, jsonld }) {
@@ -574,7 +580,7 @@ ${jsonld ? (Array.isArray(jsonld) ? jsonld : [jsonld])
     <a class="brand" href="${SITE}/">Sejdel<span>.</span></a>
     <nav>
       <a href="${SITE}/map/">${esc(T.navMap)}</a>
-      <a href="${SITE}/blog/what-does-beer-cost-around-the-world-reddit/">${esc(T.navBlog)}</a>
+      <a href="${SITE}/blog/beer-prices-around-the-world/">${esc(T.navBlog)}</a>
       ${langNav}
     </nav>
   </header>
@@ -648,13 +654,40 @@ const mapCta = (T, c) => {
     <b>${esc(T.ctaB)}</b><span>${esc(T.ctaS)}</span></a>`;
 };
 
+
+// ---------------------------------------------------------------- redirects
+//
+// GitHub Pages cannot send a 301, so a retired URL becomes a page whose only
+// job is to hand the reader (and Google) to the page that replaced it. A
+// zero-second meta refresh plus a canonical is what Google documents as a
+// permanent redirect it will follow and consolidate. Stubs never enter the
+// sitemap. The marker comment lets a later sweep tell a stub from an orphan.
+const STUB_MARK = "<!--sejdel-redirect-->";
+function stub(rel, target) {
+  const full = join(ROOT, rel, "index.html");
+  const clean = target.replace(/#.*$/, "");
+  mkdirSync(dirname(full), { recursive: true });
+  writeFileSync(full, `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Moved</title>
+<meta http-equiv="refresh" content="0; url=${target}">
+<link rel="canonical" href="${clean}">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head><body>${STUB_MARK}
+<p>This page has moved to <a href="${target}">${clean}</a>.</p>
+</body></html>
+`);
+  stubbed.push(rel);
+}
+const stubbed = [];
+
 const written = [];
 const intlGlobe = [];  // homepage globe markers for non-Swedish city pages
 function write(rel, html) {
   const full = join(ROOT, rel, "index.html");
   mkdirSync(dirname(full), { recursive: true });
   writeFileSync(full, html);
-  written.push(`${SITE}/${rel}/`);
+  written.push({ u: `${SITE}/${rel}/`, d: updated });
 }
 
 // ---------------------------------------------------------------- generate
@@ -710,12 +743,12 @@ for (const [iso, list] of byCountry) {
   const chips = (lang, c, current) => {
     const T = L[lang];
     const v = variantOfCity.get(c.city);
+    // The satellite pages are sections of the city page now; the chips jump to them.
     const items = [
-      ["cheap", T.allPages, urlFor(lang, "cheap", c)],
-      ...v.under.map((n) => [`u${n}`, T.underChip(money(n, C, lang)), urlFor(lang, "under", c, n)]),
-      ...(v.out ? [["out", T.outChip, urlFor(lang, "out", c)]] : []),
+      ...v.under.slice(-1).map((n) => [`u${n}`, T.underChip(money(n, C, lang)), `#under-${n}`]),
+      ...(v.out ? [["out", T.outChip, "#outdoor-seating"]] : []),
     ];
-    if (items.length < 2) return "";
+    if (items.length < 1) return "";
     return `<ul class="chips">${items.map(([key, label, href]) =>
       key === current
         ? `<li><span class="chip-on">${esc(label)}</span></li>`
@@ -727,6 +760,7 @@ for (const [iso, list] of byCountry) {
       `<li><a class="${c.city === current ? "on" : ""}" href="${urlFor(langOf(c.city) === lang || lang === "en" ? lang : "en", "cheap", c)}">${esc(c.city)}</a></li>`).join("")}</ul>`;
 
   for (const c of cities) {
+    setUpdated(newestOf(c.rowsAll));
     const local = langOf(c.city);
     const langs = local === "en" ? ["en"] : [local, "en"];
     const v = variantOfCity.get(c.city);
@@ -767,6 +801,18 @@ for (const [iso, list] of byCountry) {
         const low = money(c.cheap[0].price, C, lang);
         const top = c.cheap.slice(0, TABLE_CAP);
         const bestCl = c.cheap.filter((r) => r.cl).sort((a, b) => a.price / a.cl - b.price / b.cl)[0];
+        // Sections that used to be satellite pages: the higher "under N"
+        // threshold (the lower one is a subset) and the terraces.
+        const section = (id, h1, lede, list) => list.length < MIN_UNDER ? "" : `
+  <h2 id="${id}">${esc(h1)}</h2>
+  <p>${esc(lede)}</p>
+  ${priceTable(list.slice(0, TABLE_CAP), c.med, C, T, lang)}
+  ${list.length > TABLE_CAP ? `<p class="note">${esc(T.tableNote(TABLE_CAP, list.length))}</p>` : ""}`;
+        const nTop = C.th[C.th.length - 1];
+        const underRows = c.cheap.filter((r) => r.price <= nTop);
+        const outRows = c.cheap.filter((r) => r.outdoor);
+        const sections = section(`under-${nTop}`, T.underH1(money(nTop, C, lang), c.city), T.underLede(money(nTop, C, lang), c.city, underRows.length), underRows)
+          + section("outdoor-seating", T.outH1(c.city), T.outLede(c.city, outRows.length), outRows);
         const core = `
   <p class="lede">${esc(T.cheapLede(c.city, c.cheap.length, low))}</p>
   <p class="stamp">${esc(T.updated)} ${esc(dateIn(lang))}</p>
@@ -774,6 +820,7 @@ for (const [iso, list] of byCountry) {
           ...(bestCl ? [[money(bestCl.price / bestCl.cl, C, lang) + "/cl", T.bestValue]] : [])])}
   ${priceTable(top, c.med, C, T, lang)}
   ${top.length < c.cheap.length ? `<p class="note">${esc(T.tableNote(top.length, c.cheap.length))}</p>` : ""}
+  ${sections}
   <div class="caveat">${T.caveat}</div>`;
         const { body, jsonld } = common(core, "cheap");
         write(relFor(lang, "cheap", c), page({
@@ -784,43 +831,20 @@ for (const [iso, list] of byCountry) {
         }));
       }
 
-      for (const n of v.under) { // under-N pages
-        const nTxt = money(n, C, lang);
-        const qualifying = c.cheap.filter((r) => r.price <= n);
-        const top = qualifying.slice(0, TABLE_CAP);
-        const core = `
-  <p class="lede">${esc(T.underLede(nTxt, c.city, qualifying.length))}</p>
-  <p class="stamp">${esc(T.updated)} ${esc(dateIn(lang))}</p>
-  ${figs([[String(qualifying.length), T.bars], [money(qualifying[0].price, C, lang), T.cheapest], [money(c.med, C, lang), T.medianL]])}
-  ${priceTable(top, c.med, C, T, lang)}
-  ${top.length < qualifying.length ? `<p class="note">${esc(T.tableNote(top.length, qualifying.length))}</p>` : ""}
-  <div class="caveat">${T.caveat}</div>`;
-        const { body, jsonld } = common(core, "under", n);
-        write(relFor(lang, "under", c, n), page({
-          lang, T, canonical: urlFor(lang, "under", c, n), alts: alts("under", n),
-          title: T.underTitle(nTxt, c.city, qualifying.length),
-          desc: T.underDesc(nTxt, c.city, qualifying.length),
-          kicker: T.kicker(countryName), h1: T.underH1(nTxt, c.city), body, jsonld,
-        }));
-      }
-
-      if (v.out) { // outdoor page
-        const outRows = c.cheap.filter((r) => r.outdoor);
-        const top = outRows.slice(0, TABLE_CAP);
-        const core = `
-  <p class="lede">${esc(T.outLede(c.city, outRows.length))}</p>
-  <p class="stamp">${esc(T.updated)} ${esc(dateIn(lang))}</p>
-  ${figs([[String(outRows.length), T.outChip], [money(outRows[0].price, C, lang), T.cheapest], [money(c.med, C, lang), T.medianL]])}
-  ${priceTable(top, c.med, C, T, lang)}
-  ${top.length < outRows.length ? `<p class="note">${esc(T.tableNote(top.length, outRows.length))}</p>` : ""}
-  <div class="caveat">${T.caveat}</div>`;
-        const { body, jsonld } = common(core, "out");
-        write(relFor(lang, "out", c), page({
-          lang, T, canonical: urlFor(lang, "out", c), alts: alts("out"),
-          title: T.outTitle(c.city, outRows.length),
-          desc: T.outDesc(c.city, outRows.length),
-          kicker: T.kicker(countryName), h1: T.outH1(c.city), body, jsonld,
-        }));
+      // Retired URLs → their section on the city page. Written for every
+      // threshold and every language a city publishes in, so nothing 404s.
+      {
+        const cheapUrl = urlFor(lang, "cheap", c);
+        const nTop = C.th[C.th.length - 1];
+        for (const n of C.th) stub(relFor(lang, "under", c, n), `${cheapUrl}#under-${nTop}`);
+        stub(relFor(lang, "out", c), `${cheapUrl}#outdoor-seating`);
+        if (lang === "en") {
+          const cs = slugify(c.city);
+          const w = (CUR_WORD.en)[C.cur] || C.cur.toLowerCase();
+          stub(`blog/where-is-the-cheapest-beer-in-${cs}-reddit`, cheapUrl);
+          for (const n of C.th) stub(`blog/beer-under-${n}-${w}-in-${cs}-reddit`, `${cheapUrl}#under-${nTop}`);
+          stub(`blog/best-outdoor-seating-cheap-beer-in-${cs}-reddit`, `${cheapUrl}#outdoor-seating`);
+        }
       }
     }
     cityPages++;
@@ -828,6 +852,7 @@ for (const [iso, list] of byCountry) {
 
   // ---- country hub (English, at /blog/{country}/), linking every variant
   {
+    setUpdated(newestOf(list));
     const T = L.en;
     const countryName = C.name.en;
     // The COUNTRY total counts every priced bar in the country — bars in
@@ -837,7 +862,8 @@ for (const [iso, list] of byCountry) {
     // "how much is a beer in france reddit" — the hub IS that question.
     const THE = new Set(["united-states", "united-kingdom", "netherlands"]);
     const cSlug = slugify(countryName);
-    const rel = `blog/how-much-is-a-beer-in-${THE.has(cSlug) ? "the-" : ""}${cSlug}-reddit`;
+    const rel = `blog/beer-prices-in-${THE.has(cSlug) ? "the-" : ""}${cSlug}`;
+    stub(`blog/how-much-is-a-beer-in-${THE.has(cSlug) ? "the-" : ""}${cSlug}-reddit`, `${SITE}/${rel}/`);
     const proseName = THE.has(cSlug) ? `the ${countryName}` : countryName;
     const bars = countryBars;
     // Built once, used on the country hub AND the world hub — every article
@@ -894,7 +920,8 @@ try {
   seGrid = se.grid; seCities = se.cities;
 } catch { /* gen-blog.mjs has not run — fall back to the chip row */ }
 
-const WORLD_REL = "blog/what-does-beer-cost-around-the-world-reddit";
+const WORLD_REL = "blog/beer-prices-around-the-world";
+const OLD_WORLD_REL = "blog/what-does-beer-cost-around-the-world-reddit";
 {
   const T = L.en;
   const ranked = countrySummaries.sort((a, b) => b.bars - a.bars);
@@ -954,6 +981,8 @@ const WORLD_REL = "blog/what-does-beer-cost-around-the-world-reddit";
     ${s.grid}
   </div>`).join("\n")}
   ${mapCta(T, null)}`;
+  setUpdated(newestOf(rows));
+  stub(OLD_WORLD_REL, `${SITE}/${WORLD_REL}/`);
   write(WORLD_REL, page({
     lang: "en", T, canonical: `${SITE}/${WORLD_REL}/`,
     alts: [{ lang: "en", href: `${SITE}/${WORLD_REL}/` }],
@@ -999,8 +1028,8 @@ for (const [file, label, more, cta] of [
   const smPath = join(ROOT, "sitemap.xml");
   let sm = readFileSync(smPath, "utf8");
   const mine = written
-    .filter((u) => !sm.includes(`<loc>${u}</loc>`))
-    .map((u) => `  <url><loc>${u}</loc><lastmod>${updated}</lastmod></url>`).join("\n");
+    .filter(({ u }) => !sm.includes(`<loc>${u}</loc>`))
+    .map(({ u, d }) => `  <url><loc>${u}</loc><lastmod>${d}</lastmod></url>`).join("\n");
   if (mine) sm = sm.replace("</urlset>", `${mine}\n</urlset>`);
   writeFileSync(smPath, sm);
 }
@@ -1067,3 +1096,31 @@ for (const [file, label, more, cta] of [
 console.log(`countries: ${countrySummaries.map((s) => `${s.iso}:${s.bars}b/${s.cities}c`).join(" ")}`);
 console.log(`city page sets: ${cityPages}`);
 console.log(`pages written: ${written.length}`);
+
+
+// ---------------------------------------------------------------- sweep
+//
+// Anything under docs/blogg or docs/blog that this run did not write and that
+// is not already a redirect is an orphan from an earlier page set — a city
+// that fell below the threshold, a family that no longer exists. Turn it into
+// a redirect to the nearest hub rather than leave a stale page indexed.
+{
+  const { readdirSync, statSync } = await import("node:fs");
+  const live = new Set(readFileSync(join(ROOT, "sitemap.xml"), "utf8").match(/<loc>[^<]+<\/loc>/g).map((s) => s.slice(5, -6)));
+  const hubFor = (rel) => rel.startsWith("blogg/") ? `${SITE}/blogg/billig-ol-sverige/` : `${SITE}/${WORLD_REL}/`;
+  let swept = 0;
+  const walk = (dir, rel) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name), r = rel ? `${rel}/${name}` : name;
+      if (statSync(p).isDirectory()) { walk(p, r); continue; }
+      if (name !== "index.html") continue;
+      if (!rel || /^blog\/[a-z]{2}$/.test(rel) || rel === "blog" || rel === "blogg") continue; // hub indexes
+      const url = `${SITE}/${rel}/`;
+      if (live.has(url)) continue;
+      if (readFileSync(p, "utf8").includes(STUB_MARK)) continue;
+      stub(rel, hubFor(rel)); swept++;
+    }
+  };
+  for (const top of ["blogg", "blog"]) walk(join(ROOT, top), top);
+  console.log(`orphans swept into redirects: ${swept}   stubs total: ${stubbed.length}`);
+}

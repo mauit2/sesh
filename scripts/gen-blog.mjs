@@ -93,6 +93,7 @@ const rows = prices
     reports: p.report_count,
     currency: p.currency,
     outdoor: p.outdoor === true,
+    at: p.last_reported ? new Date(p.last_reported) : null,
   }))
   // Only SEK, only servings we can express per-centilitre. Mixing currencies
   // into one "cheapest" table would be meaningless.
@@ -177,19 +178,15 @@ const variantOf = new Map(cities.map((c) => [c.city, {
 function variantLinks(lang, city, current) {
   const sv = lang === "sv";
   const en = EN_NAME[city] || city;
-  const v = variantOf.get(city);
-  if (!v) return "";
+  const c = cities.find((x) => x.city === city);
+  if (!c) return "";
+  const base = sv ? `${SITE}/blogg/billig-ol-${slugify(city)}/` : `${SITE}/blog/cheapest-beer-${slugify(en)}/`;
+  // Same thresholds as the sections themselves, so a chip never points at nothing.
   const items = [
-    ["prices", sv ? "Alla ölpriser" : "All beer prices",
-     sv ? `${SITE}/blogg/billig-ol-${slugify(city)}/` : `${SITE}/blog/cheapest-beer-${slugify(en)}/`, true],
-    ["u50", sv ? "Under 50 kr" : "Under 50 kr",
-     sv ? `${SITE}/blogg/ol-under-50-kr-${slugify(city)}/` : `${SITE}/blog/beer-under-50-kr-${slugify(en)}/`, v.u50],
-    ["u60", sv ? "Under 60 kr" : "Under 60 kr",
-     sv ? `${SITE}/blogg/ol-under-60-kr-${slugify(city)}/` : `${SITE}/blog/beer-under-60-kr-${slugify(en)}/`, v.u60],
-    ["out", sv ? "Uteserveringar" : "Outdoor seating",
-     sv ? `${SITE}/blogg/uteservering-billig-ol-${slugify(city)}/` : `${SITE}/blog/outdoor-seating-cheap-beer-${slugify(en)}/`, v.out],
-    ["hh", "Happy hour",
-     sv ? `${SITE}/blogg/happy-hour-${slugify(city)}/` : `${SITE}/blog/happy-hour-${slugify(en)}/`, v.hh],
+    ["prices", sv ? "Alla ölpriser" : "All beer prices", base, true],
+    ["u60", "Under 60 kr", `${base}#under-60`, c.all40.filter((r) => r.price <= 60).length >= 3],
+    ["out", sv ? "Uteserveringar" : "Outdoor seating", `${base}#${sv ? "uteservering" : "outdoor-seating"}`, c.all40.filter((r) => r.outdoor).length >= 3],
+    ["hh", "Happy hour", `${base}#happy-hour`, (happyByCity.get(city) || []).length >= 3],
   ].filter(([, , , exists]) => exists);
   if (items.length < 2) return "";
   return `<ul class="chips">${items.map(([key, label, href]) =>
@@ -199,9 +196,24 @@ function variantLinks(lang, city, current) {
 }
 
 const national = summarise(rows);
-const updated = new Date().toISOString().slice(0, 10);
-const updatedSv = new Date().toLocaleDateString("sv-SE", { year: "numeric", month: "long", day: "numeric" });
-const updatedEn = new Date().toLocaleDateString("en-GB", { year: "numeric", month: "long", day: "numeric" });
+// "Updated" is the date of the newest price report behind the page being
+// rendered — not the day the bot ran. A city whose numbers have not moved
+// renders byte-identical day after day, the daily commit stops happening for
+// nothing, and the sitemap's <lastmod> means what it says.
+const TODAY = new Date();
+let updated = TODAY.toISOString().slice(0, 10);
+let updatedSv = "", updatedEn = "";
+function setUpdated(d) {
+  const date = d instanceof Date && !isNaN(d) ? d : TODAY;
+  updated = date.toISOString().slice(0, 10);
+  updatedSv = date.toLocaleDateString("sv-SE", { year: "numeric", month: "long", day: "numeric" });
+  updatedEn = date.toLocaleDateString("en-GB", { year: "numeric", month: "long", day: "numeric" });
+}
+function newestOf(list) {
+  return list.reduce((m, r) => (r.at && (!m || r.at > m) ? r.at : m), null);
+}
+const NEWEST_ALL = newestOf(rows);
+setUpdated(NEWEST_ALL);
 
 // ---------------------------------------------------------------- shell
 
@@ -380,7 +392,7 @@ ${jsonld ? (Array.isArray(jsonld) ? jsonld : [jsonld])
     <a class="brand" href="${SITE}/">Sejdel<span>.</span></a>
     <nav>
       <a href="${SITE}/map/">${lang === "sv" ? "Kartan" : "Map"}</a>
-      <a href="${lang === "sv" ? SITE + "/blogg/" : SITE + "/blog/what-does-beer-cost-around-the-world-reddit/"}">${lang === "sv" ? "Blogg" : "Blog"}</a>
+      <a href="${lang === "sv" ? SITE + "/blogg/" : SITE + "/blog/beer-prices-around-the-world/"}">${lang === "sv" ? "Blogg" : "Blog"}</a>
       <a href="${altHref}">${altLang === "sv" ? "Svenska" : "English"}</a>
     </nav>
   </header>
@@ -569,15 +581,117 @@ const enNatUrl = `${SITE}/blog/beer-prices-sweden/`;
 
 // ---------------------------------------------------------------- city pages
 
+
+// ---------------------------------------------------------------- redirects
+//
+// GitHub Pages cannot send a 301, so a retired URL becomes a page whose only
+// job is to hand the reader (and Google) to the page that replaced it. A
+// zero-second meta refresh plus a canonical is what Google documents as a
+// permanent redirect it will follow and consolidate. Stubs never enter the
+// sitemap. The marker comment lets a later sweep tell a stub from an orphan.
+const STUB_MARK = "<!--sejdel-redirect-->";
+function stub(rel, target) {
+  const full = join(ROOT, rel, "index.html");
+  const clean = target.replace(/#.*$/, "");
+  mkdirSync(dirname(full), { recursive: true });
+  writeFileSync(full, `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Moved</title>
+<meta http-equiv="refresh" content="0; url=${target}">
+<link rel="canonical" href="${clean}">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head><body>${STUB_MARK}
+<p>This page has moved to <a href="${target}">${clean}</a>.</p>
+</body></html>
+`);
+  stubbed.push(rel);
+}
+const stubbed = [];
+
+// The satellite pages — "öl under N kr", "uteservering", "happy hour" per
+// city — are retired. Their content lives as sections on the city page now,
+// and their URLs redirect there. The loops below still run for every city,
+// so every URL that ever existed gets its stub.
+const RETIRED = [
+  /^blogg\/ol-under-\d+-kr-/, /^blogg\/uteservering-billig-ol-/, /^blogg\/happy-hour-(?!sverige$)/,
+  /^blog\/beer-under-\d+-kr-/, /^blog\/outdoor-seating-cheap-beer-/, /^blog\/happy-hour-(?!sweden$)/,
+];
+const citySlugs = new Set(cities.map((c) => slugify(c.city)));
+const enSlugs = new Set(cities.map((c) => slugify(EN_NAME[c.city] || c.city)));
+function targetFor(rel) {
+  let m;
+  if ((m = rel.match(/^blogg\/(ol-under-\d+-kr|uteservering-billig-ol|happy-hour)-(.+)$/))) {
+    const frag = m[1] === "happy-hour" ? "#happy-hour" : m[1] === "uteservering-billig-ol" ? "#uteservering" : "#under-60";
+    if (citySlugs.has(m[2])) return `${SITE}/blogg/billig-ol-${m[2]}/${frag}`;
+    return m[1] === "happy-hour" ? `${SITE}/blogg/happy-hour-sverige/` : svNatUrl;
+  }
+  if ((m = rel.match(/^blog\/(beer-under-\d+-kr|outdoor-seating-cheap-beer|happy-hour)-(.+)$/))) {
+    const frag = m[1] === "happy-hour" ? "#happy-hour" : m[1] === "outdoor-seating-cheap-beer" ? "#outdoor-seating" : "#under-60";
+    if (enSlugs.has(m[2])) return `${SITE}/blog/cheapest-beer-${m[2]}/${frag}`;
+    return m[1] === "happy-hour" ? `${SITE}/blog/happy-hour-sweden/` : enNatUrl;
+  }
+  return svNatUrl;
+}
+
 const written = [];
 function write(rel, html) {
+  if (RETIRED.some((re) => re.test(rel))) return stub(rel, targetFor(rel));
   const full = join(ROOT, rel, "index.html");
   mkdirSync(dirname(full), { recursive: true });
   writeFileSync(full, html);
-  written.push(`${SITE}/${rel}/`);
+  written.push({ u: `${SITE}/${rel}/`, d: updated });
+}
+
+// One page per city. The sections below carry what the satellite pages used
+// to, under the anchors their old URLs now redirect to.
+const SECTION_MIN = 3;
+function sectionUnder(lang, c, t) {
+  const hits = c.all40.filter((r) => r.price <= t);
+  if (hits.length < SECTION_MIN) return "";
+  const share = Math.round((hits.length / c.all40.length) * 100);
+  const nm = lang === "sv" ? c.city : (EN_NAME[c.city] || c.city);
+  const lo = hits[0];
+  return lang === "sv" ? `
+  <h2 id="under-${t}">Öl under ${t} kr i ${esc(nm)}</h2>
+  <p><strong>${hits.length} barer</strong> — ${share} % av dem vi har pris på — tar ${t} kr eller mindre för en stor stark. Billigast är ${esc(lo.venue)} med ${kr(lo.price)}.</p>
+  ${priceTable(hits.slice(0, 15), "sv", false)}
+  ${tableNote("sv", Math.min(15, hits.length), hits.length, null)}` : `
+  <h2 id="under-${t}">Beer under ${t} kr in ${esc(nm)}</h2>
+  <p><strong>${hits.length} bars</strong> — ${share}% of those we hold a price for — charge ${t} kr or less for a large draught. The cheapest is ${esc(lo.venue)} at ${kr(lo.price)}.</p>
+  ${priceTable(hits.slice(0, 15), "en", false)}
+  ${tableNote("en", Math.min(15, hits.length), hits.length, null)}`;
+}
+function sectionOut(lang, c) {
+  const hits = c.all40.filter((r) => r.outdoor);
+  if (hits.length < SECTION_MIN) return "";
+  const nm = lang === "sv" ? c.city : (EN_NAME[c.city] || c.city);
+  const lo = hits[0];
+  return lang === "sv" ? `
+  <h2 id="uteservering">Uteservering med billig öl i ${esc(nm)}</h2>
+  <p><strong>${hits.length} barer</strong> med uteservering och inrapporterat pris. Billigast: ${esc(lo.venue)}, ${kr(lo.price)}. En bar som saknas här är okontrollerad, inte terrasslös — <a href="${SITE}/map/">lägg in den på kartan</a>.</p>
+  ${priceTable(hits.slice(0, 15), "sv", false)}
+  ${tableNote("sv", Math.min(15, hits.length), hits.length, null)}` : `
+  <h2 id="outdoor-seating">Outdoor seating with cheap beer in ${esc(nm)}</h2>
+  <p><strong>${hits.length} bars</strong> with outdoor seating and a reported price. Cheapest: ${esc(lo.venue)} at ${kr(lo.price)}. A bar missing here is unchecked, not terrace-free — <a href="${SITE}/map/">add it on the map</a>.</p>
+  ${priceTable(hits.slice(0, 15), "en", false)}
+  ${tableNote("en", Math.min(15, hits.length), hits.length, null)}`;
+}
+function sectionHH(lang, c) {
+  const list = happyByCity.get(c.city) || [];
+  if (list.length < SECTION_MIN) return "";
+  const nm = lang === "sv" ? c.city : (EN_NAME[c.city] || c.city);
+  const lo = list[0];
+  return lang === "sv" ? `
+  <h2 id="happy-hour">Happy hour i ${esc(nm)}</h2>
+  <p>Vi har happy hour-pris för <strong>${list.length} krogar</strong> i ${esc(nm)}. Billigast: ${esc(lo.venue)}, ${kr(lo.price)}. Happy hour-priser räknas inte in i medianerna ovan. Se även <a href="${SITE}/blogg/happy-hour-sverige/">happy hour i hela Sverige</a>.</p>
+  ${hhTable(list.slice(0, 10), "sv")}` : `
+  <h2 id="happy-hour">Happy hour in ${esc(nm)}</h2>
+  <p>We hold happy hour prices for <strong>${list.length} bars</strong> in ${esc(nm)}. Cheapest: ${esc(lo.venue)} at ${kr(lo.price)}. Happy hour prices are kept out of the medians above. See also <a href="${SITE}/blog/happy-hour-sweden/">happy hour across Sweden</a>.</p>
+  ${hhTable(list.slice(0, 10), "en")}`;
 }
 
 for (const c of cities) {
+  setUpdated(newestOf(rows.filter((r) => r.city === c.city)));
   const en = EN_NAME[c.city] || c.city;
   const svSlug = `blogg/billig-ol-${slugify(c.city)}`;
   const enSlug = `blog/cheapest-beer-${slugify(en)}`;
@@ -644,8 +758,9 @@ for (const c of cities) {
   <p>Priserna kommer från användare i Sejdel-appen och på ölkartan. För varje bar och storlek visar vi <em>medianen</em> av de senaste rapporterna, inte det senaste priset — ett enstaka felinmatat pris ska inte kunna styra listan. Bara priser i kronor och i storlekar vi kan räkna om per centiliter räknas med. Pint tolkas som 56,8 cl.</p>
   <p>Priser ändras och happy hour räknas inte in. Ser du ett pris som inte stämmer kan du <a href="${SITE}/map/">rapportera det på kartan</a> — det uppdaterar den här sidan nästa gång den byggs.</p>
 
-  <h2>Mer om ölen i ${c.city}</h2>
-  ${variantLinks("sv", c.city, "prices")}
+  ${sectionUnder("sv", c, 60)}
+  ${sectionOut("sv", c)}
+  ${sectionHH("sv", c)}
   <h2>Ölpriser i andra städer</h2>
   <p>Se även <a href="${svNatUrl}">billigaste ölen i Sverige</a>, med alla städer rangordnade efter literpris.</p>
   ${cityLinks("sv", c.city)}
@@ -690,8 +805,9 @@ for (const c of cities) {
   <p>Prices come from Sejdel users in the app and on the beer map. For each bar and size we show the <em>median</em> of recent reports rather than the latest one, so a single mistyped price cannot swing a table. Only prices in kronor, in sizes we can convert per centilitre, are included; a pint is treated as 56.8 cl.</p>
   <p>Prices change, and happy hour is not counted. If something looks wrong you can <a href="${SITE}/map/">report it on the map</a>, which updates this page the next time it is built.</p>
 
-  <h2>More on beer in ${en}</h2>
-  ${variantLinks("en", c.city, "prices")}
+  ${sectionUnder("en", c, 60)}
+  ${sectionOut("en", c)}
+  ${sectionHH("en", c)}
   <h2>Beer prices in other cities</h2>
   <p>See also <a href="${enNatUrl}">beer prices across Sweden</a>, with every city ranked by price per litre.</p>
   ${cityLinks("en", c.city)}
@@ -699,6 +815,7 @@ for (const c of cities) {
   }));
 }
 
+setUpdated(NEWEST_ALL);
 // ---------------------------------------------------------------- national
 
 const ranked = [...cities].sort((a, b) => a.medianRate - b.medianRate);
@@ -819,6 +936,7 @@ const THRESHOLDS = [50, 60];
 const underPages = [];
 
 for (const c of cities) {
+  setUpdated(newestOf(rows.filter((r) => r.city === c.city)));
   for (const t of THRESHOLDS) {
     const hits = c.all40.filter((r) => r.price <= t);
     if (hits.length < MIN_UNDER) { underPages.push([c.city, t, hits.length, false]); continue; }
@@ -1103,8 +1221,8 @@ for (const [city, list] of hhCities) {
       const nm = lang === "sv" ? city : (EN_NAME[city] || city);
       const has = hhCities.some(([c2]) => c2 === city);
       const href = lang === "sv"
-        ? `${SITE}/blogg/happy-hour-${slugify(city)}/`
-        : `${SITE}/blog/happy-hour-${slugify(EN_NAME[city] || city)}/`;
+        ? `${SITE}/blogg/billig-ol-${slugify(city)}/#happy-hour`
+        : `${SITE}/blog/cheapest-beer-${slugify(EN_NAME[city] || city)}/#happy-hour`;
       const cheapest = [...l].sort((a, b) => a.price - b.price)[0];
       return `<tr><td>${has ? `<a href="${href}">${esc(nm)}</a>` : esc(nm)}</td>
         <td class="n">${l.length}</td><td class="p">${kr(cheapest.price)}</td></tr>`;
@@ -1193,6 +1311,7 @@ console.log("  NOTE: no page states an hour — the dataset has 0 rows with a ti
 const outCities = [];
 const outSkipped = [];
 for (const c of cities) {
+  setUpdated(newestOf(rows.filter((r) => r.city === c.city)));
   const hits = c.all40.filter((r) => r.outdoor);
   (hits.length >= MIN_OUT ? outCities : outSkipped).push([c, hits]);
 }
@@ -1425,14 +1544,14 @@ const base = [
   `${SITE}/pricing/`, `${SITE}/privacy/`, `${SITE}/terms/`, `${SITE}/contact/`,
   `${SITE}/cookies/`, `${SITE}/accessibility/`, `${SITE}/eula/`, `${SITE}/disclaimer/`, `${SITE}/acceptable-use/`,
 ];
-const urls = [...base, ...written];
+const urls = [...base.map((u) => ({ u, d: updated })), ...written];
 writeFileSync(join(ROOT, "sitemap.xml"),
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n`
-  + urls.map((u) => `  <url><loc>${u}</loc><lastmod>${updated}</lastmod></url>`).join("\n")
+  + urls.map(({ u, d }) => `  <url><loc>${u}</loc><lastmod>${d}</lastmod></url>`).join("\n")
   + `\n</urlset>\n`);
 
 console.log(`cities: ${cities.length} (>= ${MIN_BARS} bars)`);
-console.log(`pages : ${written.length}`);
+console.log(`pages : ${written.length}   redirect stubs: ${stubbed.length}`);
 console.log(`sitemap: ${urls.length} urls`);
 console.log(`\ncheapest: ${cheapCity.city} ${perCl(cheapCity.medianRate)}   dearest: ${dearCity.city} ${perCl(dearCity.medianRate)}`);
 console.log(`national median: ${perCl(national.medianRate)} (~${kr(national.medianRate * 40)} per 40 cl)`);
