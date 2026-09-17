@@ -12,7 +12,6 @@
 <link rel="canonical" href="https://sejdel.com/blog/beer-prices-in-reims/" />
 <link rel="alternate" hreflang="en" href="https://sejdel.com/blog/beer-prices-in-reims/" />
 <link rel="alternate" hreflang="fr" href="https://sejdel.com/blog/fr/ou-boire-une-biere-pas-chere-a-reims/" />
-<link rel="alternate" hreflang="en" href="https://sejdel.com/blog/beer-prices-in-reims/" />
 <link rel="alternate" hreflang="x-default" href="https://sejdel.com/blog/beer-prices-in-reims/" />
 <meta property="og:type" content="article" />
 <meta property="og:title" content="Where is the cheapest beer in Reims? 16 bars compared | Sejdel" />
@@ -169,11 +168,19 @@
 (function(){try{
   var qs=new URLSearchParams(location.search);
   if(qs.has("lang")){sessionStorage.setItem("sejdelLangPin",qs.get("lang"));return;}
-  if(sessionStorage.getItem("sejdelLangPin")||sessionStorage.getItem("sejdelLangHop"))return;
+  if(sessionStorage.getItem("sejdelLangPin"))return;
   var want=(navigator.language||"").slice(0,2).toLowerCase();
   if(!want||want===document.documentElement.lang)return;
-  var alts={"fr":"https://sejdel.com/blog/fr/ou-boire-une-biere-pas-chere-a-reims/"};
-  if(alts[want]){sessionStorage.setItem("sejdelLangHop","1");location.replace(alts[want]);}
+  var twin=({"fr":{"href":"https://sejdel.com/blog/fr/ou-boire-une-biere-pas-chere-a-reims/","name":"Français"}})[want];
+  if(!twin)return;
+  document.addEventListener("DOMContentLoaded",function(){
+    var main=document.getElementById("main");if(!main)return;
+    var a=document.createElement("a");
+    a.href=twin.href+"?lang="+want;a.lang=want;a.hreflang=want;
+    a.textContent=twin.name+" \u2192";
+    a.style.cssText="display:inline-block;margin:0 0 14px;font-size:13px;opacity:.85;text-decoration:underline";
+    main.insertBefore(a,main.firstChild);
+  });
 }catch(e){}})();
 </script>
 </head>

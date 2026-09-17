@@ -523,28 +523,41 @@ const dateIn = (lang) => updatedDate.toLocaleDateString(L[lang].updatedLocale,
   { year: "numeric", month: "long", day: "numeric" });
 
 function page({ lang, T, title, desc, canonical, alts, h1, kicker, body, jsonld }) {
-  const altLinks = (alts || []).map((a) =>
+  // The page's own hreflang line is written in the template below; listing it
+  // here as well emitted it twice.
+  const altLinks = (alts || []).filter((a) => a.href !== canonical).map((a) =>
     `<link rel="alternate" hreflang="${a.lang}" href="${a.href}" />`).join("\n");
   const xDefault = (alts || []).find((a) => a.lang === "en")?.href || canonical;
   // Manual language choice carries ?lang=<code>, which pins it for the
   // session so the auto-redirect below never fights the reader.
   const langNav = (alts || []).filter((a) => a.href !== canonical)
     .map((a) => `<a href="${a.href}?lang=${a.lang}">${esc(L[a.lang]?.langName || a.lang)}</a>`).join("\n      ");
-  // Automatic language: a shared link opens in the device's language when a
-  // twin exists. Fires once per session, never after a manual choice, and
-  // search traffic already lands right via hreflang.
+  // Language hint: when a twin exists in the device's language, offer it as a
+  // link above the article. It must never redirect. Googlebot renders pages
+  // with navigator.language "en-US", so the redirect this replaced (17 Aug to
+  // 17 Sep 2026) sent it from every local-language page to the English twin,
+  // and Search Console filed those pages as "Page with redirect".
   const twins = Object.fromEntries((alts || [])
-    .filter((a) => a.href !== canonical).map((a) => [a.lang, a.href]));
+    .filter((a) => a.href !== canonical)
+    .map((a) => [a.lang, { href: a.href, name: L[a.lang]?.langName || a.lang }]));
   const autoLang = Object.keys(twins).length ? `
 <script>
 (function(){try{
   var qs=new URLSearchParams(location.search);
   if(qs.has("lang")){sessionStorage.setItem("sejdelLangPin",qs.get("lang"));return;}
-  if(sessionStorage.getItem("sejdelLangPin")||sessionStorage.getItem("sejdelLangHop"))return;
+  if(sessionStorage.getItem("sejdelLangPin"))return;
   var want=(navigator.language||"").slice(0,2).toLowerCase();
   if(!want||want===document.documentElement.lang)return;
-  var alts=${JSON.stringify(twins)};
-  if(alts[want]){sessionStorage.setItem("sejdelLangHop","1");location.replace(alts[want]);}
+  var twin=(${JSON.stringify(twins)})[want];
+  if(!twin)return;
+  document.addEventListener("DOMContentLoaded",function(){
+    var main=document.getElementById("main");if(!main)return;
+    var a=document.createElement("a");
+    a.href=twin.href+"?lang="+want;a.lang=want;a.hreflang=want;
+    a.textContent=twin.name+" \\u2192";
+    a.style.cssText="display:inline-block;margin:0 0 14px;font-size:13px;opacity:.85;text-decoration:underline";
+    main.insertBefore(a,main.firstChild);
+  });
 }catch(e){}})();
 </script>` : "";
   return `<!DOCTYPE html>
