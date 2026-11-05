@@ -25,9 +25,14 @@ struct DMMessage: Codable, Identifiable, Equatable {
     var updatedAt: Date? = nil
     /// The guest-list request this message carries (migration 123).
     var listRequestId: UUID? = nil
+    /// The guest-list request this message carries, joined in by the
+    /// server (`list_requests(*)` embed) so a thread with N request cards
+    /// costs one query, not one per card.
+    var listRequest: ListRequest? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, kind, body
+        case listRequest = "list_requests"
         case senderId = "sender_id"
         case recipientId = "recipient_id"
         case storyId = "story_id"
@@ -155,7 +160,7 @@ final class DMService: ObservableObject {
                 let iso = ISO8601DateFormatter()
                 iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                 changed = try await supabase.from("dm_messages")
-                    .select()
+                    .select("*, list_requests(*)")
                     .or("sender_id.eq.\(mine),recipient_id.eq.\(mine)")
                     .gt("updated_at", value: iso.string(from: since))
                     .order("updated_at", ascending: true)
@@ -171,7 +176,7 @@ final class DMService: ObservableObject {
                 }
             } else {
                 let rows: [DMMessage] = try await supabase.from("dm_messages")
-                    .select()
+                    .select("*, list_requests(*)")
                     .or("sender_id.eq.\(mine),recipient_id.eq.\(mine)")
                     .order("created_at", ascending: false)
                     .limit(500)
@@ -183,6 +188,9 @@ final class DMService: ObservableObject {
             if let top = changed.compactMap(\.updatedAt).max() {
                 syncedTo = max(syncedTo ?? .distantPast, top)
             }
+            // Hand the embedded requests to the store the chat cards read
+            // from, so no card has to fetch its own row.
+            ListRequestStore.shared.seed(changed.compactMap(\.listRequest))
 
             let partners = Set(changed.map { $0.senderId == me ? $0.recipientId : $0.senderId })
                 .subtracting(profilesById.keys)

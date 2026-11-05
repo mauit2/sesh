@@ -627,32 +627,31 @@ final class SessionService: ObservableObject {
         //    (same as above); older leftovers get released as we go, so
         //    the scan doubles as launch-time garbage collection.
         do {
-            let myMemberships: [SessionMember] = try await supabase
+            // One round trip: every membership row carries its session through
+            // the foreign-key embed (a join on the server). This used to fetch
+            // the memberships and then one sessions row per membership.
+            struct Row: Decodable {
+                let session: SeshSession?
+                enum CodingKeys: String, CodingKey { case session = "sessions" }
+            }
+            let rows: [Row] = try await supabase
                 .from("session_members")
-                .select()
+                .select("session_id, joined_at, sessions(*)")
                 .eq("profile_id", value: uid.uuidString.lowercased())
                 .eq(inColumnForScope, value: true)
                 .order("joined_at", ascending: false)
                 .execute()
                 .value
             var entered = false
-            for m in myMemberships {
-                if let row: SeshSession = try? await supabase
-                    .from("sessions")
-                    .select()
-                    .eq("id", value: m.sessionId.uuidString.lowercased())
-                    .single()
-                    .execute()
-                    .value {
-                    let activeForScope = scopeLive ? row.activeLive : row.activePlan
-                    if activeForScope && !entered && isFresh(row) {
-                        await enter(session: row)
-                        entered = true
-                    } else if !activeForScope && scopeLive && isDeliverable(row) {
-                        await captureEndedWhileAway(row)
-                    } else {
-                        await silentlyRelease(row)
-                    }
+            for row in rows.compactMap(\.session) {
+                let activeForScope = scopeLive ? row.activeLive : row.activePlan
+                if activeForScope && !entered && isFresh(row) {
+                    await enter(session: row)
+                    entered = true
+                } else if !activeForScope && scopeLive && isDeliverable(row) {
+                    await captureEndedWhileAway(row)
+                } else {
+                    await silentlyRelease(row)
                 }
             }
         } catch {

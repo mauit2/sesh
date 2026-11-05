@@ -31,7 +31,7 @@ final class ChatDeepLink: ObservableObject {
 
 // MARK: - Models
 
-struct ListRequest: Decodable, Identifiable, Equatable {
+struct ListRequest: Codable, Identifiable, Equatable {
     let id: UUID
     let businessId: UUID
     let userId: UUID
@@ -156,6 +156,13 @@ final class ListRequestStore: ObservableObject {
     static let shared = ListRequestStore()
     @Published private(set) var byId: [UUID: ListRequest] = [:]
     private var loading: Set<UUID> = []
+
+    /// Requests that arrived joined onto DM messages. Newer rows win: a
+    /// decision reply carries the same request with its new status.
+    func seed(_ rows: [ListRequest]) {
+        guard !rows.isEmpty else { return }
+        for r in rows { byId[r.id] = r }
+    }
 
     /// One request, for the chat card. Cached; `reload` forces a refetch.
     func load(_ id: UUID, reload: Bool = false) async {
