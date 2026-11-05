@@ -15,9 +15,13 @@
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-const SB = "https://lltuozmbxacxiepardys.supabase.co/rest/v1";
+// No default: a local run must say which backend it reads (the CI
+// workflow passes production; a local stack is http://127.0.0.1:54321).
+const SUPA_URL = process.env.SUPA_URL;
 const KEY = process.env.SUPA_ANON;
+if (!SUPA_URL) { console.error("SUPA_URL not set (e.g. http://127.0.0.1:54321)"); process.exit(1); }
 if (!KEY) { console.error("SUPA_ANON not set"); process.exit(1); }
+const SB = SUPA_URL.replace(/\/$/, "") + "/rest/v1";
 const HERE = dirname(new URL(import.meta.url).pathname);
 const ROOT = join(HERE, "..", "docs");
 

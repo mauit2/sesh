@@ -18,11 +18,38 @@ import MapKit
 import Supabase
 import UserNotifications
 
-// MARK: - Secrets (replace with your values)
+// MARK: - Backend
+//
+// A Debug build never talks to production. It points at the local Supabase
+// stack (`supabase start` in the repo; see supabase/README.md) and the
+// production URL is not even compiled into it. Release builds (TestFlight,
+// App Store) get production. To run a Debug build on a physical phone, the
+// simulator's loopback address won't reach the Mac: set SEJDEL_SUPABASE_URL
+// in the Xcode scheme's environment to http://<your-mac's-LAN-ip>:54321.
 
 enum Secrets {
+    #if DEBUG
+    static let supabaseURL = URL(string:
+        ProcessInfo.processInfo.environment["SEJDEL_SUPABASE_URL"] ?? "http://127.0.0.1:54321")!
+    /// The local stack's anon key. Every `supabase start` mints the same one
+    /// from the default JWT secret in supabase/config.toml, so it is not a
+    /// secret; `supabase status` prints it if it ever changes.
+    static let supabaseAnonKey =
+        ProcessInfo.processInfo.environment["SEJDEL_SUPABASE_ANON_KEY"]
+        ?? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
+    /// True when a Debug build has been pointed away from the local stack —
+    /// the "sesh.app (PRODUCTION)" scheme does that on purpose. Drives the
+    /// red badge at the top of every screen so it is never mistaken for a
+    /// local run. Always false in Release.
+    static let pointsAtProduction: Bool = {
+        let h = supabaseURL.host ?? ""
+        return !(h == "127.0.0.1" || h == "localhost" || h == "::1")
+    }()
+    #else
     static let supabaseURL = URL(string: "https://lltuozmbxacxiepardys.supabase.co")!
     static let supabaseAnonKey = "sb_publishable_CXlmRXTLRfX0pYysE7vbKw_vC88ny42"
+    static let pointsAtProduction = false
+    #endif
     /// Mapbox PUBLIC token — renders the Sun mode's map. The secret-scoped
     /// download token is a different thing entirely and lives only in a
     /// developer's ~/.netrc, never here.

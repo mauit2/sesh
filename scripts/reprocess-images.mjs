@@ -22,7 +22,8 @@ import { createClient } from '@supabase/supabase-js'
 import sharp from 'sharp'
 
 // Public project URL (not a secret — same value lives in migration 028).
-const SUPABASE_URL = 'https://lltuozmbxacxiepardys.supabase.co'
+const SUPABASE_URL = process.env.SUPA_URL
+if (!SUPABASE_URL) { console.error('SUPA_URL not set (never defaults to production)'); process.exit(1) }
 
 const KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 if (!KEY) {

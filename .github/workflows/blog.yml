@@ -28,12 +28,14 @@ jobs:
           node-version: 20
       - name: Generate pages
         env:
+          SUPA_URL: https://lltuozmbxacxiepardys.supabase.co
           SUPA_ANON: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsdHVvem1ieGFjeGllcGFyZHlzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3MTIyMDgsImV4cCI6MjA5MjI4ODIwOH0.dQzFgHJbSkUqz5eJ8d_X85g5M7SPCTNfOD4nIV5dz9I
         run: |
           node scripts/gen-blog.mjs
           node scripts/gen-blog-intl.mjs
       - name: Verify pages against the database
         env:
+          SUPA_URL: https://lltuozmbxacxiepardys.supabase.co
           SUPA_ANON: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxsdHVvem1ieGFjeGllcGFyZHlzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3MTIyMDgsImV4cCI6MjA5MjI4ODIwOH0.dQzFgHJbSkUqz5eJ8d_X85g5M7SPCTNfOD4nIV5dz9I
         run: node scripts/verify-blog.mjs
       - name: Commit if anything changed

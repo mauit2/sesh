@@ -7,7 +7,8 @@
 set -e
 : "${SUPABASE_SERVICE_ROLE_KEY:?set SUPABASE_SERVICE_ROLE_KEY in your shell first}"
 src=~/Desktop/sejdel-shots
-base=https://lltuozmbxacxiepardys.supabase.co/storage/v1/object
+: "${SUPA_URL:?set SUPA_URL explicitly; this script never defaults to production}"
+base=${SUPA_URL%/}/storage/v1/object
 put() { # bucket path file
   curl -sS -o /dev/null -w "%{http_code}  $1/$2\n" -X POST "$base/$1/$2" \
     -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" -H "x-upsert: true" \

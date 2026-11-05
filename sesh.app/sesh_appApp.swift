@@ -30,6 +30,19 @@ struct sesh_appApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                // Debug build on the production scheme: say so on every screen.
+                .overlay(alignment: .top) {
+                    if Secrets.pointsAtProduction {
+                        Text("PRODUCTION DATA")
+                            .font(.system(size: 10, weight: .black, design: .monospaced))
+                            .tracking(1.6)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(Capsule().fill(Color(red: 0.85, green: 0.2, blue: 0.2)))
+                            .padding(.top, 2)
+                            .allowsHitTesting(false)
+                    }
+                }
         }
     }
 }
