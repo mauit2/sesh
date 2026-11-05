@@ -902,8 +902,9 @@ final class SessionService: ObservableObject {
         }
         clearLocal()
         // This night is over for me — release my flag so the launch scan
-        // can't deliver it again as an "ended while away" recap.
-        await markDelivered(sid)
+        // can't deliver it again as an "ended while away" recap. Off the
+        // END path: the recap is already on screen by the time this lands.
+        Task { await markDelivered(sid) }
     }
 
     /// Flip my `in_<scope>` membership flag after a recap has been

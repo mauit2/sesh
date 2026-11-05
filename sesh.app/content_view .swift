@@ -272,7 +272,7 @@ final class FriendsService: ObservableObject {
                 .rpc("send_friend_request", params: P(p_username: username))
                 .execute().value
             if r.ok {
-                await refresh()
+                Task { await refresh() }
                 return nil
             }
             switch r.reason {
@@ -293,7 +293,7 @@ final class FriendsService: ObservableObject {
             _ = try await supabase
                 .rpc("respond_friend_request", params: P(p_request_id: requestId.uuidString.lowercased(), p_accept: accept))
                 .execute()
-            await refresh()
+            Task { await refresh() }   // the row is already gone locally
         } catch {
             self.error = "Couldn't update request"
             await refresh()
@@ -307,7 +307,7 @@ final class FriendsService: ObservableObject {
             _ = try await supabase
                 .rpc("remove_friend", params: P(p_other: userId.uuidString.lowercased()))
                 .execute()
-            await refresh()
+            Task { await refresh() }   // the row is already gone locally
         } catch {
             self.error = "Couldn't remove friend"
             await refresh()
@@ -475,7 +475,7 @@ final class FeedService: ObservableObject {
                 .update(Patch(include_bac: include))
                 .eq("id", value: postId.uuidString.lowercased())
                 .execute()
-            await refresh()
+            Task { await refresh() }   // a whole-feed reload for one flag
         } catch { }
     }
 

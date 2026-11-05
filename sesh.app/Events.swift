@@ -622,7 +622,7 @@ final class EventsService: ObservableObject {
                 p_event: eventId.uuidString.lowercased(),
                 p_recipients: recipientIds.map { $0.uuidString.lowercased() }
             )).execute()
-            await refresh()
+            Task { await refresh() }
         } catch {
             self.error = "Couldn't send invites."
         }
@@ -635,7 +635,7 @@ final class EventsService: ObservableObject {
                 p_event: eventId.uuidString.lowercased(),
                 p_status: going ? "going" : "declined"
             )).execute()
-            await refresh()
+            Task { await refresh() }
         } catch {
             self.error = "Couldn't save your RSVP."
         }
@@ -646,7 +646,7 @@ final class EventsService: ObservableObject {
         _ = try? await supabase.rpc("leave_event", params: P(
             p_event: eventId.uuidString.lowercased()
         )).execute()
-        await refresh()
+        Task { await refresh() }
     }
 
     func cancel(eventId: UUID) async {
@@ -654,7 +654,7 @@ final class EventsService: ObservableObject {
         _ = try? await supabase.rpc("cancel_event", params: P(
             p_event: eventId.uuidString.lowercased()
         )).execute()
-        await refresh()
+        Task { await refresh() }
     }
 
     /// Host-only writes. Optimistic local patch first so steppers feel
@@ -696,8 +696,9 @@ final class EventsService: ObservableObject {
             p_ghosts: ghosts
         )).execute()
         // A guest changes the crew's spread — recalc the shopping list
-        // right away instead of waiting for the next poll.
-        await refresh()
+        // right away instead of waiting for the next poll, but off the
+        // save path: the local patch above is what the sheet shows.
+        Task { await refresh() }
     }
 
     /// Host-only: flip planning mode (calc/byob) or edit permission.

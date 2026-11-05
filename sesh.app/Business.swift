@@ -443,6 +443,9 @@ final class BusinessService: ObservableObject {
         }
     }
 
+    /// Called off the save path by every write below (`Task { ... }`): the
+    /// caller gets its verdict as soon as the RPC returns, and the overview
+    /// (several requests) refreshes a moment later on this published object.
     func loadOverview(_ id: UUID) async {
         struct P: Encodable { let p_business: String }
         do {
@@ -533,7 +536,7 @@ final class BusinessService: ObservableObject {
         _ = try await supabase.rpc("business_update_profile", params: P(
             p_business: business.uuidString.lowercased(), p_logo_url: logo, p_poster_url: poster, p_tagline: tagline
         )).execute()
-        await loadOverview(business)
+        Task { await loadOverview(business) }
     }
 
     func createDeal(
@@ -570,13 +573,13 @@ final class BusinessService: ObservableObject {
             p_active_days: activeDays, p_start_minute: startMinute, p_end_minute: endMinute,
             p_image_url: poster, p_show_on_valid_only: showOnValidOnly
         )).execute()
-        await loadOverview(business)
+        Task { await loadOverview(business) }
     }
 
     func endDeal(_ offerId: UUID, business: UUID) async throws {
         struct P: Encodable { let p_offer: String }
         _ = try await supabase.rpc("business_end_deal", params: P(p_offer: offerId.uuidString.lowercased())).execute()
-        await loadOverview(business)
+        Task { await loadOverview(business) }
     }
 
     /// One picture, or a slideshow on Business+ (the server enforces which).
@@ -600,7 +603,7 @@ final class BusinessService: ObservableObject {
             p_event_at: eventAt.map { ISO8601DateFormatter().string(from: $0) },
             p_offer: offerId?.uuidString.lowercased()
         )).execute()
-        await loadOverview(business)
+        Task { await loadOverview(business) }
     }
 
     func createEvent(business: UUID, title: String, startsAt: Date, imageData: Data?, ratio: CGFloat = 1) async throws {
@@ -616,13 +619,13 @@ final class BusinessService: ObservableObject {
             p_business: business.uuidString.lowercased(), p_title: title.trimmingCharacters(in: .whitespacesAndNewlines),
             p_starts_at: ISO8601DateFormatter().string(from: startsAt), p_image_url: url, p_image_ratio: Double(ratio)
         )).execute()
-        await loadOverview(business)
+        Task { await loadOverview(business) }
     }
 
     func cancelEvent(_ id: UUID, business: UUID) async throws {
         struct P: Encodable { let p_event: String }
         _ = try await supabase.rpc("business_cancel_event", params: P(p_event: id.uuidString.lowercased())).execute()
-        await loadOverview(business)
+        Task { await loadOverview(business) }
     }
 
     /// Mint (or fetch) the bar's table QR token.
@@ -631,14 +634,14 @@ final class BusinessService: ObservableObject {
         let data = try await supabase.rpc("business_qr_token", params: P(p_business: business.uuidString.lowercased())).execute().data
         let raw = String(decoding: data, as: UTF8.self).trimmingCharacters(in: CharacterSet(charactersIn: "\" \n"))
         guard !raw.isEmpty else { throw BizError(code: "bad_response") }
-        await loadOverview(business)
+        Task { await loadOverview(business) }
         return raw
     }
 
     func deletePost(_ id: UUID, business: UUID) async throws {
         struct P: Encodable { let p_post: String }
         _ = try await supabase.rpc("business_delete_post", params: P(p_post: id.uuidString.lowercased())).execute()
-        await loadOverview(business)
+        Task { await loadOverview(business) }
     }
 
     /// Reserve a boost for a post (unpaid). Pay it through BusinessStore.
@@ -662,7 +665,7 @@ final class BusinessService: ObservableObject {
         _ = try await supabase.rpc("business_request_card", params: P(
             p_business: business.uuidString.lowercased(), p_offer: offer.uuidString.lowercased(), p_audience_cap: cap
         )).execute()
-        await loadOverview(business)
+        Task { await loadOverview(business) }
     }
 
     func requestPush(business: UUID, offer: UUID, title: String, body: String, cap: Int, sendAt: Date) async throws {
@@ -676,13 +679,13 @@ final class BusinessService: ObservableObject {
             p_body: body.trimmingCharacters(in: .whitespacesAndNewlines),
             p_audience_cap: cap, p_send_at: ISO8601DateFormatter().string(from: sendAt)
         )).execute()
-        await loadOverview(business)
+        Task { await loadOverview(business) }
     }
 
     func cancelOrder(_ id: UUID, business: UUID) async throws {
         struct P: Encodable { let p_order: String }
         _ = try await supabase.rpc("business_cancel_order", params: P(p_order: id.uuidString.lowercased())).execute()
-        await loadOverview(business)
+        Task { await loadOverview(business) }
     }
 
     /// The RPCs raise short codes; turn them into something a bar owner can act on.

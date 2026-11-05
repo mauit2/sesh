@@ -839,8 +839,10 @@ final class VenueService: ObservableObject {
                 p_price: price, p_note: (note?.isEmpty ?? true) ? nil : note,
                 p_serving: serving.rawValue, p_currency: currency
             )).execute()
-            await refresh()          // pull the (maybe new) venue into `venues`
-            await loadBeerPrices()
+            // The sheet only needs the verdict. The catalog pull (which
+            // brings in a brand-new venue) and the paged price reload run
+            // after it has closed; the map redraws when they land.
+            Task { await refresh(); await loadBeerPrices() }
             return true
         } catch {
             return false
