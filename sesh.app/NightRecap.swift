@@ -1488,6 +1488,10 @@ final class SeshCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
     private var position: AVCaptureDevice.Position = .back
     @Published var flashOn = false
     @Published var denied = false
+    /// The last shutter press produced no photo (session not up yet, or the
+    /// capture itself failed). The view shows a short notice; a new press
+    /// clears it.
+    @Published var captureFailed = false
     private var completion: ((Data) -> Void)?
 
     func start() async {
@@ -1530,6 +1534,14 @@ final class SeshCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
     }
 
     func capture(_ done: @escaping (Data) -> Void) {
+        captureFailed = false
+        // The session starts on a background task; a shutter press before
+        // it is up used to reach capturePhoto with no active connection,
+        // which raises an Objective-C exception — a crash, not an error.
+        guard session.isRunning, output.connection(with: .video)?.isActive == true else {
+            captureFailed = true
+            return
+        }
         completion = done
         let settings = AVCapturePhotoSettings()
         if output.supportedFlashModes.contains(flashOn ? .on : .off) {
@@ -1543,7 +1555,13 @@ final class SeshCameraController: NSObject, ObservableObject, AVCapturePhotoCapt
         didFinishProcessingPhoto photo: AVCapturePhoto,
         error: Error?
     ) {
-        guard error == nil, let data = photo.fileDataRepresentation() else { return }
+        guard error == nil, let data = photo.fileDataRepresentation() else {
+            Task { @MainActor in
+                self.captureFailed = true
+                self.completion = nil
+            }
+            return
+        }
         Task { @MainActor in
             self.completion?(data)
             self.completion = nil
@@ -1621,6 +1639,16 @@ struct SeshCameraView: View {
                         .foregroundStyle(Color.cream)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 40)
+                    Spacer()
+                } else if camera.captureFailed {
+                    Text("Couldn't take that one. Give it a second and try again.")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.cream)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(Capsule().fill(Color.ink.opacity(0.55)))
+                        .padding(.horizontal, 40)
+                        .transition(.opacity)
                     Spacer()
                 }
 

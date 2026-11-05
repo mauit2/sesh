@@ -156,11 +156,17 @@ enum StorageUploader {
             options: FileOptions(cacheControl: longCacheSeconds,
                                  contentType: "image/jpeg", upsert: upsert)
         )
+        // The sibling uses the caller's upsert flag, not a blanket `true`:
+        // an upsert is an INSERT … ON CONFLICT DO UPDATE … RETURNING, which
+        // needs SELECT and UPDATE policies on the bucket. Unique paths never
+        // conflict, so a plain insert is both enough and the only thing the
+        // INSERT-only buckets (session-snaps, stories) allowed — their
+        // thumbnails silently failed from Jul to Nov 2026 because of this.
         if thumbnail, let thumb = ImageDownscale.jpeg(data, maxDim: thumbMaxDim, quality: 0.55) {
             _ = try? await supabase.storage.from(bucket).upload(
                 thumbPath(path), data: thumb,
                 options: FileOptions(cacheControl: longCacheSeconds,
-                                     contentType: "image/jpeg", upsert: true)
+                                     contentType: "image/jpeg", upsert: upsert)
             )
         }
     }

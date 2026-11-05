@@ -4090,6 +4090,10 @@ struct SessionSnap: Decodable, Identifiable, Equatable {
 @MainActor
 final class SessionSnapsService: ObservableObject {
     @Published private(set) var snaps: [SessionSnap] = []
+    /// Set when the last upload did not reach the server (offline, policy,
+    /// compression). The strip shows a one-line notice so a failed schnap
+    /// is not mistaken for a working feature that shows nothing.
+    @Published private(set) var uploadFailed = false
     private var myId: UUID? { supabase.auth.currentUser?.id }
 
     func refresh(sessionId: UUID) async {
@@ -4112,9 +4116,10 @@ final class SessionSnapsService: ObservableObject {
     /// 1280px/q0.62 target lands around 150–250 KB per snap — the lever
     /// that keeps the whole feature nearly free on storage.
     func upload(imageData: Data, stopName: String?, sessionId: UUID) async {
+        uploadFailed = false
         guard let uid = myId,
               let jpeg = RecapPhotoUtil.compressedJPEG(imageData, maxDimension: 1280, quality: 0.62)
-        else { return }
+        else { uploadFailed = true; return }
         let path = "\(sessionId.uuidString.lowercased())/\(UUID().uuidString.lowercased()).jpg"
         struct Row: Encodable {
             let session_id: String
@@ -4139,6 +4144,7 @@ final class SessionSnapsService: ObservableObject {
             snaps.insert(inserted, at: 0)
         } catch {
             // Nothing local to roll back; the next schnap tries again.
+            uploadFailed = true
         }
     }
 
@@ -4199,6 +4205,11 @@ struct GroupSnapsStrip: View {
                     if CameraCaptureView.isAvailable { cameraOpen = true } else { libraryOpen = true }
                 }
                 captureButton(icon: "photo.on.rectangle") { libraryOpen = true }
+            }
+            if snaps.uploadFailed {
+                Text("That schnap didn't upload. Check your connection and try again.")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.whiskey)
             }
             if snaps.snaps.isEmpty {
                 Text("Schnap one here to share it with the group. Save the ones you want to keep — the rest vanish when the sesh ends.")
@@ -4721,7 +4732,7 @@ private struct ModeTopBar: View {
     var onEndMyGroupNight: () -> Void = {}
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             sectionLeading
             Spacer(minLength: 6)
             // Exit control — solo END, or a group end/leave menu.
@@ -4844,9 +4855,9 @@ private struct ModeTopBar: View {
     private func exitPill(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 11, weight: .bold, design: .monospaced))
-            .tracking(2.0)
+            .tracking(1.6)
             .foregroundStyle(Color.cream)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(Capsule().fill(Color.cream.opacity(0.06)))
             .overlay(Capsule().strokeBorder(Color.cream.opacity(0.2), lineWidth: 1))
@@ -4867,37 +4878,60 @@ private struct ModeTopBar: View {
             }
             .buttonStyle(PressScaleStyle())
             .accessibilityLabel("Menu")
-            if tab == .live, liveStarted != nil {
+            if tab == .live, let start = liveStarted {
                 TimelineView(.periodic(from: .now, by: 30)) { ctx in
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 7) {
+                    // Dot, LIVE, minutes since the start — nothing else. The
+                    // trailing cluster is fixed-width and leaves ~45pt on a
+                    // 375pt phone, so the old "LIVE GROUP · 6 / Started 12m
+                    // ago" wrapped letter by letter. First candidate that
+                    // fits wins; every candidate is single-line text.
+                    let mins = Self.elapsed(from: start, to: ctx.date)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 6) {
                             SonarDot()
-                            Text(liveInGroup ? "LIVE GROUP" : "LIVE SESH")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .tracking(2.4)
-                                .foregroundStyle(Color.whiskey)
-                            if liveInGroup, liveMemberCount > 0 {
-                                Text("· \(liveMemberCount)")
-                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                    .foregroundStyle(Color.cream.opacity(0.55))
-                            }
+                            liveWord
+                            minutesText(mins)
                         }
-                        Text(liveStarted.map { Self.elapsed(from: $0, to: ctx.date) } ?? "Ready when you are")
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                            .foregroundStyle(Color.cream.opacity(0.55))
-                            .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack(spacing: 6) {
+                                SonarDot()
+                                liveWord
+                            }
+                            minutesText(mins)
+                                .padding(.leading, 16)
+                        }
+                        .fixedSize(horizontal: true, vertical: false)
                     }
                 }
             }
         }
     }
 
+    /// Big enough to read as the state of the screen, not a footnote: 14pt
+    /// black. "LIVE" alone is ~60pt wide, so the stacked fallback fits every
+    /// phone; the one-line form wins where the row has ~90pt to spare.
+    private var liveWord: some View {
+        Text("LIVE")
+            .font(.system(size: 14, weight: .black, design: .monospaced))
+            .tracking(2.4)
+            .foregroundStyle(Color.whiskey)
+            .lineLimit(1)
+    }
+
+    private func minutesText(_ s: String) -> some View {
+        Text(s)
+            .font(.system(size: 12, weight: .bold, design: .monospaced))
+            .foregroundStyle(Color.cream.opacity(0.65))
+            .lineLimit(1)
+    }
+
+    /// Minutes since the sesh started, as short as it gets: "12m", "1h 5m".
     private static func elapsed(from start: Date, to now: Date) -> String {
         let mins = max(0, Int(now.timeIntervalSince(start) / 60))
-        if mins < 1 { return "Just started" }
-        if mins < 60 { return "Started \(mins)m ago" }
+        if mins < 60 { return "\(mins)m" }
         let h = mins / 60, m = mins % 60
-        return m == 0 ? "Started \(h)h ago" : "Started \(h)h \(m)m ago"
+        return m == 0 ? "\(h)h" : "\(h)h \(m)m"
     }
 }
 
@@ -12155,17 +12189,22 @@ private struct GroupBar: View {
         Button(action: onTap) {
             HStack(spacing: compact ? 9 : 12) {
                 ZStack {
+                    // Compact = the half-width pair beside LOCATION: same
+                    // 28pt icon, 9/13.5pt type and 11pt padding as that tile,
+                    // so the two boxes stay the same height. Only colour,
+                    // border and glow differ. Full width gets the big type.
                     Circle()
-                        .fill(Color.whiskey.opacity(0.20))
-                        .frame(width: compact ? 28 : 32, height: compact ? 28 : 32)
-                    Image(systemName: "person.2.fill")
-                        .font(.system(size: compact ? 12 : 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.whiskey)
+                        .fill(showInvite ? Color.whiskey : Color.whiskey.opacity(0.20))
+                        .frame(width: compact ? 28 : 38, height: compact ? 28 : 38)
+                        .shadow(color: Color.whiskey.opacity(showInvite ? 0.55 : 0), radius: 9, y: 2)
+                    Image(systemName: showInvite ? "person.badge.plus" : "person.2.fill")
+                        .font(.system(size: compact ? 12 : 15, weight: .black, design: .rounded))
+                        .foregroundStyle(showInvite ? Color.ink : Color.whiskey)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(showInvite ? "INVITE" : "\(scope.label) GROUP")
-                        .font(.system(size: compact ? 9 : 10, weight: .semibold, design: .monospaced))
+                        .font(.system(size: compact ? 9 : 10, weight: compact ? .semibold : .black, design: .monospaced))
                         .tracking(compact ? 1.6 : 2.2)
                         .foregroundStyle(Color.whiskey)
                         .lineLimit(1)
@@ -12192,7 +12231,7 @@ private struct GroupBar: View {
                         }
                     } else {
                         Text(compact ? "Invite friends" : "Invite friends to \(scope.label.lowercased())")
-                            .font(.system(size: compact ? 13.5 : 14.5, weight: .bold, design: .rounded))
+                            .font(.system(size: compact ? 13.5 : 17, weight: compact ? .bold : .heavy, design: .rounded))
                             .foregroundStyle(Color.cream)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
@@ -12201,30 +12240,76 @@ private struct GroupBar: View {
 
                 Spacer(minLength: 0)
 
+                // The compact tile (half width, beside LOCATION) has no room
+                // for an arrow next to a 15pt title — it truncated to
+                // "Invite frie…". The glow and the gold icon carry it.
                 if !compact {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.whiskey.opacity(0.7))
+                    Image(systemName: showInvite ? "arrow.right" : "chevron.right")
+                        .font(.system(size: showInvite ? 15 : 12, weight: .black, design: .rounded))
+                        .foregroundStyle(Color.whiskey.opacity(showInvite ? 1 : 0.7))
                 }
             }
-            .padding(.horizontal, compact ? 12 : 14)
-            .padding(.vertical, compact ? 11 : 13)
-            .background(
-                RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
-                    .fill(Color.inkElev)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
-                            .fill(Color.whiskey.opacity(0.09))
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
-                    .strokeBorder(Color.whiskey.opacity(0.42), lineWidth: 1.2)
-            )
-            .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
-            .shadow(color: Color.whiskey.opacity(0.18), radius: 11, y: 3)
+            .padding(.horizontal, compact ? 12 : 16)
+            .padding(.vertical, compact ? 11 : (showInvite ? 16 : 13))
+            .background(tileBackground)
+            .overlay(tileBorder)
+            .shadow(color: .black.opacity(0.28), radius: 12, y: 6)
+            .shadow(color: Color.whiskey.opacity(showInvite ? 0.38 : 0.18),
+                    radius: showInvite ? 20 : 11, y: showInvite ? 4 : 3)
         }
         .buttonStyle(PressScaleStyle())
+    }
+
+    private var tileShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous)
+    }
+
+    /// Inviting is the one thing a solo night most wants you to do, so that
+    /// state gets the loud version of the app's glass: the same dark base
+    /// as every card, but a whiskey glow pooling behind the icon, a gradient
+    /// border that is bright at the top-left and fades out, and an outer
+    /// glow. With a group running the tile shows code + count and keeps the
+    /// quiet look so the roster stays the focus.
+    @ViewBuilder
+    private var tileBackground: some View {
+        if showInvite {
+            tileShape.fill(Color.inkElev)
+                .overlay(
+                    tileShape.fill(
+                        RadialGradient(
+                            colors: [Color.whiskey.opacity(0.42), Color.whiskey.opacity(0.10), .clear],
+                            center: UnitPoint(x: 0.08, y: 0.5),
+                            startRadius: 4, endRadius: compact ? 180 : 320
+                        )
+                    )
+                )
+                .overlay(
+                    tileShape.fill(
+                        LinearGradient(
+                            colors: [Color.cream.opacity(0.07), .clear],
+                            startPoint: .top, endPoint: .center
+                        )
+                    )
+                )
+        } else {
+            tileShape.fill(Color.inkElev)
+                .overlay(tileShape.fill(Color.whiskey.opacity(0.09)))
+        }
+    }
+
+    @ViewBuilder
+    private var tileBorder: some View {
+        if showInvite {
+            tileShape.strokeBorder(
+                LinearGradient(
+                    colors: [Color.whiskey.opacity(0.95), Color.whiskey.opacity(0.55), Color.whiskey.opacity(0.25)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                ),
+                lineWidth: 1.5
+            )
+        } else {
+            tileShape.strokeBorder(Color.whiskey.opacity(0.42), lineWidth: 1.2)
+        }
     }
 }
 
