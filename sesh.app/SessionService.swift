@@ -370,7 +370,10 @@ final class SessionService: ObservableObject {
         let events = myLiveRecapEvents(
             from: sourceDrinks, memberCount: memberCount, ghostCount: ghostCount, for: uid
         )
-        if !events.isEmpty { endedLiveEvents = events }
+        // Always hand over, drinks or not: a member who logged nothing may
+        // still have check-ins, photos and the squad's snaps to see. The
+        // builder returns nil when there is truly nothing to tell.
+        endedLiveEvents = events
 
         // The squad leaderboard — each member's peak BAC + drink count, for
         // the group recap. Only meaningful with 2+ heads.
@@ -564,6 +567,11 @@ final class SessionService: ObservableObject {
     /// two stores can diverge from there.
     func resumeIfAny() async {
         guard let uid = myId else { return }
+        // A "night over" push can land while the launch resume is still in
+        // flight; two concurrent passes would deliver the same night twice.
+        guard !resuming else { return }
+        resuming = true
+        defer { resuming = false }
 
         // 1. Persisted session for this scope. Fetched WITHOUT the active
         //    filter so a session that ENDED while this device was away
@@ -593,7 +601,7 @@ final class SessionService: ObservableObject {
                     await enter(session: row)
                     return
                 }
-                if !activeForScope && scopeLive && isFresh(row) {
+                if !activeForScope && scopeLive && isDeliverable(row) {
                     // Ended while away → recap + release (never re-enter).
                     await captureEndedWhileAway(row)
                 } else {
@@ -637,7 +645,7 @@ final class SessionService: ObservableObject {
                     if activeForScope && !entered && isFresh(row) {
                         await enter(session: row)
                         entered = true
-                    } else if !activeForScope && scopeLive && isFresh(row) {
+                    } else if !activeForScope && scopeLive && isDeliverable(row) {
                         await captureEndedWhileAway(row)
                     } else {
                         await silentlyRelease(row)
@@ -877,9 +885,9 @@ final class SessionService: ObservableObject {
         }
         // NOTE: squad schnaps are NOT purged here — every member's device
         // needs a window to download them into its group recap after the
-        // end lands. The daily cleanup sweeps schnaps of ended sessions
-        // (and anything past 48h) instead; the sesh being over already
-        // hides them from every UI.
+        // end lands. The daily cleanup sweeps a session's schnaps only once
+        // every member has been delivered (in_live false), with a 7-day
+        // ceiling; the sesh being over already hides them from every UI.
         // Host ending a live group ends everyone's night → recap for me too,
         // unless the host is just leaving to keep their night going elsewhere.
         // Capture → clearLocal must be atomic (no awaits between): the
@@ -941,6 +949,16 @@ final class SessionService: ObservableObject {
     /// never started" and surprise recaps on launch.
     private func isFresh(_ row: SeshSession) -> Bool {
         Date().timeIntervalSince(row.createdAt) < 24 * 3600
+    }
+    private var resuming = false
+
+    /// An ENDED session is worth recapping for much longer than an active
+    /// one is worth re-entering. The 24-hour rule above used to gate both,
+    /// and a member who opened the app the evening after the night got
+    /// nothing, ever — the session was silently released. Thirty days
+    /// covers a holiday; older leftovers are still garbage-collected.
+    private func isDeliverable(_ row: SeshSession) -> Bool {
+        Date().timeIntervalSince(row.createdAt) < 30 * 24 * 3600
     }
 
     /// Quietly detach from a session without ending my night or handing
@@ -1270,25 +1288,47 @@ final class SessionService: ObservableObject {
 
     /// Close the open route entry and, when checking IN somewhere, open a
     /// new one. Best-effort — the recap falls back to the local journey.
+    /// Group rows carry no profile: they say where the GROUP is. A member's
+    /// own "just me" stop is a separate row tagged with their id
+    /// (recordMyStop), so a group move never closes a member's own bar.
     private func recordGroupStop(sessionId: UUID, venue: Venue?) async {
+        await recordRouteStop(sessionId: sessionId, venue: venue, profileId: nil)
+    }
+
+    /// Record MY check-in (or check-out, venue nil) on the group's route
+    /// without moving the group. Until this existed only "apply to group"
+    /// check-ins reached the route, so a night where everyone checked in
+    /// "just me" had no bars in anyone's group recap.
+    func recordMyStop(venue: Venue?) async {
+        guard scopeLive, let sid = session?.id, let uid = myId else { return }
+        await recordRouteStop(sessionId: sid, venue: venue, profileId: uid)
+    }
+
+    private func recordRouteStop(sessionId: UUID, venue: Venue?, profileId: UUID?) async {
         let sid = sessionId.uuidString.lowercased()
         let iso = ISO8601DateFormatter()
         struct Close: Encodable { let departed_at: String }
-        _ = try? await supabase.from("session_stops")
+        if let open = try? supabase.from("session_stops")
             .update(Close(departed_at: iso.string(from: Date())))
             .eq("session_id", value: sid)
             .eq("kind", value: "bar")   // markers are instants — closing them faked windows
-            .filter("departed_at", operator: "is", value: "null")
-            .execute()
+            .filter("departed_at", operator: "is", value: "null") {
+            // Only this row's owner: the group's rows (no profile) or mine.
+            let scoped = profileId.map { open.eq("profile_id", value: $0.uuidString.lowercased()) }
+                ?? open.filter("profile_id", operator: "is", value: "null")
+            _ = try? await scoped.execute()
+        }
         guard let venue else { return }
         struct Open: Encodable {
             let session_id: String
             let name: String
             let lat: Double?
             let lon: Double?
+            let profile_id: String?
         }
         _ = try? await supabase.from("session_stops")
-            .insert(Open(session_id: sid, name: venue.name, lat: venue.lat, lon: venue.lon))
+            .insert(Open(session_id: sid, name: venue.name, lat: venue.lat, lon: venue.lon,
+                         profile_id: profileId?.uuidString.lowercased()))
             .execute()
     }
 

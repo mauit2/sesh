@@ -1406,6 +1406,9 @@ struct StoryViewer: View {
 struct PulseWiringModifier: ViewModifier {
     @ObservedObject var live: LiveSeshState
     @ObservedObject var liveGroup: SessionService
+    /// The "night over" push (migration 132). Lives here, not on
+    /// SessionView's body chain, which is at the type-checker's limit.
+    @ObservedObject var push: PushManager = PushManager.shared
     @ObservedObject var venues: VenueService
     @ObservedObject var friendsPulse: FriendsPulseService
     @ObservedObject var stories: StoriesService
@@ -1440,6 +1443,17 @@ struct PulseWiringModifier: ViewModifier {
             }
             .onChange(of: venues.currentVenue?.id) { _, _ in publish() }
             .onChange(of: liveGroup.liveEndedToken) { _, _ in onLiveEnded() }
+            // A "night over" push: the group ended while this phone was away.
+            // Deliver the recap now instead of at the next launch — the poll
+            // only runs while a session is in memory; a killed app has none.
+            .onChange(of: push.sessionEnded) { _, flag in
+                guard flag else { return }
+                push.sessionEnded = false
+                Task {
+                    if liveGroup.session != nil { await liveGroup.refresh() }
+                    else { await liveGroup.resumeIfAny() }
+                }
+            }
             .onChange(of: journey.stops) { _, _ in syncMarkers() }
             .onChange(of: journey.looseSpots) { _, _ in syncMarkers() }
             .onChange(of: liveGroup.routeStops) { _, _ in mergeRoute() }

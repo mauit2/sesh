@@ -1004,11 +1004,20 @@ struct NightRecap: Codable, Identifiable {
         func spotIn(_ from: Date, _ to: Date) -> LooseSpot? {
             nightSpots.last { $0.at >= from && $0.at <= to }
         }
+        // Windows are half-open [from, to) so a drink at a checkout isn't
+        // counted at the bar AND in the gap after it — EXCEPT at the night's
+        // final boundary, which is inclusive. An auto-built recap (group end,
+        // auto-end) ends at the last thing that happened, usually the last
+        // drink, and a strict bound dropped that drink, and the peak it set,
+        // from its stop while the total still counted it.
+        func within(_ t: Date, _ from: Date, _ to: Date) -> Bool {
+            t >= from && (t < to || (to >= endedAt && t == to))
+        }
         // A gap becomes a leg if it has anything to show — a drink, a
         // loose photo, OR a marked location.
         func hasContent(from: Date, to: Date) -> Bool {
-            events.contains(where: { $0.when >= from && $0.when < to })
-                || looseTakes.contains(where: { $0.takenAt >= from && $0.takenAt < to })
+            events.contains(where: { within($0.when, from, to) })
+                || looseTakes.contains(where: { within($0.takenAt, from, to) })
                 || spotIn(from, to) != nil
         }
         // Next bar AFTER this one IN TIME — windows always follow the
@@ -1079,7 +1088,7 @@ struct NightRecap: Codable, Identifiable {
 
         let stops: [RecapStop] = legs.map { leg in
             let here = leg.isWindow
-                ? events.filter { $0.when >= leg.from && $0.when < leg.to }
+                ? events.filter { within($0.when, leg.from, leg.to) }
                 : []
             // Grouped summary, order of first appearance.
             var order: [String] = []
@@ -1105,7 +1114,7 @@ struct NightRecap: Codable, Identifiable {
             var photos = leg.stop?.photoFilenames ?? []
             if leg.isWindow {
                 photos += looseTakes
-                    .filter { $0.takenAt >= leg.from && $0.takenAt < leg.to }
+                    .filter { within($0.takenAt, leg.from, leg.to) }
                     .map(\.filename)
             }
             return RecapStop(
@@ -1120,7 +1129,7 @@ struct NightRecap: Codable, Identifiable {
                 drinkSummary: summary,
                 bacOnArrival: bac(at: leg.from),
                 bacOnDeparture: bac(at: leg.to),
-                isPeak: leg.isWindow && peakAt >= leg.from && peakAt < leg.to,
+                isPeak: leg.isWindow && within(peakAt, leg.from, leg.to),
                 note: leg.kind == .preGame ? preGameNote : leg.stop?.note,
                 photoFilenames: photos
             )

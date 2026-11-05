@@ -3980,7 +3980,10 @@ struct VenueSheet: View {
                                 }
                                 if inLiveGroup {
                                     if applyToGroup { await group.setGroupVenue(nil) }
-                                    else { group.followingGroupVenue = false }
+                                    else {
+                                        group.followingGroupVenue = false
+                                        await group.recordMyStop(venue: nil)
+                                    }
                                 }
                                 dismiss()
                             }
@@ -4515,8 +4518,10 @@ struct VenueSheet: View {
             await group.setGroupVenue(venues.currentVenue)
         } else {
             // "Just me" → stop following so the group's moves don't pull
-            // me along.
+            // me along. The stop still goes on the group's route, under my
+            // name, so the squad recap shows every bar anyone visited.
             group.followingGroupVenue = false
+            await group.recordMyStop(venue: venues.currentVenue)
         }
     }
 

@@ -5382,8 +5382,16 @@ private struct SessionView: View {
         Task {
             var extraStops: [SeshStop] = []
             var extraSpots: [LooseSpot] = []
-            if journey.stops.isEmpty, let ctx {
-                (extraStops, extraSpots) = await fetchRouteAsJourneyInputs(ctx.sessionId)
+            if let ctx {
+                // The group's server route, UNIONED with what this phone
+                // saw. A member whose app was closed for part of the night
+                // holds only a slice of the route locally; the old rule
+                // (server route only when the journey was EMPTY) left a
+                // partial journey partial.
+                let (serverStops, serverSpots) = await fetchRouteAsJourneyInputs(ctx.sessionId)
+                (extraStops, extraSpots) = Self.routeNotInJourney(
+                    stops: serverStops, spots: serverSpots,
+                    localStops: journey.stops, localSpots: journey.looseSpots)
             }
             if var built = buildAutoRecap(events: events, extraStops: extraStops, extraSpots: extraSpots) {
                 // Group sesh → carry the squad leaderboard so the recap's
@@ -5399,12 +5407,39 @@ private struct SessionView: View {
         }
     }
 
+    /// Server route entries this phone's journey doesn't already hold.
+    /// Same-kind, same-name entries within 20 minutes are one arrival seen
+    /// from two phones (a follower adopts the group venue on the next
+    /// poll); markers that round-tripped from this phone match by id.
+    private static func routeNotInJourney(
+        stops: [SeshStop], spots: [LooseSpot],
+        localStops: [SeshStop], localSpots: [LooseSpot]
+    ) -> ([SeshStop], [LooseSpot]) {
+        let window: TimeInterval = 20 * 60
+        let newStops = stops.filter { s in
+            !localStops.contains { l in
+                l.id == s.id || (l.kind == s.kind
+                    && l.name.caseInsensitiveCompare(s.name) == .orderedSame
+                    && abs(l.arrivedAt.timeIntervalSince(s.arrivedAt)) < window)
+            }
+        }
+        let newSpots = spots.filter { sp in
+            !localSpots.contains { l in
+                l.id == sp.id
+                    || ((l.name ?? "").caseInsensitiveCompare(sp.name ?? "") == .orderedSame
+                        && abs(l.at.timeIntervalSince(sp.at)) < window)
+            }
+        }
+        return (newStops, newSpots)
+    }
+
     /// The group's server-side route, converted back into journey inputs
     /// for the personal recap builder. Venue/marker rows become stops;
     /// pre-game rows become loose spots (that's what they were on the
     /// device that logged them).
     private func fetchRouteAsJourneyInputs(_ sessionId: UUID) async -> ([SeshStop], [LooseSpot]) {
         struct Row: Decodable {
+            let id: UUID
             let name: String
             let lat: Double?
             let lon: Double?
@@ -5412,7 +5447,7 @@ private struct SessionView: View {
             let arrivedAt: Date
             let departedAt: Date?
             enum CodingKeys: String, CodingKey {
-                case name, lat, lon, kind
+                case id, name, lat, lon, kind
                 case arrivedAt = "arrived_at"
                 case departedAt = "departed_at"
             }
@@ -5427,10 +5462,10 @@ private struct SessionView: View {
         var spots: [LooseSpot] = []
         for r in rows {
             if r.kind == "preGame" {
-                spots.append(LooseSpot(id: UUID(), name: r.name, lat: r.lat, lon: r.lon, at: r.arrivedAt))
+                spots.append(LooseSpot(id: r.id, name: r.name, lat: r.lat, lon: r.lon, at: r.arrivedAt))
             } else {
                 stops.append(SeshStop(
-                    id: UUID(), venueId: UUID(),
+                    id: r.id, venueId: UUID(),
                     kind: JourneyStopKind(rawValue: r.kind) ?? .bar,
                     name: r.name, lat: r.lat, lon: r.lon,
                     arrivedAt: r.arrivedAt, departedAt: r.departedAt
@@ -5590,8 +5625,28 @@ private struct SessionView: View {
                     markers.append(r)
                 }
             }
-            let route = (rawRoute.filter { $0.kind == "bar" } + markers)
-                .sorted { $0.arrivedAt < $1.arrivedAt }
+            // Bars: one row per visit, whether the group checked in together
+            // or members did it "just me" one after another. Same name with
+            // touching windows (45 min slack) is one visit — keep the
+            // earliest arrival and the latest departure; an open window
+            // stays open.
+            var bars: [RouteRow] = []
+            for r in rawRoute.filter({ $0.kind == "bar" }).sorted(by: { $0.arrivedAt < $1.arrivedAt }) {
+                if let i = bars.firstIndex(where: {
+                    $0.name.caseInsensitiveCompare(r.name) == .orderedSame
+                        && r.arrivedAt <= ($0.departedAt ?? personal.endedAt).addingTimeInterval(45 * 60)
+                }) {
+                    let a = bars[i]
+                    let dep: Date? = (a.departedAt == nil || r.departedAt == nil)
+                        ? nil : max(a.departedAt!, r.departedAt!)
+                    bars[i] = RouteRow(name: a.name, lat: a.lat ?? r.lat, lon: a.lon ?? r.lon,
+                                       kind: "bar", arrivedAt: a.arrivedAt, departedAt: dep,
+                                       profileId: a.profileId)
+                } else {
+                    bars.append(r)
+                }
+            }
+            let route = (bars + markers).sorted { $0.arrivedAt < $1.arrivedAt }
 
             // Fresh ids: this recap owns its own photo directory and
             // history entry, independent of the personal one.
@@ -6239,6 +6294,11 @@ private struct SessionView: View {
                 tg.addTask { await planGroup.resumeIfAny() }
                 tg.addTask { await liveGroup.resumeIfAny() }
             }
+            // Only now: an ended-while-away recap builds from this journey,
+            // and the sweep used to run 3 s after boot — in parallel with
+            // the resume — so a slow connection could purge the stops and
+            // photos a late recap was about to use.
+            sweepStaleJourney()
             // Garbage-collect any stale solo sesh that was abandoned
             // without an explicit END (e.g., user logged a drink
             // weeks ago and never reopened the app). The check is a
@@ -6319,7 +6379,7 @@ private struct SessionView: View {
         // the instant a live group sesh ends (host ended / I left / poll
         // detected it on launch). Build + present the same way as solo.
         .onChange(of: liveGroup.endedLiveEvents) { _, events in
-            guard let events, !events.isEmpty else { return }
+            guard let events else { return }
             let board = liveGroup.endedGroupLeaderboard
             let groupCtx = liveGroup.endedGroupContext
             // Preserve the journey/check-in when the night CONTINUES: a
@@ -6628,7 +6688,6 @@ private struct SessionView: View {
         friends.start()
         eventsService.start()
         dm.start()
-        sweepStaleJourney()
         // Every journey entry created while in a live group carries the
         // group's id — the group recap selects by IDENTITY, so a
         // member's parallel personal stops can never leak into it.
@@ -6732,11 +6791,12 @@ private struct SessionView: View {
     /// Sweep journey leftovers from a previous night whose end was never
     /// captured here (ended while away, then resumed straight into a NEW
     /// session — the old night's recap/clear gets skipped and its pre-game
-    /// spot haunts the next sesh). Delayed a beat so resumeIfAny settles
-    /// first; a multi-day trip session then protects its own entries.
+    /// spot haunts the next sesh). Called after resumeIfAny has settled and
+    /// delayed a beat more so a recap it handed off has built first; a
+    /// multi-day trip session then protects its own entries.
     private func sweepStaleJourney() {
         let sweep: Task<Void, Never> = Task { [weak journey, weak liveGroup] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
             journey?.purgeStale(before: liveGroup?.session?.createdAt)
         }
         _ = sweep

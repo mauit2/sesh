@@ -50,6 +50,11 @@ final class PushManager: ObservableObject {
     /// Set true when the user taps a sesh-invite push. The UI flips this
     /// back to false once it has opened the inbox.
     @Published var openInvites = false
+    /// Set true when a "night over" push arrives or is tapped: a live group
+    /// this phone belongs to ended while the app was away. SessionView
+    /// resumes the session store so the recap is delivered now, not at
+    /// the next launch.
+    @Published var sessionEnded = false
 
     /// The most recent device token, hex-encoded. Re-uploaded on each
     /// sign-in so a token that rotated while signed out still lands.
@@ -127,8 +132,10 @@ final class PushManager: ObservableObject {
     /// UI to open the inbox. The Edge Function will send
     /// `{ "type": "sesh_invite", ... }` in the payload's top level.
     func route(userInfo: [AnyHashable: Any]) {
-        if let type = userInfo["type"] as? String, type == "sesh_invite" {
-            openInvites = true
+        switch userInfo["type"] as? String {
+        case "sesh_invite":   openInvites = true
+        case "session_ended": sessionEnded = true
+        default:              break
         }
     }
 }

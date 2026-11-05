@@ -1,9 +1,13 @@
 // Purges ephemeral photo content:
-//   • squad schnaps whose session has ENDED (members had their window to
-//     save them / build the group recap) or that are older than 48h —
-//     EXCEPT snaps from event-linked sessions (events.live_session_id):
-//     those live on inside the event's night report on the PLAN tab, so
-//     they follow the event's lifetime instead of the 48h window.
+//   • squad schnaps whose session has ENDED — but only once EVERY member
+//     has been delivered their recap (no session_members row for it still
+//     in_live). Each phone downloads the snaps into its group recap the
+//     moment it learns the night is over, and a member whose app was
+//     closed learns late; purging "the morning after" handed those
+//     members a recap with no photos. Snaps older than 7 days go
+//     regardless — EXCEPT snaps from event-linked sessions
+//     (events.live_session_id): those live on inside the event's night
+//     report on the PLAN tab, so they follow the event's lifetime.
 //   • live stories older than 24h
 // Storage objects first, then rows. Invoked daily by pg_cron via pg_net
 // (see migrations 034/036), authenticated with the same shared hook
@@ -78,7 +82,25 @@ async function purgeAged(
   return total;
 }
 
-// Squad schnaps whose live session has been ended (event sessions spared).
+// Sessions with a member who has NOT yet been delivered the night's recap:
+// their in_live flag is still true (the app flips it as it delivers).
+// Bounded to the 7-day window — anything older is purged by age anyway,
+// so the exclusion list can't grow forever on members who never return.
+async function pendingSessionIds(admin: SupabaseAdmin): Promise<string[]> {
+  const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+  const { data, error } = await admin
+    .from("session_members")
+    .select("session_id")
+    .eq("in_live", true)
+    .gt("joined_at", since);
+  if (error) throw new Error(`session_members: ${error.message}`);
+  return [...new Set(
+    (data ?? []).map((r) => (r as { session_id: string }).session_id).filter(Boolean),
+  )];
+}
+
+// Squad schnaps whose live session has been ended, every member delivered
+// (event sessions and still-pending sessions spared).
 async function purgeEndedSessionSnaps(
   admin: SupabaseAdmin,
   spareSessionIds: string[],
@@ -117,8 +139,9 @@ Deno.serve(async (req) => {
 
   try {
     const spare = await eventSessionIds(admin);
-    const ended = await purgeEndedSessionSnaps(admin, spare);
-    const aged = await purgeAged(admin, "session_snaps", "session-snaps", 48, spare);
+    const pending = await pendingSessionIds(admin);
+    const ended = await purgeEndedSessionSnaps(admin, [...new Set([...spare, ...pending])]);
+    const aged = await purgeAged(admin, "session_snaps", "session-snaps", 7 * 24, spare);
     const stories = await purgeAged(admin, "live_stories", "stories", 24);
     return Response.json({ deleted: ended + aged, stories_deleted: stories });
   } catch (e) {
