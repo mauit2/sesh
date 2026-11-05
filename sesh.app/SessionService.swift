@@ -24,7 +24,10 @@ final class SessionService: ObservableObject {
     @Published var ghosts: [GhostMember] = []
     /// True while a guest-roster write is in flight, so a concurrent poll
     /// doesn't overwrite the optimistic local value with stale server data.
-    private var ghostWriteInFlight = false
+    /// Count, not a flag: several single-guest writes can be in flight at
+    /// once and the poll must wait for the last of them.
+    private var ghostWritesInFlight = 0
+    private var ghostWriteInFlight: Bool { ghostWritesInFlight > 0 }
     /// The group's shared current venue (synced from `session.live_venue`).
     /// nil = the group is checked out.
     @Published var liveVenue: Venue? = nil
@@ -1152,8 +1155,8 @@ final class SessionService: ObservableObject {
         // Suppress the poll's ghost-overwrite while this write is in
         // flight, otherwise a refresh that lands before the write commits
         // reads the stale server value and wipes the just-added guest.
-        ghostWriteInFlight = true
-        defer { ghostWriteInFlight = false }
+        ghostWritesInFlight += 1
+        defer { ghostWritesInFlight -= 1 }
         // Write via a member-authorized RPC, NOT a direct UPDATE — the
         // sessions row's RLS update policy is host-only, so a non-host
         // member's direct update would silently fail and their guest
@@ -1169,6 +1172,57 @@ final class SessionService: ObservableObject {
         } catch {
             // Non-fatal — the local copy already updated and the next
             // successful edit (or another device's write) re-converges.
+        }
+    }
+
+    /// One guest edit → one atomic RPC (migration 133): the server merges
+    /// by guest id, so two members editing at once both land. The local
+    /// copy is updated first so the UI is instant; the next poll reconciles
+    /// every other device. syncGhosts remains for clearing the roster.
+    func applyGhostOp(_ op: GhostOp) async {
+        guard let sid = session?.id else { return }
+        let sidStr = sid.uuidString.lowercased()
+        var next = ghosts
+        switch op {
+        case .upsert(let g):
+            if let i = next.firstIndex(where: { $0.id == g.id }) { next[i] = g } else { next.append(g) }
+        case .remove(let id):
+            next.removeAll { $0.id == id }
+        case .drinkAdd(let gid, let d):
+            if let i = next.firstIndex(where: { $0.id == gid }),
+               !next[i].drinks.contains(where: { $0.id == d.id }) {
+                next[i].drinks.append(d)
+            }
+        case .drinkRemove(let gid, let did):
+            if let i = next.firstIndex(where: { $0.id == gid }) {
+                next[i].drinks.removeAll { $0.id == did }
+            }
+        }
+        ghosts = next
+        session?.ghosts = next
+        ghostWritesInFlight += 1
+        defer { ghostWritesInFlight -= 1 }
+        do {
+            switch op {
+            case .upsert(let g):
+                struct P: Encodable { let p_session_id: String; let p_ghost: GhostMember }
+                _ = try await supabase.rpc("session_ghost_upsert",
+                                           params: P(p_session_id: sidStr, p_ghost: g)).execute()
+            case .remove(let id):
+                struct P: Encodable { let p_session_id: String; let p_ghost_id: String }
+                _ = try await supabase.rpc("session_ghost_remove",
+                                           params: P(p_session_id: sidStr, p_ghost_id: id.uuidString.lowercased())).execute()
+            case .drinkAdd(let gid, let d):
+                struct P: Encodable { let p_session_id: String; let p_ghost_id: String; let p_drink: GhostDrink }
+                _ = try await supabase.rpc("session_ghost_drink_add",
+                                           params: P(p_session_id: sidStr, p_ghost_id: gid.uuidString.lowercased(), p_drink: d)).execute()
+            case .drinkRemove(let gid, let did):
+                struct P: Encodable { let p_session_id: String; let p_ghost_id: String; let p_drink_id: String }
+                _ = try await supabase.rpc("session_ghost_drink_remove",
+                                           params: P(p_session_id: sidStr, p_ghost_id: gid.uuidString.lowercased(), p_drink_id: did.uuidString.lowercased())).execute()
+            }
+        } catch {
+            // Non-fatal — the next poll re-converges.
         }
     }
 

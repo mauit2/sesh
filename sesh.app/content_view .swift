@@ -1261,6 +1261,16 @@ struct GhostMember: Codable, Identifiable, Equatable, Hashable {
     }
 }
 
+/// One guest edit, mirrored to the shared session row as ONE atomic RPC
+/// (migration 133). The roster used to be re-sent whole on every edit, so
+/// two members editing inside the same poll window lost one of the edits.
+enum GhostOp {
+    case upsert(GhostMember)
+    case remove(UUID)
+    case drinkAdd(ghost: UUID, drink: GhostDrink)
+    case drinkRemove(ghost: UUID, drink: UUID)
+}
+
 /// On-device store for ghost members. Same persistence pattern as
 /// `LiveSeshState` (JSONEncoder + iso8601), keyed under a stable v1 key
 /// so future schema changes can migrate without colliding.
@@ -1290,6 +1300,10 @@ final class GhostMembersStore: ObservableObject {
     /// converge. nil in solo live mode, where guests stay device-local.
     /// Set/cleared alongside group entry/exit.
     var syncSink: (([GhostMember]) -> Void)?
+    /// Per-edit sink: when set (live GROUP), each edit goes up as one atomic
+    /// operation instead of the whole roster. `syncSink` then only serves
+    /// clearAll.
+    var opSink: ((GhostOp) -> Void)?
     /// Guards against an echo loop: `hydrate(_:)` (server → local) must not
     /// re-fire `syncSink` (local → server).
     private var isHydrating = false
@@ -1311,7 +1325,7 @@ final class GhostMembersStore: ObservableObject {
         guard !trimmed.isEmpty else { return }
         let g = GhostMember(name: trimmed, sex: sex, age: age, weightKg: weightKg)
         members.append(g)
-        save()
+        save(.upsert(g))
     }
 
     /// Append a batch of pre-built ghosts in one shot (one persist + one
@@ -1319,12 +1333,14 @@ final class GhostMembersStore: ObservableObject {
     func addMany(_ newMembers: [GhostMember]) {
         guard !newMembers.isEmpty else { return }
         members.append(contentsOf: newMembers)
-        save()
+        persist()
+        guard !isHydrating else { return }
+        if let opSink { newMembers.forEach { opSink(.upsert($0)) } } else { syncSink?(members) }
     }
 
     func remove(_ id: UUID) {
         members.removeAll { $0.id == id }
-        save()
+        save(.remove(id))
     }
 
     /// Wipe the entire ghost roster. Called when the user ends their
@@ -1339,21 +1355,22 @@ final class GhostMembersStore: ObservableObject {
 
     func addDrink(_ option: DrinkOption, to ghostId: UUID, at consumedAt: Date = Date()) {
         guard let idx = members.firstIndex(where: { $0.id == ghostId }) else { return }
-        members[idx].drinks.append(GhostDrink(option: option, consumedAt: consumedAt))
-        save()
+        let drink = GhostDrink(option: option, consumedAt: consumedAt)
+        members[idx].drinks.append(drink)
+        save(.drinkAdd(ghost: ghostId, drink: drink))
     }
 
     func removeLastDrink(from ghostId: UUID) {
         guard let idx = members.firstIndex(where: { $0.id == ghostId }) else { return }
         guard !members[idx].drinks.isEmpty else { return }
-        members[idx].drinks.removeLast()
-        save()
+        let gone = members[idx].drinks.removeLast()
+        save(.drinkRemove(ghost: ghostId, drink: gone.id))
     }
 
     func removeDrink(_ drinkId: UUID, from ghostId: UUID) {
         guard let idx = members.firstIndex(where: { $0.id == ghostId }) else { return }
         members[idx].drinks.removeAll { $0.id == drinkId }
-        save()
+        save(.drinkRemove(ghost: ghostId, drink: drinkId))
     }
 
     /// Per-drink Widmark, identical to `LiveSeshState.bac` so a ghost and
@@ -1391,9 +1408,12 @@ final class GhostMembersStore: ObservableObject {
     /// Local persist + (in group mode) mirror to the shared session row.
     /// `hydrate(_:)` bypasses the sink via `isHydrating` so a server-driven
     /// update doesn't echo straight back.
-    private func save() {
+    /// Persist, then mirror: the single edit when a per-edit sink is wired
+    /// (live group), else the whole roster (clearAll, or no sink at all).
+    private func save(_ op: GhostOp? = nil) {
         persist()
-        if !isHydrating { syncSink?(members) }
+        guard !isHydrating else { return }
+        if let op, let opSink { opSink(op) } else { syncSink?(members) }
     }
 
     private func persist() {
@@ -6535,6 +6555,9 @@ private struct SessionView: View {
             ghosts.syncSink = { [weak liveGroup] members in
                 Task { @MainActor in await liveGroup?.syncGhosts(members) }
             }
+            ghosts.opSink = { [weak liveGroup] op in
+                Task { @MainActor in await liveGroup?.applyGhostOp(op) }
+            }
             // Carry drinks ONLY when the user actively joined/created —
             // resumeIfAny restoring the session on launch must not shove
             // solo leftovers into the group on every app open.
@@ -6573,6 +6596,7 @@ private struct SessionView: View {
             }
         } else if old != nil && new == nil {
             ghosts.syncSink = nil
+            ghosts.opSink = nil
             ghosts.clearAll()
         }
     }
