@@ -259,14 +259,14 @@ function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body
       radial-gradient(90% 70% at -10% 0%, rgba(179,137,90,.09), transparent 50%),
       var(--bg);
     color:var(--cream);
-    font-family:"Hanken Grotesk",system-ui,sans-serif;
+    font-family:"Inter",system-ui,sans-serif;
     -webkit-font-smoothing:antialiased;
     line-height:1.65;
   }
   a{color:var(--whiskey);}
   .wrap{max-width:760px;margin:0 auto;padding:clamp(20px,5vw,44px) clamp(18px,4.5vw,28px) 80px;}
   .top{display:flex;align-items:center;gap:12px;margin-bottom:clamp(26px,6vw,46px);}
-  .brand{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:23px;letter-spacing:-.01em;color:var(--cream);text-decoration:none;}
+  .brand{font-family:"Inter",system-ui,sans-serif;font-weight:800;font-size:23px;letter-spacing:-.01em;color:var(--cream);text-decoration:none;}
   .brand span{color:var(--whiskey);}
   .top nav{margin-left:auto;display:flex;gap:8px;font-size:12.5px;font-weight:600;flex-wrap:wrap;}
   .top nav a{display:inline-block;text-decoration:none;color:var(--cream-dim);
@@ -275,8 +275,8 @@ function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body
   .top nav a:hover{color:var(--cream);border-color:rgba(232,132,60,.5);}
   .top nav a:active{transform:scale(.97);}
   .kicker{font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--bronze);margin:0 0 10px;}
-  h1{font-family:"Fraunces",Georgia,serif;font-weight:900;font-size:clamp(30px,6.4vw,46px);line-height:1.04;letter-spacing:-.025em;margin:0 0 14px;}
-  h2{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:clamp(21px,3.6vw,27px);letter-spacing:-.015em;margin:44px 0 12px;}
+  h1{font-family:"Inter",system-ui,sans-serif;font-weight:900;font-size:clamp(30px,6.4vw,46px);line-height:1.04;letter-spacing:-.025em;margin:0 0 14px;}
+  h2{font-family:"Inter",system-ui,sans-serif;font-weight:800;font-size:clamp(21px,3.6vw,27px);letter-spacing:-.015em;margin:44px 0 12px;}
   /* linked headings (country sections) read as headings, not hyperlinks */
   h1 a,h2 a,h3 a{color:inherit;text-decoration:none;}
   h1 a:hover,h2 a:hover,h3 a:hover{color:var(--whiskey);}
@@ -290,7 +290,7 @@ function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body
      (the CSP has no script-src at all), so it cannot be fit at runtime. The
      generator picks a step from the string length instead — "Gothenburg" needs
      a smaller size than "12" and both have to sit in the same card. */
-  .fig b{display:block;font-family:"Fraunces",Georgia,serif;font-weight:900;
+  .fig b{display:block;font-family:"Inter",system-ui,sans-serif;font-weight:900;
     letter-spacing:-.02em;line-height:1.15;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis;}
   .fig b.s1{font-size:clamp(22px,5.2vw,28px);}   /* up to 4 chars: "12", "30 kr" */
@@ -325,7 +325,7 @@ function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body
   .crumbs a{color:var(--bronze);text-decoration:none;}
   .crumbs span{color:var(--cream-dim);}
   .cta{display:block;margin:34px 0;padding:19px 22px;background:var(--bg-elev);border:1px solid rgba(232,132,60,.34);border-radius:17px;text-decoration:none;color:var(--cream);}
-  .cta b{display:block;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;margin-bottom:3px;}
+  .cta b{display:block;font-family:"Inter",system-ui,sans-serif;font-size:19px;font-weight:800;margin-bottom:3px;}
   .cta span{font-size:14px;color:var(--cream-dim);}
   .chips{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0;padding:0;list-style:none;}
   .chips .chip-on{display:inline-block;font-size:13.5px;font-weight:600;color:#241503;
@@ -334,7 +334,7 @@ function page({ lang, title, desc, canonical, altHref, altLang, h1, kicker, body
      This IS the navigation the hub exists for, so it gets real presence. */
   .citygrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin:18px 0 0;}
   .citycard{background:var(--bg-elev);border:1px solid var(--line);border-radius:15px;padding:15px 16px;}
-  .citycard h3{margin:0 0 2px;font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:800;letter-spacing:-.015em;}
+  .citycard h3{margin:0 0 2px;font-family:"Inter",system-ui,sans-serif;font-size:19px;font-weight:800;letter-spacing:-.015em;}
   .citycard .cityname{color:var(--cream);text-decoration:none;}
   .citycard .cityname:hover{color:var(--whiskey);}
   .citycard .meta{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--bronze);margin:0 0 4px;}

@@ -5259,6 +5259,7 @@ private struct SessionView: View {
     /// The tonight planner starts collapsed — PLAN reads as events-first,
     /// and the toggle remembers the user's preference.
     @AppStorage("sesh.plan.tonightExpanded") private var tonightExpanded = false
+    @State private var calculatorOpen = false
     /// Share my live check-in location with friends (map). On by default;
     /// toggled in the profile sheet. Gates publishPresence's venue fields.
     @AppStorage(ShareLocationSetting.key) private var shareLocation = true
@@ -7189,16 +7190,10 @@ private struct SessionView: View {
     private var planPage: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
-                TabHintChip(
-                    "Plan a party or a trip — invite the crew and know exactly how much to buy.",
-                    key: "plan.events"
-                )
-
-                tonightToggle
-                if tonightExpanded {
-                    tonightPlannerStack
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
+                // The pre-night planner is now a plain calculator (8 Nov
+                // 2026): who, drinks each, how long → level per person and
+                // the total to buy. Opens as a sheet; nothing to expand.
+                CalculatorEntryCard { calculatorOpen = true }
 
                 eventsSection
                 // Upcoming nights at the bars you follow (BusinessMode.swift).
@@ -7228,6 +7223,12 @@ private struct SessionView: View {
         .animation(.spring(response: 0.55, dampingFraction: 0.82), value: status)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: planGroup.isActive)
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: tonightExpanded)
+        .sheet(isPresented: $calculatorOpen) {
+            CalculatorSheet(profile: profile, friends: friends)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.ink)
+        }
         .sheet(isPresented: $eventComposerOpen) {
             EventComposerSheet(events: eventsService) { newId in
                 openEventRef = EventRef(id: newId)
@@ -7350,7 +7351,7 @@ private struct SessionView: View {
                     Text("Nothing planned yet")
                         .font(.system(size: 16, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.cream)
-                    Text("Plan a party, a pregame or a weekend trip — invite the crew, pick a level, and the calculator tells you exactly how much to buy.")
+                    Text("Parties, pregames, trips. Invite the crew and see what to buy.")
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.cream.opacity(0.55))
                         .fixedSize(horizontal: false, vertical: true)
@@ -11291,7 +11292,7 @@ private struct CampaignComposer: View {
 
 // MARK: - Menu sheet (compact)
 
-private struct MenuSheet: View {
+struct MenuSheet: View {
     @Binding var order: [OrderItem]
     @Binding var shareMode: Bool
     var showShareToggle: Bool = false
@@ -11301,6 +11302,14 @@ private struct MenuSheet: View {
     var venueSpecials: [DrinkOption] = []
     /// Display name shown in the specials section header.
     var venueName: String? = nil
+    /// The user's saved scanned / manual drinks. When given, each category
+    /// lists them under a SAVED DRINKS header, like the live menu.
+    var saved: SavedDrinksStore? = nil
+    /// Header copy. The planner says "Order … on tab … BACK TO SESH"; the
+    /// calculator passes its own words.
+    var title: String = "Order"
+    var countHint: String = "on tab"
+    var doneHint: String = "BACK TO SESH"
     var onAdd: (DrinkOption) -> Void
     var onRemove: (DrinkOption) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -11329,7 +11338,7 @@ private struct MenuSheet: View {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 4) {
                         SectionLabel("Menu")
-                        Text("Order")
+                        Text(title)
                             .font(.system(size: 32, weight: .heavy, design: .rounded))
                             .tracking(-1.2)
                             .foregroundStyle(Color.cream)
@@ -11342,7 +11351,7 @@ private struct MenuSheet: View {
                                 .foregroundStyle(Color.cream)
                                 .monospacedDigit()
                                 .contentTransition(.numericText(value: Double(order.count)))
-                            Text("on tab")
+                            Text(countHint)
                                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                                 .tracking(1.6)
                                 .foregroundStyle(Color.bronze)
@@ -11449,6 +11458,43 @@ private struct MenuSheet: View {
                                 )
                                 .transition(.opacity)
                             }
+                            // The user's own scanned / manual drinks for this
+                            // category, same header as the live menu.
+                            if let saved {
+                                let savedHere = saved.drinks.filter { $0.category == category }
+                                if !savedHere.isEmpty {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "bookmark.fill")
+                                            .font(.system(size: 9, weight: .black, design: .rounded))
+                                            .foregroundStyle(Color.whiskey)
+                                        Text("SAVED DRINKS")
+                                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                            .tracking(2.4)
+                                            .foregroundStyle(Color.whiskey)
+                                        Rectangle()
+                                            .fill(Color.whiskey.opacity(0.25))
+                                            .frame(height: 1)
+                                    }
+                                    .padding(.top, 8)
+                                    ForEach(savedHere, id: \.name) { option in
+                                        OptionRow(
+                                            option: option,
+                                            count: count(for: option),
+                                            onAdd: {
+                                                withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) {
+                                                    onAdd(option)
+                                                    addedTick &+= 1
+                                                }
+                                            },
+                                            onRemove: {
+                                                withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) {
+                                                    onRemove(option)
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 22)
@@ -11470,7 +11516,7 @@ private struct MenuSheet: View {
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .tracking(3)
                         Spacer()
-                        Text("BACK TO SESH")
+                        Text(doneHint)
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
                             .tracking(2)
                             .opacity(0.55)
@@ -11493,7 +11539,7 @@ private struct MenuSheet: View {
     }
 }
 
-private struct CategoryTile: View {
+struct CategoryTile: View {
     let category: DrinkCategory
     let selected: Bool
     let action: () -> Void
@@ -11526,7 +11572,7 @@ private struct CategoryTile: View {
     }
 }
 
-private struct OptionRow: View {
+struct OptionRow: View {
     let option: DrinkOption
     let count: Int
     let onAdd: () -> Void
