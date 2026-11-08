@@ -53,7 +53,7 @@
         'background:linear-gradient(160deg,rgba(29,22,16,.98),rgba(20,15,11,.98));' +
         'border:1px solid rgba(243,233,216,.12);' +
         'box-shadow:0 30px 60px -20px rgba(0,0,0,.7),0 0 0 1px rgba(232,132,60,.08),inset 0 1px 0 rgba(243,233,216,.06);' +
-        'font-family:"Hanken Grotesk",system-ui,sans-serif;font-size:14.5px;line-height:1.55;' +
+        'font-family:"Inter",system-ui,sans-serif;font-size:14.5px;line-height:1.55;' +
         'transform:translateY(16px);opacity:0;animation:sjcUp .55s cubic-bezier(.2,.7,.2,1) .35s forwards;}' +
         '.sjc.is-leaving{animation:sjcDown .3s ease-in forwards;}' +
         '@keyframes sjcUp{to{transform:none;opacity:1}}' +
